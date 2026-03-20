@@ -1,0 +1,42 @@
+{
+  "type": "object",
+  "required": ["claims", "summary"],
+  "properties": {
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "type", "citations"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^CLM-[0-9]{4}$"
+          },
+          "text": {"type": "string"},
+          "type": {
+            "type": "string",
+            "enum": ["fact", "inference"]
+          },
+          "citations": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "section": {"type": "string"},
+          "line": {"type": "integer"}
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["fact_count", "inference_count", "uncited_fact_ids"],
+      "properties": {
+        "fact_count": {"type": "integer"},
+        "inference_count": {"type": "integer"},
+        "uncited_fact_ids": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    }
+  }
+}

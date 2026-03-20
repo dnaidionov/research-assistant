@@ -1,0 +1,7 @@
+job_id: my-project-1
+display_name: "Example Research Project"
+local_path: ../../jobs/my-project-1
+visibility: private
+status: active
+tags:
+  - example

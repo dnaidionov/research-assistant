@@ -1,0 +1,27 @@
+topic: my-project-1
+
+requirements:
+  require_citations: true
+  require_claim_register: true
+  require_disagreement_log: true
+  separate_facts_from_inference: true
+
+source_policy:
+  preferred:
+    - official documentation
+    - academic papers
+    - primary-source reporting
+  allowed_with_caution:
+    - reputable trade publications
+    - analyst commentary
+  disallowed:
+    - anonymous blogs
+    - uncited forum posts
+
+freshness:
+  max_days: 365
+
+workflow:
+  preserve_disagreements: true
+  require_judge_synthesis: true
+  claim_extraction_required: true
