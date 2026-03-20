@@ -152,6 +152,29 @@ Important:
 - facts and inference must stay separated where possible
 - unresolved disagreement must remain visible through the judge stage
 
+### Example execution mapping
+
+This is an example, not a hard requirement. The framework stays provider-agnostic.
+
+- `intake`: `ChatGPT` or `Codex`
+- `research-a`: `ChatGPT`
+- `research-b`: `Gemini`
+- `critique-a-on-b`: same model family used for `research-a`
+- `critique-b-on-a`: same model family used for `research-b`
+- `judge`: the strongest reasoning model you trust most
+
+Why this example is reasonable:
+
+- using different models for `research-a` and `research-b` increases useful disagreement
+- keeping each critique with its original research perspective preserves adversarial pressure
+- using the strongest model for `judge` improves synthesis quality when evidence is mixed
+
+Recommended operator pattern:
+
+- use `Codex` to scaffold runs, manage files, and keep the repo state clean
+- use model UIs or APIs such as `ChatGPT` and `Gemini` to execute the prompt packets
+- write each stage result back into the matching file under `stage-outputs/`
+
 ### 5. Extract a claim register from a markdown report
 
 For any markdown report, generate a JSON claim register like this:
