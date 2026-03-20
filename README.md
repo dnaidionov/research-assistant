@@ -68,10 +68,10 @@ Each job:
 ## Workflow
 
 1. Intake → structured brief
-2. Research → multiple independent LLM outputs
-3. Critique → cross-examination
+2. Research A/B → independent parallel outputs
+3. Critique A on B and B on A → adversarial cross-examination
 4. Judge → resolution and synthesis
-5. Output → final report + audit artifacts
+5. Claim extraction and artifact writing → downstream structured outputs
 
 ---
 
@@ -90,4 +90,3 @@ This repo must never contain:
 - real research data
 - client/project names
 - sensitive sources
-

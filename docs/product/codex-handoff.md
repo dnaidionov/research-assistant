@@ -14,23 +14,26 @@ Turn the repository into a usable orchestration framework for structured multi-s
 The current v1 now supports:
 
 1. validating job repos
-2. scaffolding workflow runs
-3. rendering prompt packets for each stage
+   including repo-boundary, readability, runs-path, and template-doc consistency checks
+2. scaffolding workflow runs by job name or job path
+3. rendering prompt packets for the six core execution stages
 4. writing workflow state and work orders
 5. generating placeholder stage outputs
-6. extracting atomic claims from markdown
+6. extracting atomic claims from markdown into a claim register with stable `C001`-style IDs
 7. preserving audit artifacts inside the job repo
 
-## Canonical Workflow
+## Canonical Research Lifecycle
 
 1. intake
 2. research pass A
 3. research pass B
-4. critique of A by B
-5. critique of B by A
-6. judge synthesis
+4. critique of A on B
+5. critique of B on A
+6. judge
 7. claim extraction
 8. artifact writing
+
+`scripts/run_workflow.py` currently scaffolds stages 1 through 6. Claim extraction and artifact writing are intentionally separate steps.
 
 ## Constraints
 

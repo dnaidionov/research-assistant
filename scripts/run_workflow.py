@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 from _workflow_lib import (
-    STAGES,
+    DEFAULT_JOB_ROOT,
+    REPO_ROOT,
     build_manifest,
     ensure_job_is_external,
     load_template,
@@ -17,55 +19,163 @@ from _workflow_lib import (
 )
 
 
+RUN_STAGES: list[dict[str, object]] = [
+    {
+        "id": "intake",
+        "packet": "01-intake.md",
+        "template": "intake-template.md",
+        "output": "01-intake.json",
+        "format": "json",
+        "depends_on": [],
+        "description": "Normalize the brief into a structured intake record without inventing facts.",
+    },
+    {
+        "id": "research-a",
+        "packet": "02-research-a.md",
+        "template": "research-template.md",
+        "output": "02-research-a.md",
+        "format": "markdown",
+        "depends_on": ["intake"],
+        "description": "Produce the first independent research pass with explicit citations and uncertainty.",
+        "researcher_label": "Research Pass A",
+    },
+    {
+        "id": "research-b",
+        "packet": "03-research-b.md",
+        "template": "research-template.md",
+        "output": "03-research-b.md",
+        "format": "markdown",
+        "depends_on": ["intake"],
+        "description": "Produce the second independent research pass without borrowing from pass A.",
+        "researcher_label": "Research Pass B",
+    },
+    {
+        "id": "critique-a-on-b",
+        "packet": "04-critique-a-on-b.md",
+        "template": "critique-template.md",
+        "output": "04-critique-a-on-b.md",
+        "format": "markdown",
+        "depends_on": ["research-a", "research-b"],
+        "description": "Have perspective A critique pass B for unsupported claims, omissions, weak sources, and overreach.",
+        "critic_label": "Research Pass A",
+        "target_label": "Research Pass B",
+    },
+    {
+        "id": "critique-b-on-a",
+        "packet": "05-critique-b-on-a.md",
+        "template": "critique-template.md",
+        "output": "05-critique-b-on-a.md",
+        "format": "markdown",
+        "depends_on": ["research-a", "research-b"],
+        "description": "Have perspective B critique pass A for unsupported claims, omissions, weak sources, and overreach.",
+        "critic_label": "Research Pass B",
+        "target_label": "Research Pass A",
+    },
+    {
+        "id": "judge",
+        "packet": "06-judge.md",
+        "template": "judge-template.md",
+        "output": "06-judge.md",
+        "format": "markdown",
+        "depends_on": ["critique-a-on-b", "critique-b-on-a"],
+        "description": "Synthesize both passes and both critiques while preserving unresolved disagreement where evidence is mixed.",
+    },
+]
+
+
+def parse_simple_yaml_mapping(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        cleaned = value.strip().strip("'").strip('"')
+        values[key.strip()] = cleaned
+    return values
+
+
+def resolve_job_path(
+    *,
+    job_name: str | None,
+    job_path: str | None,
+    jobs_root: Path,
+    jobs_index_root: Path,
+) -> tuple[str, Path]:
+    if bool(job_name) == bool(job_path):
+        raise ValueError("Provide exactly one of --job-name or --job-path.")
+
+    if job_path:
+        resolved_path = Path(job_path).expanduser()
+        return resolved_path.name, resolved_path
+
+    assert job_name is not None
+    index_file = jobs_index_root / "active" / f"{job_name}.yaml"
+    if index_file.is_file():
+        metadata = parse_simple_yaml_mapping(index_file)
+        local_path = metadata.get("local_path")
+        if local_path:
+            candidate = (index_file.parent / local_path).resolve()
+            return job_name, candidate
+
+    return job_name, (jobs_root / job_name).expanduser()
+
+
 def render_packet(stage: dict[str, object], context: dict[str, str]) -> str:
     template = load_template(str(stage["template"]))
     return template.format(**context).rstrip() + "\n"
 
 
-def stage_output_placeholder(stage: dict[str, object]) -> str:
-    output_format = stage["format"]
-    stage_id = stage["id"]
+def stage_output_placeholder(stage: dict[str, object], output_path: Path) -> str:
+    output_format = str(stage["format"])
+    stage_id = str(stage["id"])
     if output_format == "json":
         return (
             "{\n"
             f'  "stage": "{stage_id}",\n'
             '  "status": "not_started",\n'
-            '  "notes": "Populate this artifact during execution."\n'
+            f'  "expected_output_target": "{output_path}",\n'
+            '  "notes": "Populate this JSON artifact during execution."\n'
             "}\n"
         )
+
     return (
         f"# Stage Output Placeholder: {stage_id}\n\n"
         "Status: not started\n\n"
-        "Replace this placeholder with the stage output. Preserve citations, disagreement notes, "
-        "and fact vs inference separation.\n"
+        f"Expected output target: `{output_path}`\n\n"
+        "Replace this placeholder with the stage output. Preserve citations, explicit uncertainty, "
+        "fact vs inference separation, and unresolved disagreement where applicable.\n"
     )
 
 
-def build_state(job_dir: Path, run_id: str, run_dir: Path, created_at: str) -> dict[str, object]:
+def build_state(job_name: str, job_dir: Path, run_id: str, run_dir: Path, created_at: str) -> dict[str, object]:
     return {
         "created_at": created_at,
         "job_dir": str(job_dir),
+        "job_name": job_name,
         "run_dir": str(run_dir),
         "run_id": run_id,
         "status": "scaffolded",
         "stages": [
             {
+                "depends_on": list(stage["depends_on"]),
                 "description": stage["description"],
-                "depends_on": stage["depends_on"],
+                "expected_output_target": str(run_dir / "stage-outputs" / str(stage["output"])),
                 "id": stage["id"],
-                "output_path": str(run_dir / "stage-outputs" / str(stage["output"])),
                 "packet_path": str(run_dir / "prompt-packets" / str(stage["packet"])),
+                "prompt_template": str(stage["template"]),
                 "status": "pending",
             }
-            for stage in STAGES
+            for stage in RUN_STAGES
         ],
     }
 
 
-def build_work_order(job_dir: Path, run_id: str, created_at: str) -> str:
+def build_work_order(job_name: str, job_dir: Path, run_id: str, created_at: str) -> str:
     lines = [
         "# Work Order",
         "",
+        f"- Job name: `{job_name}`",
         f"- Job directory: `{job_dir.resolve()}`",
         f"- Run ID: `{run_id}`",
         f"- Created at (UTC): `{created_at}`",
@@ -73,26 +183,27 @@ def build_work_order(job_dir: Path, run_id: str, created_at: str) -> str:
         "## Execution Rules",
         "",
         "- Write all artifacts into this job repo only.",
-        "- Preserve disagreements until judge synthesis explicitly resolves them.",
+        "- Keep provider-specific execution outside the orchestration layer.",
+        "- Preserve disagreement when evidence is mixed.",
+        "- Keep facts distinct from inference.",
         "- Do not introduce uncited factual claims.",
-        "- Separate facts from inference in every analytical stage.",
-        "- Keep provider-specific instructions out of the orchestration layer.",
         "",
         "## Stages",
         "",
     ]
-    for index, stage in enumerate(STAGES, start=1):
-        lines.append(
-            f"{index}. `{stage['id']}` -> output `stage-outputs/{stage['output']}`"
-        )
+    for index, stage in enumerate(RUN_STAGES, start=1):
+        output_name = f"stage-outputs/{stage['output']}"
+        packet_name = f"prompt-packets/{stage['packet']}"
         dependencies = ", ".join(stage["depends_on"]) if stage["depends_on"] else "none"
+        lines.append(f"{index}. `{stage['id']}`")
         lines.append(f"   Depends on: {dependencies}")
-        lines.append(f"   Prompt packet: `prompt-packets/{stage['packet']}`")
+        lines.append(f"   Prompt packet: `{packet_name}`")
+        lines.append(f"   Expected output target: `{output_name}`")
         lines.append(f"   Purpose: {stage['description']}")
     return "\n".join(lines) + "\n"
 
 
-def scaffold_run(job_dir: Path, run_id: str) -> Path:
+def scaffold_run(job_name: str, job_dir: Path, run_id: str) -> Path:
     ensure_job_is_external(job_dir)
     validation = validate_job_dir(job_dir)
     if not validation.ok:
@@ -112,45 +223,57 @@ def scaffold_run(job_dir: Path, run_id: str) -> Path:
     created_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     brief_text = (job_dir / "brief.md").read_text(encoding="utf-8").strip()
     config_text = (job_dir / "config.yaml").read_text(encoding="utf-8").strip()
+
     common_context = {
         "brief_markdown": brief_text,
         "config_yaml": config_text,
         "job_dir": str(job_dir.resolve()),
+        "prompt_packet_path": "",
         "run_id": run_id,
         "run_dir": str(run_dir.resolve()),
+        "stage_description": "",
+        "stage_id": "",
+        "stage_output_path": "",
+        "depends_on": "",
+        "researcher_label": "Researcher",
+        "critic_label": "Critic",
+        "target_label": "Target",
     }
 
     created_files: list[Path] = []
-    for stage in STAGES:
-        context = dict(common_context)
-        context["stage_id"] = str(stage["id"])
-        context["stage_description"] = str(stage["description"])
-        context["depends_on"] = ", ".join(stage["depends_on"]) if stage["depends_on"] else "none"
-        context["stage_output_path"] = str((stage_dir / str(stage["output"])).resolve())
-        context["prompt_packet_path"] = str((prompt_dir / str(stage["packet"])).resolve())
-        context["researcher_label"] = str(stage.get("researcher_label", "Researcher"))
-        context["critic_label"] = str(stage.get("critic_label", "Critic"))
-        context["target_label"] = str(stage.get("target_label", "Target"))
-
+    for stage in RUN_STAGES:
+        output_path = stage_dir / str(stage["output"])
         packet_path = prompt_dir / str(stage["packet"])
+        context = dict(common_context)
+        context.update(
+            {
+                "critic_label": str(stage.get("critic_label", "Critic")),
+                "depends_on": ", ".join(stage["depends_on"]) if stage["depends_on"] else "none",
+                "prompt_packet_path": str(packet_path.resolve()),
+                "researcher_label": str(stage.get("researcher_label", "Researcher")),
+                "stage_description": str(stage["description"]),
+                "stage_id": str(stage["id"]),
+                "stage_output_path": str(output_path.resolve()),
+                "target_label": str(stage.get("target_label", "Target")),
+            }
+        )
+
         write_text(packet_path, render_packet(stage, context))
         created_files.append(packet_path)
 
-        output_path = stage_dir / str(stage["output"])
-        write_text(output_path, stage_output_placeholder(stage))
+        write_text(output_path, stage_output_placeholder(stage, output_path.resolve()))
         created_files.append(output_path)
 
     state_path = run_dir / "workflow-state.json"
-    write_json(state_path, build_state(job_dir, run_id, run_dir, created_at))
+    write_json(state_path, build_state(job_name, job_dir, run_id, run_dir, created_at))
     created_files.append(state_path)
 
     work_order_path = run_dir / "WORK_ORDER.md"
-    write_text(work_order_path, build_work_order(job_dir, run_id, created_at))
+    write_text(work_order_path, build_work_order(job_name, job_dir, run_id, created_at))
     created_files.append(work_order_path)
 
     manifest_path = audit_dir / "manifest.json"
     write_json(manifest_path, {"files": build_manifest(created_files, run_dir)})
-    created_files.append(manifest_path)
 
     summary_path = audit_dir / "run-summary.md"
     write_text(
@@ -159,12 +282,13 @@ def scaffold_run(job_dir: Path, run_id: str) -> Path:
             [
                 "# Run Summary",
                 "",
+                f"- Job name: `{job_name}`",
                 f"- Run ID: `{run_id}`",
                 f"- Job directory: `{job_dir.resolve()}`",
-                f"- Prompt packets: `{len(STAGES)}`",
-                f"- Stage placeholders: `{len(STAGES)}`",
+                f"- Prompt packets rendered: `{len(RUN_STAGES)}`",
+                f"- Stage output targets created: `{len(RUN_STAGES)}`",
                 "",
-                "This run is scaffolded only. Provider API execution is intentionally out of scope for v1.",
+                "This run scaffold is provider-agnostic. Provider execution must be handled by a separate adapter layer.",
             ]
         ),
     )
@@ -173,21 +297,45 @@ def scaffold_run(job_dir: Path, run_id: str) -> Path:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Scaffold a multi-stage research workflow run.")
-    parser.add_argument("--job-dir", required=True, help="Path to the target job repository.")
+    parser = argparse.ArgumentParser(
+        description="Create a deterministic, auditable workflow run scaffold inside a research job repo.",
+    )
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--job-name", help="Job name to resolve via jobs-index or jobs root.")
+    target.add_argument("--job-path", help="Explicit path to the target job repository.")
     parser.add_argument("--run-id", help="Stable run identifier. If omitted, a UTC timestamp is used.")
+    parser.add_argument(
+        "--jobs-root",
+        default=str(DEFAULT_JOB_ROOT),
+        help="Root directory containing job repos. Used when resolving --job-name.",
+    )
+    parser.add_argument(
+        "--jobs-index-root",
+        default=str(REPO_ROOT / "jobs-index"),
+        help="Root directory containing jobs-index metadata. Used when resolving --job-name.",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    job_dir = Path(args.job_dir).expanduser()
-    run_id = args.run_id or datetime.now(timezone.utc).strftime("run-%Y%m%dT%H%M%SZ")
+    jobs_root = Path(args.jobs_root).expanduser()
+    jobs_index_root = Path(args.jobs_index_root).expanduser()
 
     try:
-        run_dir = scaffold_run(job_dir, run_id)
+        job_name, job_dir = resolve_job_path(
+            job_name=args.job_name,
+            job_path=args.job_path,
+            jobs_root=jobs_root,
+            jobs_index_root=jobs_index_root,
+        )
+        run_id = args.run_id or datetime.now(timezone.utc).strftime("run-%Y%m%dT%H%M%SZ")
+        run_dir = scaffold_run(job_name, job_dir, run_id)
     except ValueError as exc:
-        print(str(exc), flush=True, file=__import__("sys").stderr)
+        print(str(exc), file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"Workflow scaffolding failed: {exc}", file=sys.stderr)
         return 1
 
     print(run_dir.resolve())

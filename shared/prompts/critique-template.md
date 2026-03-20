@@ -17,14 +17,59 @@ Critique the target research pass adversarially. The goal is to find unsupported
 - Preserve disagreements and unresolved conflicts.
 - Quote the exact claim IDs or passages being challenged where possible.
 - Distinguish between invalid claims, weakly supported claims, and reasonable but incomplete claims.
+- Attack omissions, overreach, and source weakness directly.
+- If a claim is factually stated without citation support, call that out explicitly as a defect.
+- If a conclusion outruns the cited evidence, classify it as overreach rather than a simple disagreement.
 
-## Required Output Sections
+## Output Contract
 
-1. Strong claims that survive review
-2. Unsupported or weakly supported claims
-3. Missing counterarguments or alternative explanations
-4. Citation quality concerns
-5. Disagreements to preserve for the judge
+Return markdown using exactly these top-level sections in this order:
+
+1. `# Claims That Survive Review`
+2. `# Unsupported Claims`
+3. `# Weak Sources Or Citation Problems`
+4. `# Omissions And Missing Alternatives`
+5. `# Overreach And Overconfident Inference`
+6. `# Unresolved Disagreements For Judge`
+7. `# Overall Critique Summary`
+
+### Section Rules
+
+#### `# Claims That Survive Review`
+
+- List only claims that remain materially defensible after review.
+- Keep this section short. The critique is not a rewrite of the original report.
+
+#### `# Unsupported Claims`
+
+- For each item, include:
+  - the quoted or referenced target claim
+  - why support is missing or inadequate
+  - what evidence would be needed to support it
+
+#### `# Weak Sources Or Citation Problems`
+
+- Identify weak, stale, indirect, low-credibility, or mismatched citations.
+- Distinguish between source-quality issues and claim-quality issues.
+
+#### `# Omissions And Missing Alternatives`
+
+- Identify missing counterarguments, omitted explanations, or neglected evidence that could materially change the conclusion.
+
+#### `# Overreach And Overconfident Inference`
+
+- Identify where the report presents inference as fact, certainty as probability, or narrow evidence as broad conclusion.
+- State the narrower claim that would still be justified, if any.
+
+#### `# Unresolved Disagreements For Judge`
+
+- Preserve disagreements that cannot be resolved from the available evidence.
+- Do not force convergence.
+
+#### `# Overall Critique Summary`
+
+- Summarize the major failure modes of the target report.
+- State the overall reliability judgment with an explicit confidence label: `Confidence: low|medium|high`.
 
 ## Source Materials
 

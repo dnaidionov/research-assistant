@@ -29,5 +29,15 @@ For example:
 - Every stage prompt must preserve provider-agnostic orchestration.
 - Factual claims must remain cited.
 - Facts and inference must be separated where possible.
+- Uncertainty must be explicit, not implied.
 - Disagreements must remain visible through critique and judge stages.
 - Prompt packets must point to concrete run output paths for auditability.
+
+## Output Contracts
+
+The four canonical prompts now enforce explicit downstream contracts:
+
+- `intake-template.md` returns JSON only, separating `known_facts`, `working_inferences`, and `uncertainty_notes`.
+- `research-template.md` returns fixed markdown sections with numbered fact and inference claims, explicit confidence labels, and a source-evaluation section.
+- `critique-template.md` returns fixed markdown sections that explicitly attack unsupported claims, weak sources, omissions, and overreach.
+- `judge-template.md` returns fixed markdown sections that separate supported conclusions from synthesis inferences and preserve unresolved disagreement when evidence is mixed.

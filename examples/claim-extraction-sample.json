@@ -1,0 +1,41 @@
+{
+  "claims": [
+    {
+      "citations": [
+        "DOC-001"
+      ],
+      "id": "C001",
+      "line": 4,
+      "section": "Facts",
+      "text": "The workflow requires separate research passes A and B.",
+      "type": "fact"
+    },
+    {
+      "citations": [
+        "DOC-002"
+      ],
+      "id": "C002",
+      "line": 5,
+      "section": "Facts",
+      "text": "Final outputs may not contain uncited factual claims.",
+      "type": "fact"
+    },
+    {
+      "citations": [
+        "DOC-001",
+        "DOC-002"
+      ],
+      "confidence": "medium",
+      "id": "C003",
+      "line": 8,
+      "section": "Inferences",
+      "text": "This design likely improves auditability across runs.",
+      "type": "inference"
+    }
+  ],
+  "summary": {
+    "fact_count": 2,
+    "inference_count": 1,
+    "uncited_fact_ids": []
+  }
+}

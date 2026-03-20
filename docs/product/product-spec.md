@@ -39,7 +39,7 @@ Adversarial review of pass B.
 Resolution and synthesis while preserving unresolved disagreements.
 
 ### Phase 7: Claim Extraction
-Atomic claim register generation with IDs and citations.
+Atomic claim register generation with stable IDs, citations, and confidence capture where explicitly stated.
 
 ### Phase 8: Artifact Writing
 Final job artifact generation from the judged synthesis and claim register.

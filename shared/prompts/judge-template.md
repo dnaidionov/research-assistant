@@ -16,14 +16,60 @@ Synthesize research pass A, research pass B, and both critiques into a judge rep
 - Every factual claim must remain cited.
 - Label inferences and confidence explicitly.
 - Keep a traceable path from synthesis back to the research passes and critiques.
+- Where evidence is mixed, preserve the disagreement instead of pretending the stronger narrative won by default.
+- If neither side is adequately supported, say so directly.
 
-## Required Output Sections
+## Output Contract
 
-1. Supported conclusions
-2. Disagreements preserved
-3. Confidence assessment
-4. Evidence gaps
-5. Recommended final artifact structure
+Return markdown using exactly these top-level sections in this order:
+
+1. `# Supported Conclusions`
+2. `# Inferences And Synthesis Judgments`
+3. `# Unresolved Disagreements`
+4. `# Confidence Assessment`
+5. `# Evidence Gaps`
+6. `# Rationale And Traceability`
+7. `# Recommended Final Artifact Structure`
+
+### Section Rules
+
+#### `# Supported Conclusions`
+
+- Use numbered items.
+- Include only conclusions that are adequately supported across the record.
+- Every factual conclusion must include inline citations.
+
+#### `# Inferences And Synthesis Judgments`
+
+- Use numbered items.
+- Mark each item clearly as inference.
+- Each item must cite the supporting record and end with `Confidence: low|medium|high`.
+
+#### `# Unresolved Disagreements`
+
+- List disagreements that remain open because evidence is mixed, incomplete, ambiguous, or contested.
+- For each disagreement, state:
+  - the disputed point
+  - the strongest case on each side
+  - why it remains unresolved
+
+#### `# Confidence Assessment`
+
+- Summarize confidence by topic, not just globally.
+- Explain which confidence limits come from evidence quality, coverage, recency, or conflict.
+
+#### `# Evidence Gaps`
+
+- Identify the additional evidence most likely to resolve the remaining disputes.
+
+#### `# Rationale And Traceability`
+
+- Briefly explain why some claims were accepted, rejected, or left unresolved.
+- Reference the relevant research passes and critiques directly.
+
+#### `# Recommended Final Artifact Structure`
+
+- Provide the recommended structure for the final artifact without adding new factual claims.
 
 ## Source Materials
 

@@ -10,7 +10,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "pattern": "^CLM-[0-9]{4}$"
+            "pattern": "^C[0-9]{3,}$"
           },
           "text": {"type": "string"},
           "type": {
@@ -20,6 +20,10 @@
           "citations": {
             "type": "array",
             "items": {"type": "string"}
+          },
+          "confidence": {
+            "type": "string",
+            "enum": ["low", "medium", "high"]
           },
           "section": {"type": "string"},
           "line": {"type": "integer"}

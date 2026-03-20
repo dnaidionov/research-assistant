@@ -12,7 +12,8 @@ RUN_WORKFLOW = REPO_ROOT / "scripts" / "run_workflow.py"
 class RunWorkflowTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmpdir = tempfile.TemporaryDirectory()
-        self.job_dir = Path(self.tmpdir.name) / "my-project-1"
+        self.temp_root = Path(self.tmpdir.name)
+        self.job_dir = self.temp_root / "jobs" / "my-project-1"
         self.job_dir.mkdir(parents=True)
         (self.job_dir / ".git").mkdir()
         (self.job_dir / "brief.md").write_text(
@@ -25,6 +26,19 @@ class RunWorkflowTests(unittest.TestCase):
         )
         for directory in ("outputs", "evidence", "audit", "logs", "runs"):
             (self.job_dir / directory).mkdir()
+        self.jobs_index_root = self.temp_root / "jobs-index"
+        (self.jobs_index_root / "active").mkdir(parents=True)
+        (self.jobs_index_root / "active" / "my-project-1.yaml").write_text(
+            "\n".join(
+                [
+                    "job_id: my-project-1",
+                    "display_name: Example Research Project",
+                    "local_path: ../../jobs/my-project-1",
+                    "status: active",
+                ]
+            ),
+            encoding="utf-8",
+        )
 
     def tearDown(self) -> None:
         self.tmpdir.cleanup()
@@ -34,7 +48,7 @@ class RunWorkflowTests(unittest.TestCase):
             [
                 "python3",
                 str(RUN_WORKFLOW),
-                "--job-dir",
+                "--job-path",
                 str(self.job_dir),
                 "--run-id",
                 "run-001",
@@ -59,36 +73,73 @@ class RunWorkflowTests(unittest.TestCase):
             [stage["id"] for stage in state["stages"]],
             [
                 "intake",
-                "research_pass_a",
-                "research_pass_b",
-                "critique_a_by_b",
-                "critique_b_by_a",
-                "judge_synthesis",
-                "claim_extraction",
-                "artifact_writing",
+                "research-a",
+                "research-b",
+                "critique-a-on-b",
+                "critique-b-on-a",
+                "judge",
             ],
         )
         self.assertEqual(state["job_dir"], str(self.job_dir))
         self.assertEqual(state["run_id"], "run-001")
 
         work_order = (run_dir / "WORK_ORDER.md").read_text(encoding="utf-8")
-        self.assertIn("critique_a_by_b", work_order)
-        self.assertIn("claim_extraction", work_order)
+        self.assertIn("critique-a-on-b", work_order)
+        self.assertIn("expected output target", work_order.lower())
 
         packet_names = sorted(path.name for path in (run_dir / "prompt-packets").glob("*.md"))
         self.assertEqual(
             packet_names,
             [
                 "01-intake.md",
-                "02-research-pass-a.md",
-                "03-research-pass-b.md",
-                "04-critique-a-by-b.md",
-                "05-critique-b-by-a.md",
-                "06-judge-synthesis.md",
-                "07-claim-extraction.md",
-                "08-artifact-writing.md",
+                "02-research-a.md",
+                "03-research-b.md",
+                "04-critique-a-on-b.md",
+                "05-critique-b-on-a.md",
+                "06-judge.md",
             ],
         )
+        output_names = sorted(path.name for path in (run_dir / "stage-outputs").iterdir())
+        self.assertEqual(
+            output_names,
+            [
+                "01-intake.json",
+                "02-research-a.md",
+                "03-research-b.md",
+                "04-critique-a-on-b.md",
+                "05-critique-b-on-a.md",
+                "06-judge.md",
+            ],
+        )
+        manifest = json.loads((run_dir / "audit" / "manifest.json").read_text(encoding="utf-8"))
+        manifest_paths = {entry["path"] for entry in manifest["files"]}
+        self.assertIn("prompt-packets/01-intake.md", manifest_paths)
+        self.assertIn("workflow-state.json", manifest_paths)
+
+    def test_resolves_job_name_via_jobs_index(self) -> None:
+        result = subprocess.run(
+            [
+                "python3",
+                str(RUN_WORKFLOW),
+                "--job-name",
+                "my-project-1",
+                "--jobs-index-root",
+                str(self.jobs_index_root),
+                "--jobs-root",
+                str(self.temp_root / "jobs"),
+                "--run-id",
+                "run-lookup",
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        run_dir = self.job_dir / "runs" / "run-lookup"
+        self.assertTrue(run_dir.exists())
+        state = json.loads((run_dir / "workflow-state.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["job_name"], "my-project-1")
 
     def test_rejects_job_inside_assistant_repo(self) -> None:
         nested_job = REPO_ROOT / "tmp-job-forbidden"
@@ -98,7 +149,7 @@ class RunWorkflowTests(unittest.TestCase):
                 [
                     "python3",
                     str(RUN_WORKFLOW),
-                    "--job-dir",
+                    "--job-path",
                     str(nested_job),
                     "--run-id",
                     "run-001",
