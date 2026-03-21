@@ -144,6 +144,16 @@ Put the actual outputs into:
 
 `~/Projects/research-hub/jobs/my-project-1/runs/run-001/stage-outputs/`
 
+When a stage depends on an earlier stage, use the prior stage output artifact from `stage-outputs/`, not the prior prompt packet from `prompt-packets/`.
+
+Example:
+
+- `research-a` and `research-b` should consume `stage-outputs/01-intake.json`
+- critiques should consume the relevant research outputs from `stage-outputs/`
+- `judge` should consume the critique outputs from `stage-outputs/`
+
+The rendered prompt packets and `WORK_ORDER.md` now state these upstream artifact paths explicitly.
+
 Important:
 
 - the framework does not call provider APIs yet
@@ -185,7 +195,7 @@ python3 scripts/extract_claims.py \
   --output ~/Projects/research-hub/jobs/my-project-1/evidence/claims-run-001.json
 ```
 
-Strict mode fails if extracted fact claims have no citations:
+Strict mode fails if extracted fact claims have no external evidence sources:
 
 ```bash
 python3 scripts/extract_claims.py \
@@ -194,15 +204,53 @@ python3 scripts/extract_claims.py \
   --strict
 ```
 
-### 6. What is still manual
+The claim register now separates:
+
+- `provenance` = internal workflow artifacts that asserted or preserved a claim
+- `evidence_sources` = external sources that support a claim about the world
+- `unclassified_markers` = markers that could not be safely classified
+
+For final outputs, provenance is useful for audit, but it is not enough evidence on its own.
+
+### 6. Generate the final artifact
+
+Once the judge artifact and claim register are ready, generate the final user-facing artifact like this:
+
+```bash
+python3 scripts/generate_final_artifact.py \
+  --judge-input ~/Projects/research-hub/jobs/my-project-1/runs/run-001/stage-outputs/06-judge.md \
+  --claim-register ~/Projects/research-hub/jobs/my-project-1/evidence/claims-run-001.json \
+  --output ~/Projects/research-hub/jobs/my-project-1/outputs/final-run-001.md
+```
+
+This script will fail if the claim register still contains:
+
+- uncited facts
+- provenance-only supported facts
+- unclassified markers
+
+The final artifact includes:
+
+- executive summary
+- options comparison
+- recommendation
+- confidence and uncertainty
+- references
+- open questions
+
+Important:
+
+- the references section is for external sources only
+- internal workflow provenance stays in audit artifacts, not in the user-facing references list
+
+### 7. What is still manual
 
 - provider/model execution
 - source retrieval
 - citation verification against source content
 - promotion of accepted outputs into final job-level deliverables
-- final artifact writing as an automated pipeline step
 
-### 7. What the framework gives you now
+### 8. What the framework gives you now
 
 - independent job repos
 - auditable run scaffolding
@@ -210,6 +258,7 @@ python3 scripts/extract_claims.py \
 - workflow state and work order files
 - placeholder output targets
 - claim extraction from markdown
+- final artifact generation from judge output plus claim register
 - structure validation
 
 ---

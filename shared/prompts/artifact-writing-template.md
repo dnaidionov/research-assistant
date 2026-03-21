@@ -13,16 +13,20 @@ Write the final user-facing artifact for the job using the judge synthesis and c
 
 - Do not introduce new factual claims that are absent from the claim register.
 - Keep facts and inference distinguishable where practical.
-- Preserve a visible disagreement log for unresolved issues.
+- Preserve unresolved disagreement in the comparison or uncertainty sections.
 - Every factual statement in the artifact must remain cited.
+- The `# References` section must list external evidence sources only.
+- Keep workflow provenance in audit artifacts, not in the user-facing references list.
 
 ## Required Output Sections
 
-1. Final artifact
-2. Claim coverage note
-3. Disagreement log
-4. Open questions
+1. `# Executive Summary`
+2. `# Options Comparison`
+3. `# Recommendation`
+4. `# Confidence And Uncertainty`
+5. `# References`
+6. `# Open Questions`
 
 ## Source Materials
 
-Use only run artifacts produced earlier in this workflow.
+Use only run artifacts produced earlier in this workflow. Treat workflow provenance as audit material rather than as external support.

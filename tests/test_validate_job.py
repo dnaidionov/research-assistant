@@ -119,6 +119,103 @@ class ValidateJobTests(unittest.TestCase):
             self.assertTrue(any("config.yaml" in error for error in payload["errors"]))
             self.assertEqual(payload["exit_code"], 2)
 
+    def test_final_artifact_readiness_passes_with_required_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            job_dir = self._make_job(Path(tmpdir))
+            claims_path = job_dir / "evidence" / "claims-run-001.json"
+            judge_path = job_dir / "runs" / "run-001" / "stage-outputs" / "06-judge.md"
+            judge_path.parent.mkdir(parents=True)
+            judge_path.write_text("# Supported Conclusions\n1. Option A is lower risk. [SRC-001]\n", encoding="utf-8")
+            claims_path.write_text(
+                """{
+  "claims": [],
+  "summary": {
+    "claim_type_counts": {},
+    "claims_with_unclassified_markers": [],
+    "fact_count": 0,
+    "inference_count": 0,
+    "provenance_only_fact_ids": [],
+    "uncited_fact_ids": []
+  }
+}""",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(VALIDATE_JOB),
+                    "--job-dir",
+                    str(job_dir),
+                    "--json",
+                    "--final-artifact-ready",
+                    "--judge-artifact",
+                    str(judge_path),
+                    "--claim-register",
+                    str(claims_path),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertTrue(payload["checks"]["final_artifact_ready"])
+
+    def test_final_artifact_readiness_fails_on_unclassified_markers_and_missing_judge(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            job_dir = self._make_job(Path(tmpdir))
+            claims_path = job_dir / "evidence" / "claims-run-001.json"
+            claims_path.write_text(
+                """{
+  "claims": [
+    {
+      "id": "C001",
+      "text": "Option A is lower risk.",
+      "type": "fact",
+      "provenance": ["PASS-A"],
+      "evidence_sources": ["SRC-001"],
+      "unclassified_markers": ["NOTE-1"],
+      "line": 1
+    }
+  ],
+  "summary": {
+    "claim_type_counts": {"fact": 1},
+    "claims_with_unclassified_markers": ["C001"],
+    "fact_count": 1,
+    "inference_count": 0,
+    "provenance_only_fact_ids": [],
+    "uncited_fact_ids": []
+  }
+}""",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(VALIDATE_JOB),
+                    "--job-dir",
+                    str(job_dir),
+                    "--json",
+                    "--final-artifact-ready",
+                    "--judge-artifact",
+                    str(job_dir / "runs" / "run-001" / "stage-outputs" / "06-judge.md"),
+                    "--claim-register",
+                    str(claims_path),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            payload = json.loads(result.stdout)
+            self.assertFalse(payload["checks"]["final_artifact_ready"])
+            self.assertTrue(any("judge artifact" in error.lower() for error in payload["errors"]))
+            self.assertTrue(any("unclassified" in error.lower() for error in payload["errors"]))
+
 
 if __name__ == "__main__":
     unittest.main()

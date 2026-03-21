@@ -62,13 +62,16 @@ Claim extraction and artifact writing remain separate downstream steps. That spl
 - distinguish supported conclusions from open questions
 
 ### 7. Claim extraction
-- convert the synthesis into atomic claims with stable `C001`-style IDs
-- retain citations, fact or inference typing, and explicit confidence where present
+- convert markdown into a v1 claim register with stable `C001`-style IDs
+- separate internal workflow provenance from external evidence sources where marker classification allows
+- retain explicit markers such as citations and confidence where present
+- treat the current output as a draft audit artifact, not as a fully reliable truth register
 
 ### 8. Artifact writing
 - produce the final user-facing artifact
 - use only cited claims from prior stages
-- include disagreement and open-question sections
+- include summary, option comparison, recommendation, confidence or uncertainty, references, and open questions
+- keep workflow provenance in audit artifacts, not in the user-facing references section
 
 ## Run Artifacts
 
@@ -104,6 +107,7 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - creates a new run directory
 - resolves job names via `jobs-index/` or the jobs root
 - renders prompt packets for the six execution stages
+- writes explicit upstream stage-output artifact references into prompt packets and the work order
 - writes `workflow-state.json`
 - writes `WORK_ORDER.md`
 - writes run audit files and placeholder output targets
@@ -111,10 +115,19 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 ### `scripts/extract_claims.py`
 - parses markdown into atomic claims
 - assigns stable `C001`-style IDs
-- extracts citations
+- separates bracketed markers into provenance, external evidence, and unclassified buckets
 - captures explicit confidence labels when present
 - marks claims as `fact` or `inference`
 - can fail on uncited facts in strict mode
+- flags provenance-only supported facts for downstream gating
+- does not yet filter all non-claim residue reliably
+- does not yet classify evaluations, evidence gaps, or structure notes separately
+
+### `scripts/generate_final_artifact.py`
+- reads the judge artifact and claim register
+- rejects uncited facts, provenance-only facts, and unclassified markers
+- writes a structured final artifact with external references only
+- keeps workflow provenance out of the user-facing references section
 
 ### `scripts/validate_job.py`
 - validates that a job repo has the required files and directories
@@ -122,6 +135,7 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - checks that key config and artifact files are readable
 - validates that `runs/` is a usable directory path
 - checks that job-template requirements remain consistent with product docs
+- can validate minimum readiness for final artifact generation
 - returns structured validation results with explicit exit codes
 
 ## Constraints
@@ -131,3 +145,13 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - Final outputs may not contain uncited factual claims.
 - Facts and inference must remain distinguishable where possible.
 - Disagreements must be preserved until the judge stage.
+
+## Planned Hardening
+
+The intended next hardening steps are:
+
+1. expand the claim taxonomy beyond `fact` and `inference`
+2. split internal provenance from external evidence sources
+3. add a cleanup or normalization pass after extraction
+4. require structured JSON sidecars for execution stages
+5. add hard gates in the workflow runner once those contracts exist

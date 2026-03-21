@@ -19,8 +19,9 @@ The current v1 now supports:
 3. rendering prompt packets for the six core execution stages
 4. writing workflow state and work orders
 5. generating placeholder stage outputs
-6. extracting atomic claims from markdown into a claim register with stable `C001`-style IDs
-7. preserving audit artifacts inside the job repo
+6. extracting atomic claims from markdown into a claim register with stable `C001`-style IDs and separated provenance/evidence markers
+7. generating a downstream structured final artifact with external references only
+8. preserving audit artifacts inside the job repo
 
 ## Canonical Research Lifecycle
 
@@ -33,7 +34,7 @@ The current v1 now supports:
 7. claim extraction
 8. artifact writing
 
-`scripts/run_workflow.py` currently scaffolds stages 1 through 6. Claim extraction and artifact writing are intentionally separate steps.
+`scripts/run_workflow.py` currently scaffolds stages 1 through 6. Claim extraction and artifact writing are intentionally separate downstream steps.
 
 ## Constraints
 

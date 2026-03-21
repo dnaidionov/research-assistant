@@ -26,6 +26,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--job-dir", required=True, help="Path to the job repository.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+    parser.add_argument(
+        "--final-artifact-ready",
+        action="store_true",
+        help="Validate that the job has the minimum required inputs for final artifact generation.",
+    )
+    parser.add_argument("--judge-artifact", help="Path to the judge markdown artifact to validate.")
+    parser.add_argument("--claim-register", help="Path to the claim register JSON artifact to validate.")
     return parser.parse_args()
 
 
@@ -122,6 +129,49 @@ def validate_template_consistency(errors: list[str], checks: dict[str, bool]) ->
     checks["template_docs_consistent"] = consistent
 
 
+def validate_final_artifact_readiness(
+    judge_artifact: str | None,
+    claim_register: str | None,
+    errors: list[str],
+    checks: dict[str, bool],
+) -> None:
+    if judge_artifact is None or claim_register is None:
+        checks["final_artifact_ready"] = False
+        errors.append("Final artifact readiness requires both --judge-artifact and --claim-register.")
+        return
+
+    ready = True
+    judge_path = Path(judge_artifact).expanduser()
+    claim_path = Path(claim_register).expanduser()
+
+    if not judge_path.is_file():
+        ready = False
+        errors.append(f"Missing required judge artifact: {judge_path}")
+    else:
+        judge_text = judge_path.read_text(encoding="utf-8")
+        if not judge_text.strip():
+            ready = False
+            errors.append(f"Judge artifact is empty: {judge_path}")
+
+    if not claim_path.is_file():
+        ready = False
+        errors.append(f"Missing required claim register: {claim_path}")
+    else:
+        payload = json.loads(claim_path.read_text(encoding="utf-8"))
+        summary = payload.get("summary", {})
+        if summary.get("uncited_fact_ids"):
+            ready = False
+            errors.append("Claim register contains uncited facts and is not ready for final artifact generation.")
+        if summary.get("provenance_only_fact_ids"):
+            ready = False
+            errors.append("Claim register contains provenance-only supported facts and is not ready for final artifact generation.")
+        if summary.get("claims_with_unclassified_markers"):
+            ready = False
+            errors.append("Claim register contains unclassified markers and is not ready for final artifact generation.")
+
+    checks["final_artifact_ready"] = ready
+
+
 def build_payload(job_dir: Path, errors: list[str], warnings: list[str], checks: dict[str, bool]) -> dict[str, object]:
     ok = not errors
     return {
@@ -169,6 +219,8 @@ def main() -> int:
         validate_readable_job_artifacts(job_dir, errors, checks)
         validate_runs_path(job_dir, errors, checks)
         validate_template_consistency(errors, checks)
+        if args.final_artifact_ready:
+            validate_final_artifact_readiness(args.judge_artifact, args.claim_register, errors, checks)
 
         payload = build_payload(job_dir, sorted(set(errors)), sorted(set(warnings)), checks)
         if args.json:

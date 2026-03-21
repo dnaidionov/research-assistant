@@ -126,6 +126,27 @@ def render_packet(stage: dict[str, object], context: dict[str, str]) -> str:
     return template.format(**context).rstrip() + "\n"
 
 
+def dependency_output_paths(stage: dict[str, object], stage_dir: Path) -> list[Path]:
+    outputs_by_id = {
+        str(candidate["id"]): stage_dir / str(candidate["output"])
+        for candidate in RUN_STAGES
+    }
+    return [outputs_by_id[str(stage_id)] for stage_id in stage["depends_on"]]
+
+
+def render_upstream_artifacts_section(paths: list[Path]) -> str:
+    if not paths:
+        return "No upstream stage artifacts. This stage starts from the job brief and config.\n"
+
+    lines = [
+        "Use the output artifact from the dependency stage, not the dependency prompt packet.",
+        "",
+    ]
+    for path in paths:
+        lines.append(f"- `{path}`")
+    return "\n".join(lines) + "\n"
+
+
 def stage_output_placeholder(stage: dict[str, object], output_path: Path) -> str:
     output_format = str(stage["format"])
     stage_id = str(stage["id"])
@@ -160,6 +181,10 @@ def build_state(job_name: str, job_dir: Path, run_id: str, run_dir: Path, create
             {
                 "depends_on": list(stage["depends_on"]),
                 "description": stage["description"],
+                "dependency_artifacts": [
+                    str(path)
+                    for path in dependency_output_paths(stage, run_dir / "stage-outputs")
+                ],
                 "expected_output_target": str(run_dir / "stage-outputs" / str(stage["output"])),
                 "id": stage["id"],
                 "packet_path": str(run_dir / "prompt-packets" / str(stage["packet"])),
@@ -195,8 +220,16 @@ def build_work_order(job_name: str, job_dir: Path, run_id: str, created_at: str)
         output_name = f"stage-outputs/{stage['output']}"
         packet_name = f"prompt-packets/{stage['packet']}"
         dependencies = ", ".join(stage["depends_on"]) if stage["depends_on"] else "none"
+        dependency_artifacts = dependency_output_paths(stage, job_dir / "runs" / run_id / "stage-outputs")
         lines.append(f"{index}. `{stage['id']}`")
         lines.append(f"   Depends on: {dependencies}")
+        if dependency_artifacts:
+            lines.append("   Upstream stage artifacts:")
+            for artifact_path in dependency_artifacts:
+                lines.append(f"   - `stage-outputs/{artifact_path.name}`")
+            lines.append("   Use the output artifact from the dependency stage, not the dependency prompt packet.")
+        else:
+            lines.append("   Upstream stage artifacts: none")
         lines.append(f"   Prompt packet: `{packet_name}`")
         lines.append(f"   Expected output target: `{output_name}`")
         lines.append(f"   Purpose: {stage['description']}")
@@ -254,11 +287,16 @@ def scaffold_run(job_name: str, job_dir: Path, run_id: str) -> Path:
                 "stage_description": str(stage["description"]),
                 "stage_id": str(stage["id"]),
                 "stage_output_path": str(output_path.resolve()),
+                "upstream_stage_artifacts": render_upstream_artifacts_section(
+                    dependency_output_paths(stage, stage_dir)
+                ),
                 "target_label": str(stage.get("target_label", "Target")),
             }
         )
-
-        write_text(packet_path, render_packet(stage, context))
+        packet_body = render_packet(stage, context)
+        packet_body += "\n## Upstream Stage Artifacts\n\n"
+        packet_body += context["upstream_stage_artifacts"]
+        write_text(packet_path, packet_body)
         created_files.append(packet_path)
 
         write_text(output_path, stage_output_placeholder(stage, output_path.resolve()))
