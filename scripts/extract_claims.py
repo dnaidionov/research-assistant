@@ -6,6 +6,7 @@ import argparse
 import json
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Iterable
 
@@ -17,26 +18,68 @@ from _workflow_lib import write_json
 CITATION_BLOCK_PATTERN = re.compile(r"\[([^\[\]]+)\]")
 LIST_PREFIX_PATTERN = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)")
 MARKDOWN_HEADING_PATTERN = re.compile(r"^\s{0,3}#{1,6}\s+(.*)$")
-PLAIN_HEADING_PATTERN = re.compile(r"^\s*(facts?|inferences?|analysis|claims?)\s*:?\s*$", re.IGNORECASE)
+PLAIN_HEADING_PATTERN = re.compile(
+    r"^\s*(facts?|inferences?|analysis|claims?|findings|evaluations?|decisions?|"
+    r"open questions?|evidence gaps?|report structure)\s*:?\s*$",
+    re.IGNORECASE,
+)
 CONFIDENCE_PATTERN = re.compile(
     r"(?:^|[\s;,(])confidence\s*[:=-]?\s*(low|medium|high)\b",
     re.IGNORECASE,
 )
 SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?])\s+(?!(?:Confidence)\b)(?=[A-Z0-9\"'`])")
+PROVENANCE_TOKEN_PATTERN = re.compile(
+    r"^(?:PASS|CRIT|JUDGE|INTAKE|WORK[_-]?ORDER|RUN|STAGE|SYNTHESIS|ARTIFACT)"
+    r"(?:[-_][A-Z0-9]+)*$",
+    re.IGNORECASE,
+)
+EVIDENCE_TOKEN_PATTERN = re.compile(
+    r"^(?:SRC|DOC)-[A-Z0-9._-]+$|^S[0-9]{1,6}$|^https?://\S+$",
+    re.IGNORECASE,
+)
+PATH_ONLY_PATTERN = re.compile(
+    r"^`?(?:~?/|/|\./|\.\./)[^`]+`?$|^`?[^`\s]+(?:/[^`\s]+)+`?$"
+)
+REPORT_STRUCTURE_PATTERN = re.compile(
+    r"^(?:recommended\s+section\s+structure|section\s+structure|outline)\s*:?\s*$",
+    re.IGNORECASE,
+)
+HEADING_LABEL_PATTERN = re.compile(
+    r"^(?:evidence gaps?|open questions?|findings|report structure|analysis|claims?)\s*:?\s*$",
+    re.IGNORECASE,
+)
 
 
 def normalize_whitespace(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
-def extract_citations(text: str) -> list[str]:
-    citations: list[str] = []
+def classify_marker(marker: str) -> tuple[str, str]:
+    normalized = normalize_whitespace(marker)
+    if EVIDENCE_TOKEN_PATTERN.match(normalized):
+        return "evidence", normalized
+    if PROVENANCE_TOKEN_PATTERN.match(normalized):
+        return "provenance", normalized.upper()
+    return "unclassified", normalized
+
+
+def extract_citations(text: str) -> tuple[list[str], list[str], list[str]]:
+    provenance: list[str] = []
+    evidence_sources: list[str] = []
+    unclassified_markers: list[str] = []
     for block in CITATION_BLOCK_PATTERN.findall(text):
         for part in block.split(","):
             candidate = normalize_whitespace(part)
-            if candidate:
-                citations.append(candidate)
-    return citations
+            if not candidate:
+                continue
+            marker_type, normalized = classify_marker(candidate)
+            if marker_type == "evidence":
+                evidence_sources.append(normalized)
+            elif marker_type == "provenance":
+                provenance.append(normalized)
+            else:
+                unclassified_markers.append(normalized)
+    return provenance, evidence_sources, unclassified_markers
 
 
 def strip_citations(text: str) -> str:
@@ -66,6 +109,18 @@ def canonical_heading(text: str) -> str | None:
 
 def claim_type_for_heading(heading: str | None) -> str:
     lowered = (heading or "").lower()
+    if "evidence gap" in lowered:
+        return "evidence_gap"
+    if "open question" in lowered:
+        return "open_question"
+    if "evaluation" in lowered or "finding" in lowered or "analysis" in lowered:
+        return "evaluation"
+    if "decision" in lowered:
+        return "decision"
+    if "report structure" in lowered:
+        return "report_structure"
+    if "artifact" in lowered:
+        return "artifact_reference"
     if any(token in lowered for token in ("inference", "analysis", "interpret")):
         return "inference"
     return "fact"
@@ -82,6 +137,24 @@ def is_probable_claim_line(line: str) -> bool:
     if LIST_PREFIX_PATTERN.match(stripped):
         return True
     return bool(re.search(r"[.!?]|\[[^\]]+\]|confidence", stripped, re.IGNORECASE))
+
+
+def is_non_claim_text(text: str) -> bool:
+    stripped = normalize_whitespace(text).strip("`").strip()
+    if not stripped:
+        return True
+    if PATH_ONLY_PATTERN.match(stripped):
+        return True
+    if REPORT_STRUCTURE_PATTERN.match(stripped):
+        return True
+    if HEADING_LABEL_PATTERN.match(stripped):
+        return True
+    confidence, cleaned = extract_confidence(stripped)
+    if confidence and not strip_citations(cleaned).strip(" :;-"):
+        return True
+    if stripped.endswith(":") and len(stripped.split()) <= 5:
+        return True
+    return False
 
 
 def split_into_atomic_units(text: str) -> list[str]:
@@ -103,8 +176,20 @@ def split_into_atomic_units(text: str) -> list[str]:
 
 def infer_claim_type(text: str, heading: str | None) -> str:
     if heading:
-        return claim_type_for_heading(heading)
+        heading_type = claim_type_for_heading(heading)
+        if heading_type != "fact":
+            return heading_type
     lowered = text.lower()
+    if text.endswith("?"):
+        return "open_question"
+    if any(marker in lowered for marker in ("evidence gap", "no external source", "no source confirms")):
+        return "evidence_gap"
+    if any(marker in lowered for marker in ("accepted", "rejected", "adequate", "insufficient", "stronger", "weaker")):
+        return "evaluation"
+    if any(marker in lowered for marker in ("decided", "decision", "will use", "selected")):
+        return "decision"
+    if REPORT_STRUCTURE_PATTERN.match(lowered) or "section structure" in lowered:
+        return "report_structure"
     inference_markers = ("likely", "suggests", "implies", "may ", "might ", "could ", "appears to")
     if any(marker in lowered for marker in inference_markers):
         return "inference"
@@ -133,7 +218,7 @@ def iter_candidate_claims(markdown: str) -> Iterable[tuple[int, str | None, str]
 
 
 def build_claim_record(index: int, line_number: int, heading: str | None, raw_text: str) -> dict[str, object]:
-    citations = extract_citations(raw_text)
+    provenance, evidence_sources, unclassified_markers = extract_citations(raw_text)
     confidence, without_confidence = extract_confidence(raw_text)
     text = strip_citations(without_confidence)
     text = text.rstrip(" ;,")
@@ -142,7 +227,9 @@ def build_claim_record(index: int, line_number: int, heading: str | None, raw_te
         "id": f"C{index:03d}",
         "text": text,
         "type": infer_claim_type(text, heading),
-        "citations": citations,
+        "provenance": provenance,
+        "evidence_sources": evidence_sources,
+        "unclassified_markers": unclassified_markers,
         "line": line_number,
     }
     if heading:
@@ -160,6 +247,8 @@ def extract_claims(markdown: str) -> list[dict[str, object]]:
         if not raw_text:
             continue
         preview = strip_citations(extract_confidence(raw_text)[1])
+        if is_non_claim_text(preview):
+            continue
         key = (preview.lower(), line_number)
         if not preview or key in seen_keys:
             continue
@@ -170,12 +259,28 @@ def extract_claims(markdown: str) -> list[dict[str, object]]:
 
 
 def build_payload(claims: list[dict[str, object]]) -> dict[str, object]:
-    uncited_facts = [claim["id"] for claim in claims if claim["type"] == "fact" and not claim["citations"]]
+    claim_type_counts = Counter(str(claim["type"]) for claim in claims)
+    uncited_facts = [
+        claim["id"]
+        for claim in claims
+        if claim["type"] == "fact" and not claim["evidence_sources"]
+    ]
+    provenance_only_facts = [
+        claim["id"]
+        for claim in claims
+        if claim["type"] == "fact" and not claim["evidence_sources"] and claim["provenance"]
+    ]
+    claims_with_unclassified_markers = [
+        claim["id"] for claim in claims if claim.get("unclassified_markers")
+    ]
     return {
         "claims": claims,
         "summary": {
-            "fact_count": sum(1 for claim in claims if claim["type"] == "fact"),
-            "inference_count": sum(1 for claim in claims if claim["type"] == "inference"),
+            "claim_type_counts": dict(sorted(claim_type_counts.items())),
+            "claims_with_unclassified_markers": claims_with_unclassified_markers,
+            "fact_count": claim_type_counts.get("fact", 0),
+            "inference_count": claim_type_counts.get("inference", 0),
+            "provenance_only_fact_ids": provenance_only_facts,
             "uncited_fact_ids": uncited_facts,
         },
     }
@@ -193,7 +298,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--strict",
         action="store_true",
-        help="Return a non-zero exit code when any extracted fact claim lacks citations.",
+        help="Return a non-zero exit code when any extracted fact claim lacks external evidence sources.",
     )
     return parser.parse_args()
 
@@ -228,8 +333,14 @@ def main() -> int:
         return 1
 
     uncited_facts = payload["summary"]["uncited_fact_ids"]
+    provenance_only_facts = payload["summary"]["provenance_only_fact_ids"]
     if args.strict and uncited_facts:
-        print("Uncited fact claims detected: " + ", ".join(uncited_facts), file=sys.stderr)
+        parts = []
+        if uncited_facts:
+            parts.append("Uncited fact claims detected: " + ", ".join(uncited_facts))
+        if provenance_only_facts:
+            parts.append("Provenance-only fact claims detected: " + ", ".join(provenance_only_facts))
+        print(" ".join(parts), file=sys.stderr)
         return 1
 
     return 0

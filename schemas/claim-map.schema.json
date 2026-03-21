@@ -6,7 +6,7 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "text", "type", "citations"],
+        "required": ["id", "text", "type", "provenance", "evidence_sources", "unclassified_markers"],
         "properties": {
           "id": {
             "type": "string",
@@ -15,9 +15,26 @@
           "text": {"type": "string"},
           "type": {
             "type": "string",
-            "enum": ["fact", "inference"]
+            "enum": [
+              "fact",
+              "inference",
+              "evaluation",
+              "decision",
+              "open_question",
+              "evidence_gap",
+              "artifact_reference",
+              "report_structure"
+            ]
           },
-          "citations": {
+          "provenance": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "evidence_sources": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "unclassified_markers": {
             "type": "array",
             "items": {"type": "string"}
           },
@@ -32,10 +49,29 @@
     },
     "summary": {
       "type": "object",
-      "required": ["fact_count", "inference_count", "uncited_fact_ids"],
+      "required": [
+        "claim_type_counts",
+        "claims_with_unclassified_markers",
+        "fact_count",
+        "inference_count",
+        "provenance_only_fact_ids",
+        "uncited_fact_ids"
+      ],
       "properties": {
+        "claim_type_counts": {
+          "type": "object",
+          "additionalProperties": {"type": "integer"}
+        },
+        "claims_with_unclassified_markers": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
         "fact_count": {"type": "integer"},
         "inference_count": {"type": "integer"},
+        "provenance_only_fact_ids": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
         "uncited_fact_ids": {
           "type": "array",
           "items": {"type": "string"}

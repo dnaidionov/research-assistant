@@ -18,10 +18,13 @@ These rules must not be violated by future changes.
 - No uncited factual claims are allowed in final outputs.
 - Facts must be distinguishable from inference.
 - Claims must be traceable to sources.
+- Workflow provenance and external evidence must be modeled as different things.
 - Source evaluation is required, not optional.
 - Uncertainty must be explicit where evidence is weak or mixed.
+- Non-claim artifacts such as structure notes and file references must not be promoted into truth validation unchanged.
 
 ## Implementation
 - Scripts should write artifacts into the job repo, never into the assistant repo.
 - The system should remain provider-agnostic at the orchestration layer.
 - Structure and auditability matter more than convenience.
+- Product docs must stay explicit about what is implemented now versus what is only a target design.

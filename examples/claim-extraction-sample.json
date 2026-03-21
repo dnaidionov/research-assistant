@@ -1,41 +1,53 @@
 {
   "claims": [
     {
-      "citations": [
+      "evidence_sources": [
         "DOC-001"
       ],
       "id": "C001",
       "line": 4,
+      "provenance": [],
       "section": "Facts",
       "text": "The workflow requires separate research passes A and B.",
-      "type": "fact"
+      "type": "fact",
+      "unclassified_markers": []
     },
     {
-      "citations": [
+      "evidence_sources": [
         "DOC-002"
       ],
       "id": "C002",
       "line": 5,
+      "provenance": [],
       "section": "Facts",
       "text": "Final outputs may not contain uncited factual claims.",
-      "type": "fact"
+      "type": "fact",
+      "unclassified_markers": []
     },
     {
-      "citations": [
+      "evidence_sources": [
         "DOC-001",
         "DOC-002"
       ],
       "confidence": "medium",
       "id": "C003",
       "line": 8,
+      "provenance": [],
       "section": "Inferences",
       "text": "This design likely improves auditability across runs.",
-      "type": "inference"
+      "type": "inference",
+      "unclassified_markers": []
     }
   ],
   "summary": {
+    "claim_type_counts": {
+      "fact": 2,
+      "inference": 1
+    },
+    "claims_with_unclassified_markers": [],
     "fact_count": 2,
     "inference_count": 1,
+    "provenance_only_fact_ids": [],
     "uncited_fact_ids": []
   }
 }

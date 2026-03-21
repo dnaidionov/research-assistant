@@ -10,7 +10,36 @@ EXTRACT_CLAIMS = REPO_ROOT / "scripts" / "extract_claims.py"
 
 
 class ExtractClaimsTests(unittest.TestCase):
-    def test_extracts_atomic_claims_with_types_citations_and_confidence(self) -> None:
+    def test_classifies_provenance_evidence_and_unknown_markers_separately(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "report.md"
+            output_path = Path(tmpdir) / "claims.json"
+            input_path.write_text(
+                "\n".join(
+                    [
+                        "## Facts",
+                        "- The workflow writes outputs into the job repo. [PASS-A, SRC-100, NOTE-1]",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                ["python3", str(EXTRACT_CLAIMS), "--input", str(input_path), "--output", str(output_path)],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            claim = payload["claims"][0]
+            self.assertEqual(claim["provenance"], ["PASS-A"])
+            self.assertEqual(claim["evidence_sources"], ["SRC-100"])
+            self.assertEqual(claim["unclassified_markers"], ["NOTE-1"])
+            self.assertEqual(payload["summary"]["claims_with_unclassified_markers"], ["C001"])
+
+    def test_extracts_atomic_claims_with_provenance_evidence_and_confidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             input_path = Path(tmpdir) / "report.md"
             output_path = Path(tmpdir) / "claims.json"
@@ -21,7 +50,7 @@ class ExtractClaimsTests(unittest.TestCase):
                         "",
                         "## Facts",
                         "1. The framework separates assistant and job repos. [SRC-001]",
-                        "2. Each run writes artifacts to the job repo. [SRC-002, SRC-003]",
+                        "2. Each run writes artifacts to the job repo. [PASS-A, SRC-002, SRC-003]",
                         "",
                         "## Inferences",
                         "- This separation reduces accidental data leakage. [SRC-004] Confidence: medium",
@@ -48,9 +77,13 @@ class ExtractClaimsTests(unittest.TestCase):
             payload = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertEqual([claim["id"] for claim in payload["claims"]], ["C001", "C002", "C003"])
             self.assertEqual(payload["claims"][0]["type"], "fact")
-            self.assertEqual(payload["claims"][1]["citations"], ["SRC-002", "SRC-003"])
+            self.assertEqual(payload["claims"][1]["provenance"], ["PASS-A"])
+            self.assertEqual(payload["claims"][1]["evidence_sources"], ["SRC-002", "SRC-003"])
             self.assertEqual(payload["claims"][2]["type"], "inference")
             self.assertEqual(payload["claims"][2]["confidence"], "medium")
+            self.assertEqual(payload["summary"]["claim_type_counts"]["fact"], 2)
+            self.assertEqual(payload["summary"]["claim_type_counts"]["inference"], 1)
+            self.assertEqual(payload["summary"]["provenance_only_fact_ids"], [])
 
     def test_strict_mode_rejects_uncited_facts(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -85,6 +118,38 @@ class ExtractClaimsTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("uncited fact", result.stderr.lower())
+
+    def test_strict_mode_rejects_provenance_only_fact_support(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "report.md"
+            output_path = Path(tmpdir) / "claims.json"
+            input_path.write_text(
+                "\n".join(
+                    [
+                        "## Facts",
+                        "- The final recommendation is safe. [PASS-A, JUDGE]",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(EXTRACT_CLAIMS),
+                    "--input",
+                    str(input_path),
+                    "--output",
+                    str(output_path),
+                    "--strict",
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("provenance-only", result.stderr.lower())
 
     def test_handles_imperfect_markdown_and_splits_atomic_claims(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -128,6 +193,7 @@ class ExtractClaimsTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(payload["claims"][2]["confidence"], "high")
+            self.assertEqual(payload["claims"][0]["evidence_sources"], ["SRC-010"])
 
     def test_fails_gracefully_on_missing_input(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -150,6 +216,85 @@ class ExtractClaimsTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("not found", result.stderr.lower())
+
+    def test_filters_non_claim_noise_and_classifies_evaluations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "judge.md"
+            output_path = Path(tmpdir) / "claims.json"
+            input_path.write_text(
+                "\n".join(
+                    [
+                        "# Judge Output",
+                        "",
+                        "## Findings",
+                        "- The judge accepted the sourcing approach as adequate. [JUDGE, SRC-020]",
+                        "- `/tmp/run-001/stage-outputs/02-research-a.md`",
+                        "- Recommended section structure:",
+                        "- Evidence Gaps",
+                        "- Confidence: low",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(EXTRACT_CLAIMS),
+                    "--input",
+                    str(input_path),
+                    "--output",
+                    str(output_path),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(len(payload["claims"]), 1)
+            self.assertEqual(payload["claims"][0]["type"], "evaluation")
+            self.assertEqual(payload["claims"][0]["provenance"], ["JUDGE"])
+            self.assertEqual(payload["claims"][0]["evidence_sources"], ["SRC-020"])
+
+    def test_classifies_evidence_gaps_and_open_questions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "notes.md"
+            output_path = Path(tmpdir) / "claims.json"
+            input_path.write_text(
+                "\n".join(
+                    [
+                        "## Evidence Gaps",
+                        "- No external source confirms the vendor count. [PASS-A]",
+                        "",
+                        "## Open Questions",
+                        "- Which source, if any, verifies the 2024 pricing baseline?",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(EXTRACT_CLAIMS),
+                    "--input",
+                    str(input_path),
+                    "--output",
+                    str(output_path),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual([claim["type"] for claim in payload["claims"]], ["evidence_gap", "open_question"])
+            self.assertEqual(payload["claims"][0]["provenance"], ["PASS-A"])
+            self.assertEqual(payload["claims"][0]["evidence_sources"], [])
+            self.assertEqual(payload["summary"]["provenance_only_fact_ids"], [])
 
 
 if __name__ == "__main__":

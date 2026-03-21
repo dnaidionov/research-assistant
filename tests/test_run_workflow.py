@@ -86,6 +86,8 @@ class RunWorkflowTests(unittest.TestCase):
         work_order = (run_dir / "WORK_ORDER.md").read_text(encoding="utf-8")
         self.assertIn("critique-a-on-b", work_order)
         self.assertIn("expected output target", work_order.lower())
+        self.assertIn("upstream stage artifacts", work_order.lower())
+        self.assertIn("stage-outputs/01-intake.json", work_order)
 
         packet_names = sorted(path.name for path in (run_dir / "prompt-packets").glob("*.md"))
         self.assertEqual(
@@ -115,6 +117,19 @@ class RunWorkflowTests(unittest.TestCase):
         manifest_paths = {entry["path"] for entry in manifest["files"]}
         self.assertIn("prompt-packets/01-intake.md", manifest_paths)
         self.assertIn("workflow-state.json", manifest_paths)
+
+        research_a_packet = (run_dir / "prompt-packets" / "02-research-a.md").read_text(encoding="utf-8")
+        self.assertIn("Upstream Stage Artifacts", research_a_packet)
+        self.assertIn("01-intake.json", research_a_packet)
+        self.assertIn("Use the output artifact from the dependency stage", research_a_packet)
+
+        critique_packet = (run_dir / "prompt-packets" / "04-critique-a-on-b.md").read_text(encoding="utf-8")
+        self.assertIn("02-research-a.md", critique_packet)
+        self.assertIn("03-research-b.md", critique_packet)
+
+        judge_packet = (run_dir / "prompt-packets" / "06-judge.md").read_text(encoding="utf-8")
+        self.assertIn("04-critique-a-on-b.md", judge_packet)
+        self.assertIn("05-critique-b-on-a.md", judge_packet)
 
     def test_resolves_job_name_via_jobs_index(self) -> None:
         result = subprocess.run(

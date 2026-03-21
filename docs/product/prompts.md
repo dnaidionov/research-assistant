@@ -41,3 +41,4 @@ The four canonical prompts now enforce explicit downstream contracts:
 - `research-template.md` returns fixed markdown sections with numbered fact and inference claims, explicit confidence labels, and a source-evaluation section.
 - `critique-template.md` returns fixed markdown sections that explicitly attack unsupported claims, weak sources, omissions, and overreach.
 - `judge-template.md` returns fixed markdown sections that separate supported conclusions from synthesis inferences and preserve unresolved disagreement when evidence is mixed.
+- `artifact-writing-template.md` returns fixed markdown sections for executive summary, option comparison, recommendation, confidence or uncertainty, external references, and open questions.
