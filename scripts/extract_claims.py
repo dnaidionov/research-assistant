@@ -113,6 +113,8 @@ def claim_type_for_heading(heading: str | None) -> str:
         return "evidence_gap"
     if "open question" in lowered:
         return "open_question"
+    if "rationale" in lowered or "traceability" in lowered:
+        return "evaluation"
     if "evaluation" in lowered or "finding" in lowered or "analysis" in lowered:
         return "evaluation"
     if "decision" in lowered:

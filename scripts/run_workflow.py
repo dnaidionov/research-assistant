@@ -95,28 +95,54 @@ def parse_simple_yaml_mapping(path: Path) -> dict[str, str]:
     return values
 
 
+def resolve_job_index_entry(job_identifier: str, jobs_index_root: Path) -> tuple[str, Path] | None:
+    active_dir = jobs_index_root / "active"
+    direct_index_file = active_dir / f"{job_identifier}.yaml"
+    candidate_files = [direct_index_file] if direct_index_file.is_file() else []
+    if active_dir.is_dir():
+        for path in sorted(active_dir.glob("*.yaml")):
+            if path not in candidate_files:
+                candidate_files.append(path)
+
+    for index_file in candidate_files:
+        metadata = parse_simple_yaml_mapping(index_file)
+        if metadata.get("job_id") != job_identifier and index_file.stem != job_identifier:
+            continue
+        local_path = metadata.get("local_path")
+        if local_path:
+            candidate = (index_file.parent / local_path).resolve()
+            return candidate.name, candidate
+        return index_file.stem, (jobs_index_root.parent / index_file.stem).resolve()
+
+    return None
+
+
 def resolve_job_path(
     *,
     job_name: str | None,
+    job_id: str | None,
     job_path: str | None,
     jobs_root: Path,
     jobs_index_root: Path,
 ) -> tuple[str, Path]:
-    if bool(job_name) == bool(job_path):
-        raise ValueError("Provide exactly one of --job-name or --job-path.")
+    specified = [value is not None for value in (job_name, job_id, job_path)]
+    if sum(specified) != 1:
+        raise ValueError("Provide exactly one of --job-name, --job-id, or --job-path.")
 
     if job_path:
         resolved_path = Path(job_path).expanduser()
         return resolved_path.name, resolved_path
 
+    if job_id is not None:
+        resolved = resolve_job_index_entry(job_id, jobs_index_root)
+        if resolved is not None:
+            return resolved
+        return job_id, (jobs_root / job_id).expanduser()
+
     assert job_name is not None
-    index_file = jobs_index_root / "active" / f"{job_name}.yaml"
-    if index_file.is_file():
-        metadata = parse_simple_yaml_mapping(index_file)
-        local_path = metadata.get("local_path")
-        if local_path:
-            candidate = (index_file.parent / local_path).resolve()
-            return job_name, candidate
+    resolved = resolve_job_index_entry(job_name, jobs_index_root)
+    if resolved is not None:
+        return resolved
 
     return job_name, (jobs_root / job_name).expanduser()
 
@@ -340,17 +366,18 @@ def parse_args() -> argparse.Namespace:
     )
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument("--job-name", help="Job name to resolve via jobs-index or jobs root.")
+    target.add_argument("--job-id", help="Job id to resolve via jobs-index metadata or jobs root.")
     target.add_argument("--job-path", help="Explicit path to the target job repository.")
     parser.add_argument("--run-id", help="Stable run identifier. If omitted, a UTC timestamp is used.")
     parser.add_argument(
         "--jobs-root",
         default=str(DEFAULT_JOB_ROOT),
-        help="Root directory containing job repos. Used when resolving --job-name.",
+        help="Root directory containing job repos. Used when resolving --job-name or --job-id.",
     )
     parser.add_argument(
         "--jobs-index-root",
         default=str(REPO_ROOT / "jobs-index"),
-        help="Root directory containing jobs-index metadata. Used when resolving --job-name.",
+        help="Root directory containing jobs-index metadata. Used when resolving --job-name or --job-id.",
     )
     return parser.parse_args()
 
@@ -363,6 +390,7 @@ def main() -> int:
     try:
         job_name, job_dir = resolve_job_path(
             job_name=args.job_name,
+            job_id=args.job_id,
             job_path=args.job_path,
             jobs_root=jobs_root,
             jobs_index_root=jobs_index_root,

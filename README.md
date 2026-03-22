@@ -116,6 +116,14 @@ python3 scripts/run_workflow.py \
   --run-id run-001
 ```
 
+Or by job id if it is registered in `jobs-index/active/*.yaml`:
+
+```bash
+python3 scripts/run_workflow.py \
+  --job-id my-project-1 \
+  --run-id run-001
+```
+
 This creates:
 
 - `runs/run-001/prompt-packets/`
@@ -126,6 +134,11 @@ This creates:
 - `runs/run-001/logs/`
 
 ### 4. Execute the six scaffolded stages
+
+You now have two options:
+
+- run the workflow manually stage by stage
+- use the automated orchestrator if you split execution between Codex and Antigravity
 
 Open the rendered prompt packets under:
 
@@ -157,10 +170,92 @@ The rendered prompt packets and `WORK_ORDER.md` now state these upstream artifac
 Important:
 
 - the framework does not call provider APIs yet
-- execution is still manual or handled by an external adapter
+- execution can be manual or handled by an external adapter or CLI-based orchestrator
 - all factual claims must remain cited
 - facts and inference must stay separated where possible
 - unresolved disagreement must remain visible through the judge stage
+
+### 5. Automate the Codex/Antigravity split
+
+If you want to run the current split automatically:
+
+- `intake` in Codex
+- `research-a` in Codex
+- `research-b` in Antigravity
+- `critique-a-on-b` in Codex
+- `critique-b-on-a` in Antigravity
+- `judge` in Antigravity
+- then `extract_claims.py`
+- then `generate_final_artifact.py`
+
+Use:
+
+```bash
+python3 scripts/execute_workflow.py \
+  --job-path ~/Projects/research-hub/jobs/my-project-1 \
+  --run-id run-001
+```
+
+If the job is registered in `jobs-index/`, you can use either of these instead:
+
+```bash
+python3 scripts/execute_workflow.py \
+  --job-name my-project-1 \
+  --run-id run-001
+```
+
+```bash
+python3 scripts/execute_workflow.py \
+  --job-id my-project-1 \
+  --run-id run-001
+```
+
+This runner will:
+
+- scaffold the run if it does not already exist
+- execute the six workflow stages in the required order
+- run `research-a` and `research-b` in parallel
+- run `critique-a-on-b` and `critique-b-on-a` in parallel
+- wait for both critiques before running `judge`
+- extract claims after the judge output exists
+- generate the final artifact after claim extraction passes readiness checks
+- resume safely if a prior run already completed some stages
+
+It writes stage execution logs into:
+
+- `runs/<run-id>/logs/`
+
+It also updates:
+
+- `runs/<run-id>/workflow-state.json`
+
+Current adapter assumptions:
+
+- Codex is invoked via the `codex` CLI
+- Antigravity is invoked via the `antigravity chat --mode agent --yes` CLI path
+- both CLIs can read an instruction prompt and write the requested stage artifact without interactive editing
+
+You can override the binaries if needed:
+
+```bash
+python3 scripts/execute_workflow.py \
+  --job-path ~/Projects/research-hub/jobs/my-project-1 \
+  --run-id run-001 \
+  --codex-bin /path/to/codex \
+  --antigravity-bin /path/to/antigravity
+```
+
+The automated runner uses this fixed execution order:
+
+1. `intake` in Codex
+2. `research-a` in Codex and `research-b` in Antigravity in parallel
+3. `critique-a-on-b` in Codex and `critique-b-on-a` in Antigravity in parallel
+4. `judge` in Antigravity
+5. `extract_claims.py --strict`
+6. `validate_job.py --final-artifact-ready`
+7. `generate_final_artifact.py`
+
+This is intentionally file-driven rather than provider-integrated. The runner passes each tool the stage id, prompt-packet path, and required output path, then waits for the expected artifact to exist and no longer contain placeholder content.
 
 ### Example execution mapping
 
@@ -185,7 +280,7 @@ Recommended operator pattern:
 - use model UIs or APIs such as `ChatGPT` and `Gemini` to execute the prompt packets
 - write each stage result back into the matching file under `stage-outputs/`
 
-### 5. Extract a claim register from a markdown report
+### 6. Extract a claim register from a markdown report
 
 For any markdown report, generate a JSON claim register like this:
 
@@ -212,7 +307,7 @@ The claim register now separates:
 
 For final outputs, provenance is useful for audit, but it is not enough evidence on its own.
 
-### 6. Generate the final artifact
+### 7. Generate the final artifact
 
 Once the judge artifact and claim register are ready, generate the final user-facing artifact like this:
 
@@ -243,17 +338,18 @@ Important:
 - the references section is for external sources only
 - internal workflow provenance stays in audit artifacts, not in the user-facing references list
 
-### 7. What is still manual
+### 8. What is still manual
 
-- provider/model execution
 - source retrieval
 - citation verification against source content
 - promotion of accepted outputs into final job-level deliverables
+- configuring or replacing the external execution adapters if your Codex or Antigravity setup differs from the current CLI assumptions
 
-### 8. What the framework gives you now
+### 9. What the framework gives you now
 
 - independent job repos
 - auditable run scaffolding
+- automated Codex/Antigravity execution for the current 2-pass workflow shape
 - strict prompt packets
 - workflow state and work order files
 - placeholder output targets
