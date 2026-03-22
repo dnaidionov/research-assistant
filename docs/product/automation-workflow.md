@@ -2,7 +2,7 @@
 
 ## Overview
 
-The v1 workflow is a file-based orchestration pipeline executed by scripts and operated manually or semi-manually in Codex.
+The v1 workflow is a file-based orchestration pipeline executed by scripts and operated manually, semi-manually, or through a CLI-driven adapter runner.
 
 The orchestration layer remains provider-agnostic. It prepares prompt packets, state files, work orders, and audit artifacts. It does not perform provider API calls in v1.
 
@@ -31,6 +31,20 @@ These stages must remain distinct. The workflow must not collapse research, crit
 6. Judge
 
 Claim extraction and artifact writing remain separate downstream steps. That split is deliberate: the runner creates the auditable core research exchange first, while later transformations stay isolated in their own scripts.
+
+## `execute_workflow.py` Automation Scope
+
+`scripts/execute_workflow.py` automates the current 2-pass tool split:
+
+1. intake in Codex
+2. research A in Codex and research B in Antigravity in parallel
+3. critique A on B in Codex and critique B on A in Antigravity in parallel
+4. judge in Antigravity
+5. claim extraction
+6. final artifact generation
+
+The runner is file-driven. It waits on required stage output artifacts, updates `workflow-state.json`, and writes per-step logs into the run directory.
+It assumes the external CLIs can complete a stage from a single prompt and write the requested output artifact without manual intervention.
 
 ## Stage Intent
 
@@ -103,14 +117,26 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 
 ### `scripts/run_workflow.py`
 - validates the job repo
-- accepts either a job name or an explicit job path
+- accepts a job name, a job id from `jobs-index` metadata, or an explicit job path
 - creates a new run directory
-- resolves job names via `jobs-index/` or the jobs root
+- resolves job names and ids via `jobs-index/` or the jobs root
 - renders prompt packets for the six execution stages
 - writes explicit upstream stage-output artifact references into prompt packets and the work order
 - writes `workflow-state.json`
 - writes `WORK_ORDER.md`
 - writes run audit files and placeholder output targets
+
+### `scripts/execute_workflow.py`
+- ensures the target run exists
+- accepts a job name, a job id from `jobs-index` metadata, or an explicit job path
+- launches Codex and Antigravity adapters for the current 2-pass stage layout
+- passes each tool explicit stage metadata including stage id, prompt-packet path, and output path
+- executes the two research stages in parallel
+- executes the two critique stages in parallel
+- waits for judge completion before downstream processing
+- runs claim extraction and final artifact generation automatically
+- supports idempotent resume by skipping completed stage artifacts and downstream outputs
+- updates workflow state and writes execution logs
 
 ### `scripts/extract_claims.py`
 - parses markdown into atomic claims
@@ -151,7 +177,7 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 The intended next hardening steps are:
 
 1. expand the claim taxonomy beyond `fact` and `inference`
-2. split internal provenance from external evidence sources
-3. add a cleanup or normalization pass after extraction
-4. require structured JSON sidecars for execution stages
-5. add hard gates in the workflow runner once those contracts exist
+2. add a cleanup or normalization pass after extraction
+3. require structured JSON sidecars for execution stages
+4. add hard gates in the workflow runner once those contracts exist
+5. replace marker-based provenance/evidence classification with stronger semantic handling only if the simpler approach proves insufficient

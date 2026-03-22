@@ -73,6 +73,7 @@ The current repo implements a v1 workflow scaffold and a v1 markdown claim extra
 Implemented today:
 
 - deterministic run scaffolding for intake, two research passes, two reciprocal critiques, and judge synthesis
+- automated execution orchestration for the current Codex/Antigravity split
 - explicit stage dependencies and per-stage prompt packets
 - placeholder stage outputs, workflow state, and run audit artifacts
 - markdown claim extraction with stable IDs
@@ -133,10 +134,10 @@ Target structured shape:
 Priority order for the next iteration:
 
 1. strengthen claim typing and exclude non-truth classes from truth validation
-2. separate provenance from external evidence in claim artifacts
-3. add a post-extraction cleanup filter for headings, paths, outline items, and formatting residue
-4. require per-stage structured JSON sidecars in addition to markdown
-5. add hard workflow gates for placeholders, missing sidecars, uncited facts, and unresolved template residue
+2. add a post-extraction cleanup filter for headings, paths, outline items, and formatting residue
+3. require per-stage structured JSON sidecars in addition to markdown
+4. add hard workflow gates for placeholders, missing sidecars, uncited facts, and unresolved template residue
+5. upgrade from marker-based provenance/evidence separation to stronger semantic classification only if real workflow failures justify the added complexity
 
 ## Constraints
 
@@ -152,7 +153,7 @@ Priority order for the next iteration:
 - scripts orchestrate the workflow
 - prompt packets define stage behavior
 - jobs store state and outputs
-- provider execution is external to v1 orchestration
+- provider execution is handled through external CLIs or adapters, not built into the core scaffold runner
 
 ## Success Criteria
 

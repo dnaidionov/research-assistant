@@ -21,7 +21,19 @@ The current v1 now supports:
 5. generating placeholder stage outputs
 6. extracting atomic claims from markdown into a claim register with stable `C001`-style IDs and separated provenance/evidence markers
 7. generating a downstream structured final artifact with external references only
-8. preserving audit artifacts inside the job repo
+8. automating the current Codex/Antigravity execution split through a separate workflow runner
+9. preserving audit artifacts inside the job repo
+
+The current automated split is:
+
+1. `intake` in Codex
+2. `research-a` in Codex and `research-b` in Antigravity in parallel
+3. `critique-a-on-b` in Codex and `critique-b-on-a` in Antigravity in parallel
+4. `judge` in Antigravity
+5. claim extraction
+6. final artifact generation
+
+The runner is file-driven and resume-safe. It depends on the external CLIs being able to consume a single stage prompt and write the requested artifact path non-interactively.
 
 ## Canonical Research Lifecycle
 
@@ -34,7 +46,7 @@ The current v1 now supports:
 7. claim extraction
 8. artifact writing
 
-`scripts/run_workflow.py` currently scaffolds stages 1 through 6. Claim extraction and artifact writing are intentionally separate downstream steps.
+`scripts/run_workflow.py` currently scaffolds stages 1 through 6. `scripts/execute_workflow.py` can now run those six stages with the current Codex/Antigravity split and then trigger downstream claim extraction and artifact writing.
 
 ## Constraints
 

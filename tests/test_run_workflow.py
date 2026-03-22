@@ -39,6 +39,17 @@ class RunWorkflowTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        (self.jobs_index_root / "active" / "example-project.yaml").write_text(
+            "\n".join(
+                [
+                    "job_id: alpha-001",
+                    "display_name: Example Research Project",
+                    "local_path: ../../jobs/my-project-1",
+                    "status: active",
+                ]
+            ),
+            encoding="utf-8",
+        )
 
     def tearDown(self) -> None:
         self.tmpdir.cleanup()
@@ -152,6 +163,31 @@ class RunWorkflowTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         run_dir = self.job_dir / "runs" / "run-lookup"
+        self.assertTrue(run_dir.exists())
+        state = json.loads((run_dir / "workflow-state.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["job_name"], "my-project-1")
+
+    def test_resolves_job_id_via_jobs_index_metadata(self) -> None:
+        result = subprocess.run(
+            [
+                "python3",
+                str(RUN_WORKFLOW),
+                "--job-id",
+                "alpha-001",
+                "--jobs-index-root",
+                str(self.jobs_index_root),
+                "--jobs-root",
+                str(self.temp_root / "jobs"),
+                "--run-id",
+                "run-by-id",
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        run_dir = self.job_dir / "runs" / "run-by-id"
         self.assertTrue(run_dir.exists())
         state = json.loads((run_dir / "workflow-state.json").read_text(encoding="utf-8"))
         self.assertEqual(state["job_name"], "my-project-1")
