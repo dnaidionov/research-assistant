@@ -4,6 +4,8 @@ Stage ID: `{stage_id}`
 Run ID: `{run_id}`
 Depends On: `{depends_on}`
 Expected Output: `{stage_output_path}`
+Expected Structured Output: `{stage_structured_output_path}`
+Run Source Registry: `{source_registry_path}`
 
 ## Objective
 
@@ -22,6 +24,11 @@ Synthesize research pass A, research pass B, and both critiques into a judge rep
 - If neither side is adequately supported, say so directly.
 
 ## Output Contract
+
+Write two artifacts:
+
+- Markdown at `{stage_output_path}`
+- Structured JSON at `{stage_structured_output_path}`
 
 Return markdown using exactly these top-level sections in this order:
 
@@ -74,6 +81,30 @@ Return markdown using exactly these top-level sections in this order:
 #### `# Recommended Final Artifact Structure`
 
 - Provide the recommended structure for the final artifact without adding new factual claims.
+
+### Structured JSON Contract
+
+Write JSON with these top-level keys:
+
+- `stage`
+- `supported_conclusions`
+- `synthesis_judgments`
+- `unresolved_disagreements`
+- `confidence_assessment`
+- `evidence_gaps`
+- `rationale`
+- `recommended_artifact_structure`
+- `sources`
+
+Rules:
+
+- `stage` must equal `{stage_id}`.
+- Every `supported_conclusions` item must contain `id`, `text`, and `evidence_sources`.
+- Every `synthesis_judgments` item must contain `id`, `text`, `evidence_sources`, and `confidence`.
+- `confidence` must be `low`, `medium`, or `high`.
+- Every cited external source id must be declared in `sources`.
+- Every `sources` item must include `id`, `title`, `type`, `authority`, and `locator`.
+- Workflow-stage references may appear in `rationale` for provenance, but never as evidence.
 
 ## Source Materials
 

@@ -86,13 +86,19 @@ class ExecuteWorkflowTests(unittest.TestCase):
 
                 prompt = " ".join(sys.argv[1:])
                 output_match = re.search(r"OUTPUT_PATH=(.+)", prompt)
+                json_match = re.search(r"OUTPUT_JSON_PATH=(.+)", prompt)
+                source_match = re.search(r"SOURCE_REGISTRY_PATH=(.+)", prompt)
                 stage_match = re.search(r"STAGE_ID=([a-z0-9-]+)", prompt)
                 if not output_match or not stage_match:
                     print("missing stage metadata", file=sys.stderr)
                     sys.exit(2)
 
                 output_path = Path(output_match.group(1).strip())
+                json_path = Path(json_match.group(1).strip()) if json_match else None
+                source_registry_path = Path(source_match.group(1).strip()) if source_match else None
                 output_path.parent.mkdir(parents=True, exist_ok=True)
+                if json_path is not None:
+                    json_path.parent.mkdir(parents=True, exist_ok=True)
                 stage = stage_match.group(1)
                 log_path = output_path.parent.parent / "logs" / f"{{stage}}.{agent_name}.log"
                 log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -116,6 +122,7 @@ class ExecuteWorkflowTests(unittest.TestCase):
                     )
                 elif stage in {{"research-a", "research-b"}}:
                     option = "A" if stage.endswith("a") else "B"
+                    source_id = f"SRC-00{{1 if option == 'A' else 2}}"
                     output_path.write_text(
                         f"# Executive Summary\\n\\n- Research {{option}} summary. [SRC-00{{1 if option == 'A' else 2}}]\\n\\n"
                         f"# Facts\\n\\n1. Option {{option}} has evidence behind it. [SRC-00{{1 if option == 'A' else 2}}]\\n\\n"
@@ -127,6 +134,21 @@ class ExecuteWorkflowTests(unittest.TestCase):
                         "# Source Evaluation\\n\\n- Sources are limited but relevant. [SRC-006]\\n",
                         encoding="utf-8",
                     )
+                    if json_path is not None:
+                        json_path.write_text(
+                            json.dumps({{
+                                "stage": stage,
+                                "summary": [{{"text": f"Research {{option}} summary.", "evidence_sources": [source_id]}}],
+                                "facts": [{{"id": f"{{stage}}-fact-1", "text": f"Option {{option}} has evidence behind it.", "evidence_sources": [source_id]}}],
+                                "inferences": [{{"id": f"{{stage}}-inf-1", "text": f"Option {{option}} may be viable.", "evidence_sources": [source_id], "confidence": "medium"}}],
+                                "uncertainties": [{{"text": "Coverage is incomplete."}}],
+                                "evidence_gaps": [{{"text": "Benchmarking is incomplete."}}],
+                                "preliminary_disagreements": [{{"text": "The other option may be stronger on another axis."}}],
+                                "source_evaluation": [{{"source_id": source_id, "notes": "Sources are limited but relevant."}}],
+                                "sources": [{{"id": source_id, "title": f"Canonical source {{source_id}}", "type": "report", "authority": "test fixture", "locator": f"https://example.com/{{source_id.lower()}}"}}],
+                            }}, indent=2),
+                            encoding="utf-8",
+                        )
                 elif stage in {{"critique-a-on-b", "critique-b-on-a"}}:
                     output_path.write_text(
                         "# Claims That Survive Review\\n\\n- One claim survives review. [SRC-010]\\n\\n"
@@ -149,6 +171,25 @@ class ExecuteWorkflowTests(unittest.TestCase):
                         "# Recommended Final Artifact Structure\\n\\n- Summary, comparison, recommendation, uncertainty, references, open questions.\\n",
                         encoding="utf-8",
                     )
+                    if json_path is not None:
+                        json_path.write_text(
+                            json.dumps({{
+                                "stage": "judge",
+                                "supported_conclusions": [{{"id": "judge-conclusion-1", "text": "Option A has lower implementation risk.", "evidence_sources": ["SRC-001"]}}],
+                                "synthesis_judgments": [{{"id": "judge-inference-1", "text": "Option A is the safer near-term choice.", "evidence_sources": ["SRC-001", "SRC-002"], "confidence": "medium"}}],
+                                "unresolved_disagreements": [{{"text": "Hardware selection trade-off remains unresolved because interface data is missing."}}],
+                                "confidence_assessment": [{{"text": "Medium confidence because benchmark coverage is limited.", "evidence_sources": ["SRC-004"]}}],
+                                "evidence_gaps": [{{"text": "No direct benchmark compares both options in this environment."}}],
+                                "rationale": [{{"text": "Research A favored Option A and critique B-on-A preserved upside concerns."}}],
+                                "recommended_artifact_structure": ["Summary", "Comparison", "Recommendation", "Uncertainty", "References", "Open Questions"],
+                                "sources": [
+                                    {{"id": "SRC-001", "title": "Canonical source SRC-001", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-001"}},
+                                    {{"id": "SRC-002", "title": "Canonical source SRC-002", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-002"}},
+                                    {{"id": "SRC-004", "title": "Canonical source SRC-004", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-004"}}
+                                ]
+                            }}, indent=2),
+                            encoding="utf-8",
+                        )
                 else:
                     print(f"unexpected stage: {{stage}}", file=sys.stderr)
                     sys.exit(2)
@@ -291,10 +332,14 @@ class ExecuteWorkflowTests(unittest.TestCase):
 
         run_dir = self.job_dir / "runs" / "run-001"
         self.assertTrue((run_dir / "stage-outputs" / "01-intake.json").is_file())
+        self.assertTrue((run_dir / "sources.json").is_file())
+        self.assertTrue((run_dir / "stage-outputs" / "02-research-a.json").is_file())
         self.assertTrue((run_dir / "stage-outputs" / "02-research-a.md").is_file())
+        self.assertTrue((run_dir / "stage-outputs" / "03-research-b.json").is_file())
         self.assertTrue((run_dir / "stage-outputs" / "03-research-b.md").is_file())
         self.assertTrue((run_dir / "stage-outputs" / "04-critique-a-on-b.md").is_file())
         self.assertTrue((run_dir / "stage-outputs" / "05-critique-b-on-a.md").is_file())
+        self.assertTrue((run_dir / "stage-outputs" / "06-judge.json").is_file())
         self.assertTrue((run_dir / "stage-outputs" / "06-judge.md").is_file())
 
         claim_register = self.job_dir / "evidence" / "claims-run-001.json"
@@ -323,6 +368,92 @@ class ExecuteWorkflowTests(unittest.TestCase):
         self.assertEqual(state["post_processing"]["stage_claims"]["judge"]["status"], "completed")
         self.assertEqual(state["post_processing"]["claim_extraction"]["status"], "completed")
         self.assertEqual(state["post_processing"]["final_artifact"]["status"], "completed")
+
+    def test_fails_when_structured_stage_output_cites_undefined_source(self) -> None:
+        self.gemini_bin.write_text(
+            textwrap.dedent(
+                """\
+                #!/usr/bin/env python3
+                import json
+                import re
+                import sys
+                from pathlib import Path
+
+                prompt = " ".join(sys.argv[1:])
+                output_match = re.search(r"OUTPUT_PATH=(.+)", prompt)
+                json_match = re.search(r"OUTPUT_JSON_PATH=(.+)", prompt)
+                stage_match = re.search(r"STAGE_ID=([a-z0-9-]+)", prompt)
+                if not output_match or not stage_match:
+                    print("missing stage metadata", file=sys.stderr)
+                    sys.exit(2)
+
+                output_path = Path(output_match.group(1).strip())
+                json_path = Path(json_match.group(1).strip()) if json_match else None
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                if json_path is not None:
+                    json_path.parent.mkdir(parents=True, exist_ok=True)
+                stage = stage_match.group(1)
+
+                if stage == "research-b":
+                    output_path.write_text(
+                        "# Executive Summary\\n\\n- Research B summary. [SRC-999]\\n\\n"
+                        "# Facts\\n\\n1. Option B has evidence behind it. [SRC-999]\\n\\n"
+                        "# Inferences\\n\\n1. Option B may be viable. [SRC-999] Confidence: medium\\n\\n"
+                        "# Uncertainty Register\\n\\n- Coverage is incomplete.\\n\\n"
+                        "# Evidence Gaps\\n\\n- Benchmarking is incomplete.\\n\\n"
+                        "# Preliminary Disagreements\\n\\n- The other option may be stronger on another axis.\\n\\n"
+                        "# Source Evaluation\\n\\n- Sources are limited but relevant.\\n",
+                        encoding="utf-8",
+                    )
+                    json_path.write_text(
+                        json.dumps(
+                            {
+                                "stage": "research-b",
+                                "summary": [{"text": "Research B summary.", "evidence_sources": ["SRC-999"]}],
+                                "facts": [{"id": "research-b-fact-1", "text": "Option B has evidence behind it.", "evidence_sources": ["SRC-999"]}],
+                                "inferences": [{"id": "research-b-inf-1", "text": "Option B may be viable.", "evidence_sources": ["SRC-999"], "confidence": "medium"}],
+                                "uncertainties": [{"text": "Coverage is incomplete."}],
+                                "evidence_gaps": [{"text": "Benchmarking is incomplete."}],
+                                "preliminary_disagreements": [{"text": "The other option may be stronger on another axis."}],
+                                "source_evaluation": [{"source_id": "SRC-999", "notes": "Sources are limited but relevant."}],
+                                "sources": []
+                            },
+                            indent=2,
+                        ),
+                        encoding="utf-8",
+                    )
+                    sys.exit(0)
+
+                print("fallback", file=sys.stderr)
+                sys.exit(0)
+                """
+            ),
+            encoding="utf-8",
+        )
+        self.gemini_bin.chmod(0o755)
+
+        result = subprocess.run(
+            [
+                "python3",
+                str(EXECUTE_WORKFLOW),
+                "--job-path",
+                str(self.job_dir),
+                "--run-id",
+                "run-bad-source-registry",
+                "--codex-bin",
+                str(self.codex_bin),
+                "--gemini-bin",
+                str(self.gemini_bin),
+                "--antigravity-bin",
+                str(self.antigravity_bin),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unresolved source", result.stderr.lower())
 
     def test_resume_skips_completed_stages(self) -> None:
         first = subprocess.run(

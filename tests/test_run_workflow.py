@@ -78,6 +78,7 @@ class RunWorkflowTests(unittest.TestCase):
         self.assertTrue((run_dir / "prompt-packets").is_dir())
         self.assertTrue((run_dir / "stage-outputs").is_dir())
         self.assertTrue((run_dir / "stage-claims").is_dir())
+        self.assertTrue((run_dir / "sources.json").is_file())
         self.assertTrue((run_dir / "audit").is_dir())
 
         state = json.loads((run_dir / "workflow-state.json").read_text(encoding="utf-8"))
@@ -118,10 +119,13 @@ class RunWorkflowTests(unittest.TestCase):
             output_names,
             [
                 "01-intake.json",
+                "02-research-a.json",
                 "02-research-a.md",
+                "03-research-b.json",
                 "03-research-b.md",
                 "04-critique-a-on-b.md",
                 "05-critique-b-on-a.md",
+                "06-judge.json",
                 "06-judge.md",
             ],
         )
@@ -138,12 +142,16 @@ class RunWorkflowTests(unittest.TestCase):
         manifest_paths = {entry["path"] for entry in manifest["files"]}
         self.assertIn("prompt-packets/01-intake.md", manifest_paths)
         self.assertIn("workflow-state.json", manifest_paths)
+        self.assertIn("sources.json", manifest_paths)
+        self.assertIn("stage-outputs/02-research-a.json", manifest_paths)
         self.assertIn("stage-claims/02-research-a.claims.json", manifest_paths)
 
         research_a_packet = (run_dir / "prompt-packets" / "02-research-a.md").read_text(encoding="utf-8")
         self.assertIn("Upstream Stage Artifacts", research_a_packet)
         self.assertIn("01-intake.json", research_a_packet)
         self.assertIn("Use the output artifact from the dependency stage", research_a_packet)
+        self.assertIn("Expected Structured Output", research_a_packet)
+        self.assertIn("Run Source Registry", research_a_packet)
 
         critique_packet = (run_dir / "prompt-packets" / "04-critique-a-on-b.md").read_text(encoding="utf-8")
         self.assertIn("02-research-a.md", critique_packet)

@@ -7,6 +7,13 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from _stage_contracts import (
+    is_structured_stage,
+    source_registry_path,
+    source_registry_placeholder,
+    stage_structured_output_path,
+    structured_output_placeholder,
+)
 from _workflow_lib import (
     DEFAULT_JOB_ROOT,
     REPO_ROOT,
@@ -273,6 +280,11 @@ def build_work_order(job_name: str, job_dir: Path, run_id: str, created_at: str)
     ]
     for index, stage in enumerate(RUN_STAGES, start=1):
         output_name = f"stage-outputs/{stage['output']}"
+        structured_output_name = (
+            f"stage-outputs/{stage_structured_output_path(job_dir / 'runs' / run_id, str(stage['id'])).name}"
+            if is_structured_stage(str(stage["id"]))
+            else None
+        )
         packet_name = f"prompt-packets/{stage['packet']}"
         dependencies = ", ".join(stage["depends_on"]) if stage["depends_on"] else "none"
         dependency_artifacts = dependency_output_paths(stage, job_dir / "runs" / run_id / "stage-outputs")
@@ -287,7 +299,15 @@ def build_work_order(job_name: str, job_dir: Path, run_id: str, created_at: str)
             lines.append("   Upstream stage artifacts: none")
         lines.append(f"   Prompt packet: `{packet_name}`")
         lines.append(f"   Expected output target: `{output_name}`")
+        if structured_output_name is not None:
+            lines.append(f"   Expected structured output: `{structured_output_name}`")
         lines.append(f"   Purpose: {stage['description']}")
+    lines.extend(
+        [
+            "",
+            f"- Run source registry: `sources.json`",
+        ]
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -323,6 +343,8 @@ def scaffold_run(job_name: str, job_dir: Path, run_id: str) -> Path:
         "stage_description": "",
         "stage_id": "",
         "stage_output_path": "",
+        "stage_structured_output_path": "",
+        "source_registry_path": "",
         "depends_on": "",
         "researcher_label": "Researcher",
         "critic_label": "Critic",
@@ -343,6 +365,12 @@ def scaffold_run(job_name: str, job_dir: Path, run_id: str) -> Path:
                 "stage_description": str(stage["description"]),
                 "stage_id": str(stage["id"]),
                 "stage_output_path": str(output_path.resolve()),
+                "stage_structured_output_path": (
+                    str(stage_structured_output_path(run_dir, str(stage["id"])).resolve())
+                    if is_structured_stage(str(stage["id"]))
+                    else "not_applicable"
+                ),
+                "source_registry_path": str(source_registry_path(run_dir).resolve()),
                 "upstream_stage_artifacts": render_upstream_artifacts_section(
                     dependency_output_paths(stage, stage_dir)
                 ),
@@ -358,10 +386,22 @@ def scaffold_run(job_name: str, job_dir: Path, run_id: str) -> Path:
         write_text(output_path, stage_output_placeholder(stage, output_path.resolve()))
         created_files.append(output_path)
 
+        if is_structured_stage(str(stage["id"])):
+            structured_path = stage_structured_output_path(run_dir, str(stage["id"]))
+            write_json(
+                structured_path,
+                structured_output_placeholder(str(stage["id"]), output_path.resolve(), structured_path.resolve()),
+            )
+            created_files.append(structured_path)
+
         claim_path = stage_claim_output_path(run_dir, stage)
         if claim_path is not None:
             write_json(claim_path, stage_claim_placeholder(stage, output_path.resolve(), claim_path.resolve()))
             created_files.append(claim_path)
+
+    sources_path = source_registry_path(run_dir)
+    write_json(sources_path, source_registry_placeholder(run_id))
+    created_files.append(sources_path)
 
     state_path = run_dir / "workflow-state.json"
     write_json(state_path, build_state(job_name, job_dir, run_id, run_dir, created_at))
@@ -386,6 +426,7 @@ def scaffold_run(job_name: str, job_dir: Path, run_id: str) -> Path:
                 f"- Job directory: `{job_dir.resolve()}`",
                 f"- Prompt packets rendered: `{len(RUN_STAGES)}`",
                 f"- Stage output targets created: `{len(RUN_STAGES)}`",
+                f"- Structured stage JSON targets created: `{sum(1 for stage in RUN_STAGES if is_structured_stage(str(stage['id'])))}`",
                 f"- Stage claim sidecars scaffolded: `{len(STAGE_CLAIM_STAGE_IDS)}`",
                 "",
                 "This run scaffold is provider-agnostic. Provider execution must be handled by a separate adapter layer.",

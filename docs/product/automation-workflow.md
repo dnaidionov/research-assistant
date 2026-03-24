@@ -42,7 +42,7 @@ The current default adapter assignment is:
 2. research A in Codex and research B in Gemini in parallel
 3. critique A on B in Codex and critique B on A in Gemini in parallel
 4. judge in Gemini
-5. stage claim sidecar extraction and section-aware validation for research A, research B, and judge
+5. structured-output validation and stage claim sidecar generation for research A, research B, and judge
 6. claim extraction
 7. final artifact generation
 
@@ -104,6 +104,7 @@ The run directory contains:
 - `prompt-packets/`
 - `stage-outputs/`
 - `stage-claims/`
+- `sources.json`
 - `workflow-state.json`
 - `WORK_ORDER.md`
 - `audit/`
@@ -131,6 +132,8 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - resolves job names and ids via `jobs-index/` or the jobs root
 - renders prompt packets for the six execution stages
 - writes explicit upstream stage-output artifact references into prompt packets and the work order
+- scaffolds the run-level source registry at `sources.json`
+- scaffolds structured JSON output targets for research A, research B, and judge
 - writes `workflow-state.json`
 - writes `WORK_ORDER.md`
 - writes run audit files and placeholder output targets
@@ -141,13 +144,17 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - resolves primary and secondary execution roles through named CLI adapters
 - defaults to Codex as the primary adapter and Gemini as the secondary adapter
 - keeps Antigravity available as an alternate adapter
-- passes each tool explicit stage metadata including stage id, prompt-packet path, and output path
+- passes each tool explicit stage metadata including stage id, prompt-packet path, markdown output path, structured-output path where required, and source-registry path
 - wraps stdout-oriented chat adapters by recovering markdown artifacts from stdout when they do not write the requested stage file directly
+- synthesizes structured JSON from markdown only as a migration fallback when a structured stage does not write its JSON file directly
 - reports stage start, completion, and failure status while the workflow runs
 - executes the two research stages in parallel
 - executes the two critique stages in parallel
+- validates structured research and judge outputs against source-aware contracts before downstream execution continues
+- merges stage-declared sources into the run-level `sources.json` registry and rejects unresolved source IDs
 - extracts claim sidecars for `research-a`, `research-b`, and `judge`
-- applies section-aware fail-fast validation to research and judge markdown contracts before downstream stages continue
+- uses structured judge JSON for automated claim-register generation when available
+- keeps section-aware markdown validation as a migration backstop for research and judge contracts
 - waits for judge completion before downstream processing
 - runs claim extraction and final artifact generation automatically
 - supports idempotent resume by skipping completed stage artifacts and downstream outputs
@@ -189,14 +196,14 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - Disagreements must be preserved until the judge stage.
 - Workflow provenance and external evidence are different and must not be conflated.
 - Stage references such as `research-a`, `judge`, or critique artifact IDs do not satisfy evidence-citation requirements.
-- Research and judge stages must pass section-aware citation validation before the workflow may continue downstream.
+- Research and judge stages must pass structured source-aware validation before the workflow may continue downstream.
 
 ## Planned Hardening
 
 The intended next hardening steps are:
 
-1. expand the claim taxonomy beyond `fact` and `inference`
-2. add a cleanup or normalization pass after extraction
-3. require structured JSON sidecars for execution stages
-4. add hard gates in the workflow runner once those contracts exist
+1. extend structured contracts to critique stages
+2. collapse stage validation and publication gating into a shared validation module
+3. remove markdown-to-JSON migration fallbacks once adapters write JSON deterministically
+4. strengthen source-registry governance beyond simple ID resolution
 5. replace marker-based provenance/evidence classification with stronger semantic handling only if the simpler approach proves insufficient

@@ -1,0 +1,48 @@
+{
+  "type": "object",
+  "required": [
+    "stage",
+    "supported_conclusions",
+    "synthesis_judgments",
+    "unresolved_disagreements",
+    "confidence_assessment",
+    "evidence_gaps",
+    "rationale",
+    "recommended_artifact_structure",
+    "sources"
+  ],
+  "properties": {
+    "stage": {"type": "string", "enum": ["judge"]},
+    "supported_conclusions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "evidence_sources"],
+        "properties": {
+          "id": {"type": "string"},
+          "text": {"type": "string"},
+          "evidence_sources": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "synthesis_judgments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "evidence_sources", "confidence"],
+        "properties": {
+          "id": {"type": "string"},
+          "text": {"type": "string"},
+          "evidence_sources": {"type": "array", "items": {"type": "string"}},
+          "confidence": {"type": "string", "enum": ["low", "medium", "high"]}
+        }
+      }
+    },
+    "unresolved_disagreements": {"type": "array"},
+    "confidence_assessment": {"type": "array"},
+    "evidence_gaps": {"type": "array"},
+    "rationale": {"type": "array"},
+    "recommended_artifact_structure": {"type": "array"},
+    "sources": {"type": "array"}
+  }
+}

@@ -73,8 +73,9 @@ Reason:
 
 Status:
 - architectural decision accepted
-- partially implemented in `scripts/extract_claims.py`
-- still relies on marker parsing rather than source-aware semantic adjudication
+- partially implemented in `scripts/extract_claims.py` and the structured-stage runner path
+- the workflow now enforces source-ID resolution through a run-level registry for structured research and judge outputs
+- the deeper provenance-versus-evidence distinction still relies on marker parsing rather than source-aware semantic adjudication
 
 ---
 
@@ -113,8 +114,9 @@ Decision:
 
 Status:
 - partially implemented
-- `run_workflow.py` now scaffolds claim sidecar targets for research and judge stages
-- the system still extracts those sidecars from markdown instead of requiring model-emitted structured outputs
+- `run_workflow.py` now scaffolds authoritative JSON outputs for research and judge stages, plus a run-level `sources.json`
+- `execute_workflow.py` validates those structured artifacts and uses them as the canonical gate for research and judge stages
+- critique stages are still markdown-only, and markdown-to-JSON synthesis still exists as a migration fallback when adapters fail to write structured outputs directly
 
 ---
 
@@ -130,5 +132,5 @@ Decision:
 
 Status:
 - partially implemented
-- `execute_workflow.py` now applies stage-aware citation gates for research and judge stages
-- the system is still not a trustworthy evidence adjudication engine because the gates depend on markdown structure and post-hoc extraction rather than first-class structured outputs
+- `execute_workflow.py` now applies source-aware structured gates for research and judge stages
+- the system is still not a trustworthy evidence adjudication engine because critique stages remain markdown-only, source governance is still shallow, and migration fallbacks still synthesize structure from prose when adapters do not comply

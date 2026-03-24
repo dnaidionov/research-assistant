@@ -4,9 +4,15 @@
 
 Replace the current prose-first workflow contract with a structure-first workflow contract that preserves research quality while materially improving reliability, citation enforcement, and auditability.
 
+Implementation status:
+
+- Research and judge stages now have a partial structure-first rollout in code.
+- Critique stages and some compatibility paths are still prose-first.
+- This document remains the forward plan for completing the migration.
+
 ## Problem Statement
 
-The current design still depends on freeform markdown as the primary machine-readable exchange. That creates recurring failures in four places:
+The current design still depends too much on freeform markdown for critiques and migration fallback paths. That still creates recurring failures in four places:
 
 - stage validation depends on markdown structure
 - claim sidecars are reconstructed after the fact

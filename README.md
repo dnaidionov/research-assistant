@@ -134,6 +134,7 @@ This creates:
 - `runs/run-001/prompt-packets/`
 - `runs/run-001/stage-outputs/`
 - `runs/run-001/stage-claims/`
+- `runs/run-001/sources.json`
 - `runs/run-001/workflow-state.json`
 - `runs/run-001/WORK_ORDER.md`
 - `runs/run-001/audit/`
@@ -160,6 +161,16 @@ Put the actual outputs into:
 
 `~/Projects/research-hub/jobs/my-project-1/runs/run-001/stage-outputs/`
 
+The current structured-contract rollout also expects authoritative JSON artifacts for:
+
+- `research-a` at `stage-outputs/02-research-a.json`
+- `research-b` at `stage-outputs/03-research-b.json`
+- `judge` at `stage-outputs/06-judge.json`
+
+The run-level source registry lives at:
+
+`~/Projects/research-hub/jobs/my-project-1/runs/run-001/sources.json`
+
 Validated claim sidecars for `research-a`, `research-b`, and `judge` are written into:
 
 `~/Projects/research-hub/jobs/my-project-1/runs/run-001/stage-claims/`
@@ -171,7 +182,7 @@ Example:
 - `research-a` and `research-b` should consume `stage-outputs/01-intake.json`
 - critiques should consume the relevant research outputs from `stage-outputs/`
 - `judge` should consume the critique outputs from `stage-outputs/`
-- `research-a`, `research-b`, and `judge` must pass section-aware citation validation before downstream workflow stages continue
+- `research-a`, `research-b`, and `judge` must produce valid structured JSON and pass source-aware citation validation before downstream workflow stages continue
 
 The rendered prompt packets and `WORK_ORDER.md` now state these upstream artifact paths explicitly.
 
@@ -311,7 +322,7 @@ This runner will:
 - run `research-a` and `research-b` in parallel
 - run `critique-a-on-b` and `critique-b-on-a` in parallel
 - wait for both critiques before running `judge`
-- extract claims after the judge output exists
+- extract claims from the structured judge artifact when available
 - validate final-artifact readiness before generation
 - generate the final artifact after readiness checks pass
 - resume safely if a prior run already completed some stages
@@ -370,7 +381,7 @@ The automated runner uses this fixed stage order:
 6. `validate_job.py --final-artifact-ready`
 7. `generate_final_artifact.py`
 
-This is intentionally file-driven rather than provider-integrated. The runner passes each adapter the stage id, prompt-packet path, and required output path, then waits for the expected artifact to exist and no longer contain placeholder content.
+This is intentionally file-driven rather than provider-integrated. The runner passes each adapter the stage id, prompt-packet path, markdown output path, structured-output path where required, and the run-level source registry path. It waits for the expected artifact to exist and no longer contain placeholder content. For structured stages, it validates the JSON contract and cited source IDs before downstream execution continues. Markdown-to-JSON synthesis remains only as a migration fallback when a structured stage fails to write its JSON file directly.
 
 ### 8. What is still manual
 

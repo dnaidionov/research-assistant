@@ -5,6 +5,8 @@ Run ID: `{run_id}`
 Role: `{researcher_label}`
 Depends On: `{depends_on}`
 Expected Output: `{stage_output_path}`
+Expected Structured Output: `{stage_structured_output_path}`
+Run Source Registry: `{source_registry_path}`
 
 ## Objective
 
@@ -23,6 +25,11 @@ Produce an independent research pass. This pass must stand on its own and must n
 - Source quality matters. If a source is weak, say so instead of laundering it into a stronger claim.
 
 ## Output Contract
+
+Write two artifacts:
+
+- Markdown at `{stage_output_path}`
+- Structured JSON at `{stage_structured_output_path}`
 
 Return markdown using exactly these top-level sections in this order:
 
@@ -72,6 +79,30 @@ Return markdown using exactly these top-level sections in this order:
 #### `# Source Evaluation`
 
 - For each meaningful source group used, note source quality, likely limitations, and any bias or freshness concerns.
+
+### Structured JSON Contract
+
+Write JSON with these top-level keys:
+
+- `stage`
+- `summary`
+- `facts`
+- `inferences`
+- `uncertainties`
+- `evidence_gaps`
+- `preliminary_disagreements`
+- `source_evaluation`
+- `sources`
+
+Rules:
+
+- `stage` must equal `{stage_id}`.
+- Every `facts` item must contain `id`, `text`, and `evidence_sources`.
+- Every `inferences` item must contain `id`, `text`, `evidence_sources`, and `confidence`.
+- `confidence` must be `low`, `medium`, or `high`.
+- Every cited source id must be declared in `sources`.
+- Every `sources` item must include `id`, `title`, `type`, `authority`, and `locator`.
+- Preserve canonical external source IDs. Do not use workflow-stage references as evidence.
 
 ## Source Materials
 

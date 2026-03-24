@@ -13,6 +13,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from _stage_contracts import (
+    build_claim_map_from_stage_json,
+    build_stage_json_from_markdown,
+    collect_numbered_items,
+    extract_evidence_sources,
+    is_structured_stage,
+    load_json as load_contract_json,
+    merge_source_registry,
+    parse_markdown_sections,
+    persist_source_registry,
+    source_registry_path,
+    source_registry_placeholder,
+    stage_structured_output_path,
+    validate_stage_json,
+)
 from _workflow_lib import write_json
 from run_workflow import RUN_STAGES, resolve_job_path, scaffold_run
 
@@ -22,10 +37,7 @@ DEFAULT_GEMINI_BIN = "gemini"
 DEFAULT_ANTIGRAVITY_BIN = "antigravity"
 DEFAULT_JOBS_INDEX_ROOT = Path(__file__).resolve().parents[1] / "jobs-index"
 STAGE_CLAIM_STAGE_IDS = {"research-a", "research-b", "judge"}
-SECTION_HEADING_PATTERN = re.compile(r"^#\s+(.+)$")
-LIST_ITEM_PATTERN = re.compile(r"^\s*\d+[.)]\s+")
 CONFIDENCE_LABEL_PATTERN = re.compile(r"\bconfidence\s*:\s*(low|medium|high)\b", re.IGNORECASE)
-EVIDENCE_MARKER_PATTERN = re.compile(r"^(?:SRC|DOC)-[A-Z0-9._-]+$|^S[0-9]{1,6}$|^https?://\S+$", re.IGNORECASE)
 FENCED_BLOCK_PATTERN = re.compile(r"```(?:markdown)?\n(.*?)```", re.IGNORECASE | re.DOTALL)
 
 
@@ -149,7 +161,7 @@ class ProgressReporter:
         self.stream.flush()
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Execute the current 2-pass research workflow using Codex and Antigravity adapters."
+        description="Execute the current 2-pass research workflow using CLI adapters with structured contracts for research and judge stages."
     )
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument("--job-name", help="Job name to resolve via jobs-index or jobs root.")
@@ -201,6 +213,12 @@ def read_output_preview(path: Path, max_chars: int = 400) -> str:
     if len(content) > max_chars:
         preview += "\n...[truncated]"
     return preview
+
+
+def is_json_artifact_complete(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    return not is_placeholder_content(path.read_text(encoding="utf-8"))
 
 
 def expected_first_heading(stage_id: str) -> str | None:
@@ -264,46 +282,8 @@ def stage_claim_output_path(run_dir: Path, stage_id: str) -> Path:
     return run_dir / "stage-claims" / f"{output_name_by_stage[stage_id]}.claims.json"
 
 
-def parse_markdown_sections(markdown: str) -> dict[str, list[str]]:
-    sections: dict[str, list[str]] = {}
-    current: str | None = None
-    for raw_line in markdown.splitlines():
-        match = SECTION_HEADING_PATTERN.match(raw_line)
-        if match:
-            current = match.group(1).strip()
-            sections.setdefault(current, [])
-            continue
-        if current is not None:
-            sections[current].append(raw_line)
-    return sections
-
-
-def collect_numbered_items(lines: list[str]) -> list[str]:
-    items: list[str] = []
-    current: list[str] = []
-    for raw_line in lines:
-        if not raw_line.strip():
-            continue
-        if raw_line.startswith("# "):
-            break
-        if LIST_ITEM_PATTERN.match(raw_line):
-            if current:
-                items.append(" ".join(part.strip() for part in current))
-            current = [LIST_ITEM_PATTERN.sub("", raw_line, count=1).strip()]
-            continue
-        if current:
-            current.append(raw_line.strip())
-    if current:
-        items.append(" ".join(part.strip() for part in current))
-    return items
-
-
 def has_evidence_marker(text: str) -> bool:
-    for block in re.findall(r"\[([^\[\]]+)\]", text):
-        for part in block.split(","):
-            if EVIDENCE_MARKER_PATTERN.match(part.strip()):
-                return True
-    return False
+    return bool(extract_evidence_sources(text))
 
 
 def validate_stage_markdown_contract(stage_id: str, markdown: str) -> list[str]:
@@ -339,6 +319,28 @@ def validate_stage_markdown_contract(stage_id: str, markdown: str) -> list[str]:
     return errors
 
 
+def ensure_structured_stage_output(stage_id: str, run_dir: Path, markdown_path: Path) -> tuple[Path, bool]:
+    json_path = stage_structured_output_path(run_dir, stage_id)
+    if is_json_artifact_complete(json_path):
+        return json_path, False
+    markdown = markdown_path.read_text(encoding="utf-8")
+    payload = build_stage_json_from_markdown(stage_id, markdown)
+    write_json(json_path, payload)
+    return json_path, True
+
+
+def validate_and_merge_structured_stage_output(stage_id: str, run_dir: Path, json_path: Path) -> list[str]:
+    source_path = source_registry_path(run_dir)
+    source_registry = load_contract_json(source_path)
+    payload = load_contract_json(json_path)
+    errors = validate_stage_json(stage_id, payload, source_registry)
+    if errors:
+        return errors
+    merged = merge_source_registry(source_registry, list(payload.get("sources", [])))
+    persist_source_registry(source_path, merged)
+    return []
+
+
 def set_stage_status(state: dict[str, object], stage_id: str, status: str) -> None:
     for stage in state["stages"]:
         if stage["id"] == stage_id:
@@ -371,15 +373,25 @@ def set_stage_claim_status(state: dict[str, object], stage_id: str, status: str)
 def build_agent_prompt(stage: StageExecution, run_dir: Path) -> str:
     packet_path = stage_packet_path(run_dir, stage.packet_name)
     output_path = stage_output_path(run_dir, stage.output_name)
+    json_output_path = stage_structured_output_path(run_dir, stage.stage_id) if is_structured_stage(stage.stage_id) else None
+    sources_path = source_registry_path(run_dir)
     return "\n".join(
         [
             f"STAGE_ID={stage.stage_id}",
             f"OUTPUT_PATH={output_path}",
+            f"OUTPUT_JSON_PATH={json_output_path}" if json_output_path is not None else "OUTPUT_JSON_PATH=not_applicable",
+            f"SOURCE_REGISTRY_PATH={sources_path}",
             f"PROMPT_PACKET={packet_path}",
             "",
             f"Execute workflow stage `{stage.stage_id}`.",
             f"Read the stage instructions from `{packet_path}`.",
             f"Write the completed stage output to `{output_path}`.",
+            (
+                f"Write the completed structured JSON output to `{json_output_path}`."
+                if json_output_path is not None
+                else "This stage does not require a structured JSON artifact."
+            ),
+            f"Use `{sources_path}` as the run-level source registry reference.",
             "Do not leave placeholder content in the output file.",
             "Use upstream stage output artifacts when the prompt packet references them.",
         ]
@@ -426,6 +438,7 @@ def run_agent_stage(
     reporter.start(adapter.name, stage.stage_id)
     prompt = build_agent_prompt(stage, run_dir)
     output_path = stage_output_path(run_dir, stage.output_name)
+    structured_output_path = stage_structured_output_path(run_dir, stage.stage_id) if is_structured_stage(stage.stage_id) else None
     log_path = run_dir / "logs" / f"{stage.stage_id}.{adapter.name}.driver.log"
     cmd = adapter.command_builder(adapter_bin, job_dir, prompt)
 
@@ -436,10 +449,31 @@ def run_agent_stage(
         text=True,
     )
     recovered_from_stdout = False
+    recovered_structured_from_markdown = False
+    structured_output_exists = structured_output_path.is_file() if structured_output_path is not None else False
+    structured_output_complete = is_json_artifact_complete(structured_output_path) if structured_output_path is not None else False
+    structured_validation_errors: list[str] = []
     if completed.returncode == 0 and not is_stage_output_complete(output_path):
         recovered_from_stdout = recover_output_from_stdout(adapter, stage.stage_id, output_path, completed.stdout)
     output_exists = output_path.is_file()
     output_complete = is_stage_output_complete(output_path)
+    if completed.returncode == 0 and output_complete and structured_output_path is not None:
+        structured_output_path, recovered_structured_from_markdown = ensure_structured_stage_output(
+            stage.stage_id,
+            run_dir,
+            output_path,
+        )
+        structured_output_exists = structured_output_path.is_file()
+        structured_output_complete = is_json_artifact_complete(structured_output_path)
+        if structured_output_complete:
+            try:
+                structured_validation_errors = validate_and_merge_structured_stage_output(
+                    stage.stage_id,
+                    run_dir,
+                    structured_output_path,
+                )
+            except ValueError as exc:
+                structured_validation_errors = [str(exc)]
     log_path.write_text(
         "\n".join(
             [
@@ -461,6 +495,24 @@ def run_agent_stage(
                 "OUTPUT_RECOVERED_FROM_STDOUT:",
                 str(recovered_from_stdout),
                 "",
+                "STRUCTURED_OUTPUT_PATH:",
+                str(structured_output_path) if structured_output_path is not None else "<not-applicable>",
+                "",
+                "STRUCTURED_OUTPUT_EXISTS:",
+                str(structured_output_exists),
+                "",
+                "STRUCTURED_OUTPUT_COMPLETE:",
+                str(structured_output_complete),
+                "",
+                "STRUCTURED_OUTPUT_RECOVERED_FROM_MARKDOWN:",
+                str(recovered_structured_from_markdown),
+                "",
+                "STRUCTURED_OUTPUT_PREVIEW:",
+                read_output_preview(structured_output_path) if structured_output_path is not None else "<not-applicable>",
+                "",
+                "STRUCTURED_VALIDATION_ERRORS:",
+                "\n".join(structured_validation_errors) if structured_validation_errors else "<none>",
+                "",
                 "OUTPUT_PREVIEW:",
                 read_output_preview(output_path),
                 "",
@@ -480,6 +532,27 @@ def run_agent_stage(
     if not output_complete:
         reporter.fail(adapter.name, stage.stage_id)
         raise RuntimeError(f"Stage {stage.stage_id} did not produce a completed output artifact: {output_path}")
+    if structured_output_path is not None and not structured_output_complete:
+        reporter.fail(adapter.name, stage.stage_id)
+        raise RuntimeError(f"Stage {stage.stage_id} did not produce a completed structured output artifact: {structured_output_path}")
+    if structured_validation_errors:
+        reporter.fail(adapter.name, stage.stage_id)
+        details = "; ".join(structured_validation_errors)
+        details = re.sub(
+            r"inferences\[\d+\] must include at least one evidence source\.",
+            "uncited inference detected in structured stage output.",
+            details,
+            flags=re.IGNORECASE,
+        )
+        details = re.sub(
+            r"facts\[\d+\] must include at least one evidence source\.",
+            "uncited fact detected in structured stage output.",
+            details,
+            flags=re.IGNORECASE,
+        )
+        if "references unresolved source id" in details.lower():
+            details = re.sub(r"references unresolved source id", "references unresolved source ID", details, flags=re.IGNORECASE)
+        raise RuntimeError(f"Stage {stage.stage_id} failed structured validation: {details}")
     reporter.complete(adapter.name, stage.stage_id)
     return stage.stage_id, "completed"
 
@@ -508,29 +581,44 @@ def run_stage_claim_extraction(
         for stage in RUN_STAGES
         if str(stage["id"]) == stage_id
     )
-    cmd = [
-        sys.executable,
-        str(Path(__file__).resolve().parents[1] / "scripts" / "extract_claims.py"),
-        "--input",
-        str(stage_output),
-        "--output",
-        str(claim_output),
-    ]
-    completed = subprocess.run(cmd, cwd=job_dir, capture_output=True, text=True)
     validation_errors: list[str] = []
-    if completed.returncode == 0:
+    completed_stdout = ""
+    completed_stderr = ""
+    command_display = "<structured-stage-claim-map>"
+    if is_structured_stage(stage_id):
+        json_path = stage_structured_output_path(run_dir, stage_id)
+        payload = load_contract_json(json_path)
+        claim_map = build_claim_map_from_stage_json(stage_id, payload)
+        write_json(claim_output, claim_map)
         validation_errors = validate_stage_markdown_contract(stage_id, stage_output.read_text(encoding="utf-8"))
+        completed_return_code = 0
+    else:
+        cmd = [
+            sys.executable,
+            str(Path(__file__).resolve().parents[1] / "scripts" / "extract_claims.py"),
+            "--input",
+            str(stage_output),
+            "--output",
+            str(claim_output),
+        ]
+        completed = subprocess.run(cmd, cwd=job_dir, capture_output=True, text=True)
+        command_display = " ".join(cmd)
+        completed_stdout = completed.stdout
+        completed_stderr = completed.stderr
+        completed_return_code = completed.returncode
+        if completed.returncode == 0:
+            validation_errors = validate_stage_markdown_contract(stage_id, stage_output.read_text(encoding="utf-8"))
     (run_dir / "logs" / f"{stage_id}.claims.driver.log").write_text(
         "\n".join(
             [
                 "COMMAND:",
-                " ".join(cmd),
+                command_display,
                 "",
                 "STDOUT:",
-                completed.stdout,
+                completed_stdout,
                 "",
                 "STDERR:",
-                completed.stderr,
+                completed_stderr,
                 "",
                 "VALIDATION_ERRORS:",
                 "\n".join(validation_errors) if validation_errors else "<none>",
@@ -538,14 +626,14 @@ def run_stage_claim_extraction(
         ),
         encoding="utf-8",
     )
-    if completed.returncode != 0 or validation_errors:
+    if completed_return_code != 0 or validation_errors:
         set_stage_status(state, stage_id, "failed")
         set_stage_claim_status(state, stage_id, "failed")
         save_state(state_path, state)
         reporter.fail("system", f"{stage_id}-claims")
-        details = completed.stderr.strip() or "; ".join(validation_errors)
-        if validation_errors and completed.stderr.strip():
-            details = completed.stderr.strip() + " " + "; ".join(validation_errors)
+        details = completed_stderr.strip() or "; ".join(validation_errors)
+        if validation_errors and completed_stderr.strip():
+            details = completed_stderr.strip() + " " + "; ".join(validation_errors)
         details = details.replace("lacks an external evidence citation", "is an uncited inference or fact")
         raise RuntimeError(f"Stage claim extraction failed for {stage_id}: {details}")
 
@@ -596,6 +684,8 @@ def run_stage_group(
                 run_stage_claim_extraction(stage_id, run_dir, job_dir, state, state_path, reporter)
             except Exception as exc:
                 set_stage_status(state, stage.stage_id, "failed")
+                if stage.stage_id in STAGE_CLAIM_STAGE_IDS:
+                    set_stage_claim_status(state, stage.stage_id, "failed")
                 save_state(state_path, state)
                 if pending_error is None:
                     pending_error = exc
@@ -623,23 +713,44 @@ def run_extract_claims(
     save_state(state_path, state)
 
     judge_output = run_dir / "stage-outputs" / "06-judge.md"
-    cmd = [
-        sys.executable,
-        str(Path(__file__).resolve().parents[1] / "scripts" / "extract_claims.py"),
-        "--input",
-        str(judge_output),
-        "--output",
-        str(claim_output),
-        "--strict",
-    ]
-    completed = subprocess.run(cmd, cwd=job_dir, capture_output=True, text=True)
-    (run_dir / "logs" / "claim-extraction.driver.log").write_text(
-        "\n".join(["COMMAND:", " ".join(cmd), "", "STDOUT:", completed.stdout, "", "STDERR:", completed.stderr]),
-        encoding="utf-8",
-    )
-    if completed.returncode != 0:
-        reporter.fail("system", "claim-extraction")
-        raise RuntimeError(f"Claim extraction failed: {completed.stderr.strip()}")
+    judge_json = stage_structured_output_path(run_dir, "judge")
+    if is_json_artifact_complete(judge_json):
+        payload = load_contract_json(judge_json)
+        claim_map = build_claim_map_from_stage_json("judge", payload)
+        write_json(claim_output, claim_map)
+        (run_dir / "logs" / "claim-extraction.driver.log").write_text(
+            "\n".join(
+                [
+                    "COMMAND:",
+                    "<structured-judge-claim-map>",
+                    "",
+                    "STDOUT:",
+                    "",
+                    "",
+                    "STDERR:",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+    else:
+        cmd = [
+            sys.executable,
+            str(Path(__file__).resolve().parents[1] / "scripts" / "extract_claims.py"),
+            "--input",
+            str(judge_output),
+            "--output",
+            str(claim_output),
+            "--strict",
+        ]
+        completed = subprocess.run(cmd, cwd=job_dir, capture_output=True, text=True)
+        (run_dir / "logs" / "claim-extraction.driver.log").write_text(
+            "\n".join(["COMMAND:", " ".join(cmd), "", "STDOUT:", completed.stdout, "", "STDERR:", completed.stderr]),
+            encoding="utf-8",
+        )
+        if completed.returncode != 0:
+            reporter.fail("system", "claim-extraction")
+            raise RuntimeError(f"Claim extraction failed: {completed.stderr.strip()}")
     set_post_processing_status(state, "claim_extraction", "completed")
     save_state(state_path, state)
     reporter.complete("system", "claim-extraction")
@@ -730,6 +841,10 @@ def main() -> int:
     run_dir = job_dir / "runs" / args.run_id
     if not run_dir.exists():
         scaffold_run(job_name, job_dir, args.run_id)
+
+    source_path = source_registry_path(run_dir)
+    if not source_path.exists():
+        write_json(source_path, source_registry_placeholder(args.run_id))
 
     claim_output = Path(args.claim_output).expanduser() if args.claim_output else job_dir / "evidence" / f"claims-{args.run_id}.json"
     final_output = Path(args.final_output).expanduser() if args.final_output else job_dir / "outputs" / f"final-{args.run_id}.md"
