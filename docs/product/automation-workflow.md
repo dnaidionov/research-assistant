@@ -158,6 +158,7 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - uses structured judge JSON for automated claim-register generation when available
 - keeps section-aware markdown validation as a migration backstop for research and judge contracts
 - keeps non-truth-critical narrative sections flexible in structured validation so usable research is not rejected over presentation-shape variance
+- resolves local fact or conclusion IDs inside structured inference evidence lists back to canonical external source IDs before validation
 - waits for judge completion before downstream processing
 - runs claim extraction and final artifact generation automatically
 - supports idempotent resume by skipping completed stage artifacts and downstream outputs

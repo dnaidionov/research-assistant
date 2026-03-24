@@ -8,7 +8,7 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from _stage_contracts import source_registry_placeholder, validate_stage_json
+from _stage_contracts import normalize_stage_citations, source_registry_placeholder, validate_stage_json
 
 
 class StageContractTests(unittest.TestCase):
@@ -119,6 +119,39 @@ class StageContractTests(unittest.TestCase):
 
         errors = validate_stage_json("research-a", payload, registry)
 
+        self.assertEqual(errors, [], errors)
+
+    def test_normalizes_local_fact_references_inside_inferences(self) -> None:
+        payload = {
+            "stage": "research-b",
+            "summary": "Feasible with edge compute.",
+            "facts": [
+                {"id": "FACT-001", "text": "Fact one.", "evidence_sources": ["SRC-001"]},
+                {"id": "FACT-002", "text": "Fact two.", "evidence_sources": ["SRC-002"]},
+            ],
+            "inferences": [
+                {
+                    "id": "INF-001",
+                    "text": "Inference built on prior facts.",
+                    "evidence_sources": ["FACT-001", "FACT-002"],
+                    "confidence": "high",
+                }
+            ],
+            "uncertainties": ["Gap."],
+            "evidence_gaps": ["Missing benchmark."],
+            "preliminary_disagreements": ["Architecture trade-off remains."],
+            "source_evaluation": ["Useful note."],
+            "sources": [
+                {"id": "SRC-001", "title": "Source 1", "type": "document", "authority": "vendor", "locator": "https://example.com/src-001"},
+                {"id": "SRC-002", "title": "Source 2", "type": "document", "authority": "vendor", "locator": "https://example.com/src-002"},
+            ],
+        }
+
+        normalized = normalize_stage_citations("research-b", payload)
+        registry = source_registry_placeholder("run-xyz")
+        errors = validate_stage_json("research-b", normalized, registry)
+
+        self.assertEqual(normalized["inferences"][0]["evidence_sources"], ["SRC-001", "SRC-002"])
         self.assertEqual(errors, [], errors)
 
 

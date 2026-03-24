@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from pathlib import Path
 
 from _workflow_lib import write_json
@@ -277,6 +278,48 @@ def build_stage_json_from_markdown(stage_id: str, markdown: str) -> dict[str, ob
     raise KeyError(f"Stage {stage_id} does not have a structured contract.")
 
 
+def normalize_stage_citations(stage_id: str, payload: dict[str, object]) -> dict[str, object]:
+    normalized = deepcopy(payload)
+    supporting_sections = []
+    if stage_id in {"research-a", "research-b"}:
+        supporting_sections = ["facts"]
+        target_sections = ["inferences"]
+    elif stage_id == "judge":
+        supporting_sections = ["supported_conclusions"]
+        target_sections = ["synthesis_judgments"]
+    else:
+        return normalized
+
+    local_reference_map: dict[str, list[str]] = {}
+    for section in supporting_sections:
+        for item in normalized.get(section, []):
+            if not isinstance(item, dict):
+                continue
+            item_id = item.get("id")
+            evidence_sources = item.get("evidence_sources")
+            if isinstance(item_id, str) and isinstance(evidence_sources, list):
+                local_reference_map[item_id] = [source for source in evidence_sources if isinstance(source, str)]
+
+    for section in target_sections:
+        for item in normalized.get(section, []):
+            if not isinstance(item, dict):
+                continue
+            evidence_sources = item.get("evidence_sources")
+            if not isinstance(evidence_sources, list):
+                continue
+            expanded: list[str] = []
+            for source_id in evidence_sources:
+                if isinstance(source_id, str) and source_id in local_reference_map:
+                    for resolved_source_id in local_reference_map[source_id]:
+                        if resolved_source_id not in expanded:
+                            expanded.append(resolved_source_id)
+                    continue
+                if isinstance(source_id, str) and source_id not in expanded:
+                    expanded.append(source_id)
+            item["evidence_sources"] = expanded
+    return normalized
+
+
 def _require_string(value: object, field_name: str, errors: list[str]) -> None:
     if not isinstance(value, str) or not value.strip():
         errors.append(f"{field_name} must be a non-empty string.")
@@ -421,6 +464,7 @@ def _validate_source_evaluation(items: object, errors: list[str]) -> None:
 
 
 def validate_stage_json(stage_id: str, payload: dict[str, object], source_registry: dict[str, object]) -> list[str]:
+    payload = normalize_stage_citations(stage_id, payload)
     errors: list[str] = []
     expected_keys = STAGE_JSON_KEYS.get(stage_id)
     if expected_keys is None:
@@ -589,6 +633,7 @@ def _entry_sources(item: object) -> list[str]:
 
 
 def build_claim_map_from_stage_json(stage_id: str, payload: dict[str, object]) -> dict[str, object]:
+    payload = normalize_stage_citations(stage_id, payload)
     claims: list[dict[str, object]] = []
     if stage_id in {"research-a", "research-b"}:
         for item in payload.get("facts", []):

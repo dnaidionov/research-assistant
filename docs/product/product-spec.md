@@ -86,6 +86,7 @@ Implemented today:
 - flexible validation for non-truth-critical narrative sections such as summaries, uncertainties, and source-evaluation notes
 - runner-owned source-registry merging; stage agents may declare sources in stage JSON but the runner treats `sources.json` as read-only during execution
 - stdout-oriented adapters can now recover fenced stage JSON artifacts directly from stdout before falling back to markdown-to-JSON synthesis
+- structured inferences may reference local fact IDs for convenience, but the runner now resolves those references back to canonical external source IDs before validation
 - scaffolded claim-sidecar targets for research and judge stages
 - per-stage driver logs that capture command execution plus output-artifact status for debugging
 - markdown claim extraction with stable IDs
