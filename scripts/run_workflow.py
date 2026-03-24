@@ -18,6 +18,8 @@ from _workflow_lib import (
     write_text,
 )
 
+STAGE_CLAIM_STAGE_IDS = {"research-a", "research-b", "judge"}
+
 
 RUN_STAGES: list[dict[str, object]] = [
     {
@@ -195,11 +197,38 @@ def stage_output_placeholder(stage: dict[str, object], output_path: Path) -> str
     )
 
 
+def stage_claim_output_path(run_dir: Path, stage: dict[str, object]) -> Path | None:
+    stage_id = str(stage["id"])
+    if stage_id not in STAGE_CLAIM_STAGE_IDS:
+        return None
+    output_name = Path(str(stage["output"]))
+    return run_dir / "stage-claims" / f"{output_name.stem}.claims.json"
+
+
+def stage_claim_placeholder(stage: dict[str, object], output_path: Path, claim_path: Path) -> dict[str, object]:
+    return {
+        "stage": str(stage["id"]),
+        "status": "not_started",
+        "expected_markdown_input": str(output_path),
+        "expected_output_target": str(claim_path),
+        "notes": "Populate this claim sidecar after the markdown stage output is complete and validated.",
+    }
+
+
 def build_state(job_name: str, job_dir: Path, run_id: str, run_dir: Path, created_at: str) -> dict[str, object]:
+    stage_claims = {}
+    for stage in RUN_STAGES:
+        claim_path = stage_claim_output_path(run_dir, stage)
+        if claim_path is None:
+            continue
+        stage_claims[str(stage["id"])] = {"output_path": str(claim_path), "status": "pending"}
     return {
         "created_at": created_at,
         "job_dir": str(job_dir),
         "job_name": job_name,
+        "post_processing": {
+            "stage_claims": stage_claims,
+        },
         "run_dir": str(run_dir),
         "run_id": run_id,
         "status": "scaffolded",
@@ -274,9 +303,10 @@ def scaffold_run(job_name: str, job_dir: Path, run_id: str) -> Path:
 
     prompt_dir = run_dir / "prompt-packets"
     stage_dir = run_dir / "stage-outputs"
+    stage_claim_dir = run_dir / "stage-claims"
     audit_dir = run_dir / "audit"
     log_dir = run_dir / "logs"
-    for directory in (prompt_dir, stage_dir, audit_dir, log_dir):
+    for directory in (prompt_dir, stage_dir, stage_claim_dir, audit_dir, log_dir):
         directory.mkdir(parents=True, exist_ok=False)
 
     created_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -328,6 +358,11 @@ def scaffold_run(job_name: str, job_dir: Path, run_id: str) -> Path:
         write_text(output_path, stage_output_placeholder(stage, output_path.resolve()))
         created_files.append(output_path)
 
+        claim_path = stage_claim_output_path(run_dir, stage)
+        if claim_path is not None:
+            write_json(claim_path, stage_claim_placeholder(stage, output_path.resolve(), claim_path.resolve()))
+            created_files.append(claim_path)
+
     state_path = run_dir / "workflow-state.json"
     write_json(state_path, build_state(job_name, job_dir, run_id, run_dir, created_at))
     created_files.append(state_path)
@@ -351,6 +386,7 @@ def scaffold_run(job_name: str, job_dir: Path, run_id: str) -> Path:
                 f"- Job directory: `{job_dir.resolve()}`",
                 f"- Prompt packets rendered: `{len(RUN_STAGES)}`",
                 f"- Stage output targets created: `{len(RUN_STAGES)}`",
+                f"- Stage claim sidecars scaffolded: `{len(STAGE_CLAIM_STAGE_IDS)}`",
                 "",
                 "This run scaffold is provider-agnostic. Provider execution must be handled by a separate adapter layer.",
             ]

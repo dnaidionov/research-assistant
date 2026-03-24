@@ -1,3 +1,3 @@
 # Runs
 
-Each workflow execution creates `runs/<run-id>/` with prompt packets, stage outputs, and audit files.
+Each workflow execution creates `runs/<run-id>/` with prompt packets, stage outputs, stage claim sidecars, logs, and audit files.

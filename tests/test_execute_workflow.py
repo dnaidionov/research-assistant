@@ -8,6 +8,27 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXECUTE_WORKFLOW = REPO_ROOT / "scripts" / "execute_workflow.py"
+import sys
+
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from execute_workflow import ProgressReporter, extract_markdown_artifact, validate_stage_markdown_contract
+
+
+class FakeTTYStream:
+    def __init__(self) -> None:
+        self.parts: list[str] = []
+
+    def write(self, value: str) -> None:
+        self.parts.append(value)
+
+    def flush(self) -> None:
+        return None
+
+    def isatty(self) -> bool:
+        return True
+
+    def rendered(self) -> str:
+        return "".join(self.parts)
 
 
 class ExecuteWorkflowTests(unittest.TestCase):
@@ -31,9 +52,11 @@ class ExecuteWorkflowTests(unittest.TestCase):
         self.bin_dir = self.root / "bin"
         self.bin_dir.mkdir()
         self.codex_bin = self.bin_dir / "codex"
+        self.gemini_bin = self.bin_dir / "gemini"
         self.antigravity_bin = self.bin_dir / "antigravity"
         self._write_fake_executor(self.codex_bin, "codex")
-        self._write_fake_executor(self.antigravity_bin, "antigravity")
+        self._write_fake_executor(self.gemini_bin, "gemini")
+        self._write_failing_executor(self.antigravity_bin, "antigravity should not be called by default")
         self.jobs_index_root = self.root / "jobs-index"
         (self.jobs_index_root / "active").mkdir(parents=True)
         (self.jobs_index_root / "active" / "example-project.yaml").write_text(
@@ -119,16 +142,116 @@ class ExecuteWorkflowTests(unittest.TestCase):
                     output_path.write_text(
                         "# Supported Conclusions\\n\\n1. Option A has lower implementation risk. [SRC-001]\\n\\n"
                         "# Inferences And Synthesis Judgments\\n\\n1. Inference: Option A is the safer near-term choice. [SRC-001, SRC-002] Confidence: medium\\n\\n"
-                        "# Unresolved Disagreements\\n\\n- Option B may still have better upside under some conditions. [SRC-003]\\n\\n"
-                        "# Confidence Assessment\\n\\n- Confidence is medium because evidence is incomplete. [SRC-004]\\n\\n"
+                        "# Unresolved Disagreements\\n\\n1. Hardware Selection (NVIDIA vs. Xilinx/TI): Trade-off remains unresolved because interface data is missing. [SRC-003]\\n\\n"
+                        "# Confidence Assessment\\n\\n- Medium confidence: evidence is incomplete and benchmark coverage is limited. [SRC-004]\\n\\n"
                         "# Evidence Gaps\\n\\n- No direct benchmark compares both options in this environment. [SRC-005]\\n\\n"
-                        "# Rationale And Traceability\\n\\n- Research A favored Option A; critique B-on-A preserved upside concerns. [PASS-A, CRIT-B-A]\\n\\n"
+                        "# Rationale And Traceability\\n\\n- Research A favored Option A and critique B-on-A preserved upside concerns.\\n\\n"
                         "# Recommended Final Artifact Structure\\n\\n- Summary, comparison, recommendation, uncertainty, references, open questions.\\n",
                         encoding="utf-8",
                     )
                 else:
                     print(f"unexpected stage: {{stage}}", file=sys.stderr)
                     sys.exit(2)
+                """
+            ),
+            encoding="utf-8",
+        )
+        path.chmod(0o755)
+
+    def _write_failing_executor(self, path: Path, message: str) -> None:
+        path.write_text(
+            textwrap.dedent(
+                f"""\
+                #!/usr/bin/env python3
+                import sys
+                print({message!r}, file=sys.stderr)
+                sys.exit(23)
+                """
+            ),
+            encoding="utf-8",
+        )
+        path.chmod(0o755)
+
+    def _write_noop_executor(self, path: Path, message: str) -> None:
+        path.write_text(
+            textwrap.dedent(
+                f"""\
+                #!/usr/bin/env python3
+                import sys
+                print({message!r}, file=sys.stderr)
+                sys.exit(0)
+                """
+            ),
+            encoding="utf-8",
+        )
+        path.chmod(0o755)
+
+    def _write_stdout_only_executor(self, path: Path, markdown: str) -> None:
+        path.write_text(
+            textwrap.dedent(
+                f"""\
+                #!/usr/bin/env python3
+                import sys
+                print({markdown!r})
+                sys.exit(0)
+                """
+            ),
+            encoding="utf-8",
+        )
+        path.chmod(0o755)
+
+    def _write_research_b_stdout_executor(self, path: Path, markdown: str) -> None:
+        path.write_text(
+            textwrap.dedent(
+                f"""\
+                #!/usr/bin/env python3
+                import re
+                import sys
+                from pathlib import Path
+
+                prompt = " ".join(sys.argv[1:])
+                output_match = re.search(r"OUTPUT_PATH=(.+)", prompt)
+                stage_match = re.search(r"STAGE_ID=([a-z0-9-]+)", prompt)
+                if not output_match or not stage_match:
+                    print("missing stage metadata", file=sys.stderr)
+                    sys.exit(2)
+
+                output_path = Path(output_match.group(1).strip())
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                stage = stage_match.group(1)
+
+                if stage == "research-b":
+                    print({markdown!r})
+                    sys.exit(0)
+
+                if stage == "critique-b-on-a":
+                    output_path.write_text(
+                        "# Claims That Survive Review\\n\\n- One claim survives review. [SRC-010]\\n\\n"
+                        "# Unsupported Claims\\n\\n- Some claims need stronger support. [SRC-011]\\n\\n"
+                        "# Weak Sources Or Citation Problems\\n\\n- One citation is indirect. [SRC-012]\\n\\n"
+                        "# Omissions And Missing Alternatives\\n\\n- Missing alternative analysis. [SRC-013]\\n\\n"
+                        "# Overreach And Overconfident Inference\\n\\n- One conclusion is too strong. [SRC-014]\\n\\n"
+                        "# Unresolved Disagreements For Judge\\n\\n- Option A vs B remains disputed. [SRC-015]\\n\\n"
+                        "# Overall Critique Summary\\n\\n- Reliability is mixed. Confidence: medium\\n",
+                        encoding="utf-8",
+                    )
+                    sys.exit(0)
+
+                if stage == "judge":
+                    output_path.write_text(
+                        "# Supported Conclusions\\n\\n1. Option A has lower implementation risk. [SRC-001]\\n\\n"
+                        "# Inferences And Synthesis Judgments\\n\\n1. Inference: Option A is the safer near-term choice. [SRC-001, SRC-002] Confidence: medium\\n\\n"
+                        "# Unresolved Disagreements\\n\\n1. Hardware Selection (NVIDIA vs. Xilinx/TI): Trade-off remains unresolved because interface data is missing. [SRC-003]\\n\\n"
+                        "# Confidence Assessment\\n\\n- Medium confidence: evidence is incomplete and benchmark coverage is limited. [SRC-004]\\n\\n"
+                        "# Evidence Gaps\\n\\n- No direct benchmark compares both options in this environment. [SRC-005]\\n\\n"
+                        "# Rationale And Traceability\\n\\n- Research A favored Option A and critique B-on-A preserved upside concerns.\\n\\n"
+                        "# Recommended Final Artifact Structure\\n\\n- Summary, comparison, recommendation, uncertainty, references, open questions.\\n",
+                        encoding="utf-8",
+                    )
+                    sys.exit(0)
+
+                print(f"unexpected stage: {{stage}}", file=sys.stderr)
+                sys.exit(2)
                 """
             ),
             encoding="utf-8",
@@ -146,6 +269,8 @@ class ExecuteWorkflowTests(unittest.TestCase):
                 "run-001",
                 "--codex-bin",
                 str(self.codex_bin),
+                "--gemini-bin",
+                str(self.gemini_bin),
                 "--antigravity-bin",
                 str(self.antigravity_bin),
             ],
@@ -155,6 +280,14 @@ class ExecuteWorkflowTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("codex: intake started", result.stdout.lower())
+        self.assertIn("codex: intake completed", result.stdout.lower())
+        self.assertIn("codex: research-a started", result.stdout.lower())
+        self.assertIn("gemini: research-b started", result.stdout.lower())
+        self.assertIn("codex: critique-a-on-b completed", result.stdout.lower())
+        self.assertIn("gemini: judge completed", result.stdout.lower())
+        self.assertIn("system: claim-extraction started", result.stdout.lower())
+        self.assertIn("system: final-artifact completed", result.stdout.lower())
 
         run_dir = self.job_dir / "runs" / "run-001"
         self.assertTrue((run_dir / "stage-outputs" / "01-intake.json").is_file())
@@ -168,6 +301,9 @@ class ExecuteWorkflowTests(unittest.TestCase):
         final_artifact = self.job_dir / "outputs" / "final-run-001.md"
         self.assertTrue(claim_register.is_file())
         self.assertTrue(final_artifact.is_file())
+        self.assertTrue((run_dir / "stage-claims" / "02-research-a.claims.json").is_file())
+        self.assertTrue((run_dir / "stage-claims" / "03-research-b.claims.json").is_file())
+        self.assertTrue((run_dir / "stage-claims" / "06-judge.claims.json").is_file())
 
         payload = json.loads(claim_register.read_text(encoding="utf-8"))
         self.assertEqual(payload["summary"]["uncited_fact_ids"], [])
@@ -182,6 +318,9 @@ class ExecuteWorkflowTests(unittest.TestCase):
         statuses = {stage["id"]: stage["status"] for stage in state["stages"]}
         self.assertEqual(statuses["intake"], "completed")
         self.assertEqual(statuses["judge"], "completed")
+        self.assertEqual(state["post_processing"]["stage_claims"]["research-a"]["status"], "completed")
+        self.assertEqual(state["post_processing"]["stage_claims"]["research-b"]["status"], "completed")
+        self.assertEqual(state["post_processing"]["stage_claims"]["judge"]["status"], "completed")
         self.assertEqual(state["post_processing"]["claim_extraction"]["status"], "completed")
         self.assertEqual(state["post_processing"]["final_artifact"]["status"], "completed")
 
@@ -196,6 +335,8 @@ class ExecuteWorkflowTests(unittest.TestCase):
                 "run-002",
                 "--codex-bin",
                 str(self.codex_bin),
+                "--gemini-bin",
+                str(self.gemini_bin),
                 "--antigravity-bin",
                 str(self.antigravity_bin),
             ],
@@ -215,6 +356,8 @@ class ExecuteWorkflowTests(unittest.TestCase):
                 "run-002",
                 "--codex-bin",
                 str(self.codex_bin),
+                "--gemini-bin",
+                str(self.gemini_bin),
                 "--antigravity-bin",
                 str(self.antigravity_bin),
             ],
@@ -224,6 +367,57 @@ class ExecuteWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertIn("already complete", second.stdout.lower())
+
+    def test_reports_skipped_stages_when_resuming_partial_run(self) -> None:
+        partial_run = subprocess.run(
+            [
+                "python3",
+                str(EXECUTE_WORKFLOW),
+                "--job-path",
+                str(self.job_dir),
+                "--run-id",
+                "run-partial",
+                "--codex-bin",
+                str(self.codex_bin),
+                "--gemini-bin",
+                str(self.gemini_bin),
+                "--antigravity-bin",
+                str(self.antigravity_bin),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(partial_run.returncode, 0, partial_run.stderr)
+
+        run_dir = self.job_dir / "runs" / "run-partial"
+        (run_dir / "stage-outputs" / "03-research-b.md").unlink()
+        (self.job_dir / "evidence" / "claims-run-partial.json").unlink()
+        (self.job_dir / "outputs" / "final-run-partial.md").unlink()
+
+        resumed = subprocess.run(
+            [
+                "python3",
+                str(EXECUTE_WORKFLOW),
+                "--job-path",
+                str(self.job_dir),
+                "--run-id",
+                "run-partial",
+                "--codex-bin",
+                str(self.codex_bin),
+                "--gemini-bin",
+                str(self.gemini_bin),
+                "--antigravity-bin",
+                str(self.antigravity_bin),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertIn("codex: intake completed", resumed.stdout.lower())
+        self.assertIn("gemini: research-b started", resumed.stdout.lower())
+        self.assertIn("system: claim-extraction started", resumed.stdout.lower())
 
     def test_resolves_job_id_via_jobs_index(self) -> None:
         result = subprocess.run(
@@ -240,6 +434,8 @@ class ExecuteWorkflowTests(unittest.TestCase):
                 "run-by-id",
                 "--codex-bin",
                 str(self.codex_bin),
+                "--gemini-bin",
+                str(self.gemini_bin),
                 "--antigravity-bin",
                 str(self.antigravity_bin),
             ],
@@ -253,6 +449,371 @@ class ExecuteWorkflowTests(unittest.TestCase):
         self.assertTrue(run_dir.exists())
         state = json.loads((run_dir / "workflow-state.json").read_text(encoding="utf-8"))
         self.assertEqual(state["job_name"], "my-project-1")
+
+    def test_supports_switching_secondary_adapter_to_antigravity(self) -> None:
+        self._write_fake_executor(self.antigravity_bin, "antigravity")
+        result = subprocess.run(
+            [
+                "python3",
+                str(EXECUTE_WORKFLOW),
+                "--job-path",
+                str(self.job_dir),
+                "--run-id",
+                "run-antigravity",
+                "--codex-bin",
+                str(self.codex_bin),
+                "--gemini-bin",
+                str(self.gemini_bin),
+                "--antigravity-bin",
+                str(self.antigravity_bin),
+                "--secondary-adapter",
+                "antigravity",
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("antigravity: research-b started", result.stdout.lower())
+        self.assertNotIn("gemini: research-b started", result.stdout.lower())
+
+    def test_marks_stage_failed_and_logs_output_status_when_adapter_leaves_placeholder(self) -> None:
+        self._write_noop_executor(self.antigravity_bin, "warning: accepted command but did not write output")
+        result = subprocess.run(
+            [
+                "python3",
+                str(EXECUTE_WORKFLOW),
+                "--job-path",
+                str(self.job_dir),
+                "--run-id",
+                "run-noop-antigravity",
+                "--codex-bin",
+                str(self.codex_bin),
+                "--gemini-bin",
+                str(self.gemini_bin),
+                "--antigravity-bin",
+                str(self.antigravity_bin),
+                "--secondary-adapter",
+                "antigravity",
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("did not produce a completed output artifact", result.stderr.lower())
+
+        run_dir = self.job_dir / "runs" / "run-noop-antigravity"
+        state = json.loads((run_dir / "workflow-state.json").read_text(encoding="utf-8"))
+        statuses = {stage["id"]: stage["status"] for stage in state["stages"]}
+        self.assertEqual(statuses["research-b"], "failed")
+
+        driver_log = (run_dir / "logs" / "research-b.antigravity.driver.log").read_text(encoding="utf-8")
+        self.assertIn("RETURN_CODE:\n0", driver_log)
+        self.assertIn("OUTPUT_EXISTS:\nTrue", driver_log)
+        self.assertIn("OUTPUT_COMPLETE:\nFalse", driver_log)
+        self.assertIn("Status: not started", driver_log)
+
+    def test_wraps_gemini_stdout_into_stage_output_when_file_is_not_written(self) -> None:
+        self._write_research_b_stdout_executor(
+            self.gemini_bin,
+            "\n".join(
+                [
+                    "I will first inspect the prompt packet.",
+                    "# Executive Summary",
+                    "",
+                    "- Research B summary. [SRC-002]",
+                    "",
+                    "# Facts",
+                    "",
+                    "1. Option B has evidence behind it. [SRC-002]",
+                    "",
+                    "# Inferences",
+                    "",
+                    "1. Option B may be viable. [SRC-002] Confidence: medium",
+                    "",
+                    "# Uncertainty Register",
+                    "",
+                    "- Coverage is incomplete. [SRC-003]",
+                    "",
+                    "# Evidence Gaps",
+                    "",
+                    "- Benchmarking is incomplete. [SRC-004]",
+                    "",
+                    "# Preliminary Disagreements",
+                    "",
+                    "- The other option may be stronger on another axis. [SRC-005]",
+                    "",
+                    "# Source Evaluation",
+                    "",
+                    "- Sources are limited but relevant. [SRC-006]",
+                ]
+            ),
+        )
+
+        result = subprocess.run(
+            [
+                "python3",
+                str(EXECUTE_WORKFLOW),
+                "--job-path",
+                str(self.job_dir),
+                "--run-id",
+                "run-stdout-gemini",
+                "--codex-bin",
+                str(self.codex_bin),
+                "--gemini-bin",
+                str(self.gemini_bin),
+                "--antigravity-bin",
+                str(self.antigravity_bin),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        run_dir = self.job_dir / "runs" / "run-stdout-gemini"
+        research_b = (run_dir / "stage-outputs" / "03-research-b.md").read_text(encoding="utf-8")
+        self.assertTrue(research_b.startswith("# Executive Summary"))
+        self.assertNotIn("I will first inspect", research_b)
+
+        state = json.loads((run_dir / "workflow-state.json").read_text(encoding="utf-8"))
+        statuses = {stage["id"]: stage["status"] for stage in state["stages"]}
+        self.assertEqual(statuses["research-b"], "completed")
+
+    def test_fails_fast_when_research_sidecar_contains_uncited_inference(self) -> None:
+        self._write_stdout_only_executor(
+            self.gemini_bin,
+            "\n".join(
+                [
+                    "# Executive Summary",
+                    "",
+                    "- Research B summary. [SRC-002]",
+                    "",
+                    "# Facts",
+                    "",
+                    "1. Option B has evidence behind it. [SRC-002]",
+                    "",
+                    "# Inferences",
+                    "",
+                    "1. Option B may be viable. Confidence: medium",
+                    "",
+                    "# Uncertainty Register",
+                    "",
+                    "- Coverage is incomplete. [SRC-003]",
+                    "",
+                    "# Evidence Gaps",
+                    "",
+                    "- Benchmarking is incomplete. [SRC-004]",
+                    "",
+                    "# Preliminary Disagreements",
+                    "",
+                    "- The other option may be stronger on another axis. [SRC-005]",
+                    "",
+                    "# Source Evaluation",
+                    "",
+                    "- Sources are limited but relevant. [SRC-006]",
+                ]
+            ),
+        )
+
+        result = subprocess.run(
+            [
+                "python3",
+                str(EXECUTE_WORKFLOW),
+                "--job-path",
+                str(self.job_dir),
+                "--run-id",
+                "run-uncited-inference",
+                "--codex-bin",
+                str(self.codex_bin),
+                "--gemini-bin",
+                str(self.gemini_bin),
+                "--antigravity-bin",
+                str(self.antigravity_bin),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("uncited inference", result.stderr.lower())
+        run_dir = self.job_dir / "runs" / "run-uncited-inference"
+        state = json.loads((run_dir / "workflow-state.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["stages"][2]["status"], "failed")
+        self.assertEqual(state["post_processing"]["stage_claims"]["research-b"]["status"], "failed")
+        self.assertNotEqual(state["stages"][1]["status"], "running")
+        judge_sidecar = json.loads((run_dir / "stage-claims" / "06-judge.claims.json").read_text(encoding="utf-8"))
+        self.assertEqual(judge_sidecar["status"], "not_started")
+
+    def test_rejects_unknown_adapter_name(self) -> None:
+        result = subprocess.run(
+            [
+                "python3",
+                str(EXECUTE_WORKFLOW),
+                "--job-path",
+                str(self.job_dir),
+                "--run-id",
+                "run-invalid-adapter",
+                "--secondary-adapter",
+                "unknown-cli",
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unknown adapter", result.stderr.lower())
+
+    def test_progress_reporter_colors_only_status_indicator_on_tty(self) -> None:
+        stream = FakeTTYStream()
+        reporter = ProgressReporter(stream)
+
+        reporter.start("codex", "intake")
+        reporter.complete("codex", "intake")
+        reporter.fail("gemini", "judge")
+
+        rendered = stream.rendered()
+        self.assertIn("codex: intake \x1b[32mcompleted\x1b[0m", rendered)
+        self.assertIn("gemini: judge \x1b[31mfailed\x1b[0m", rendered)
+        self.assertNotIn("\x1b[32mcodex", rendered)
+        self.assertNotIn("\x1b[31mgemini", rendered)
+
+    def test_progress_reporter_does_not_duplicate_completed_stage_on_tty(self) -> None:
+        stream = FakeTTYStream()
+        reporter = ProgressReporter(stream)
+
+        reporter.start("codex", "research-a")
+        reporter.complete("codex", "research-a")
+
+        lines = [line for line in stream.rendered().splitlines() if "research-a" in line]
+        completed_lines = [line for line in lines if "completed" in line]
+        self.assertEqual(len(completed_lines), 1, completed_lines)
+
+    def test_stage_markdown_validator_allows_summary_citations_at_end_of_paragraph(self) -> None:
+        markdown = "\n".join(
+            [
+                "# Executive Summary",
+                "",
+                "Fully on-device processing appears feasible. The evidence supports a hybrid upgrade. [DOC-001] [SRC-002]",
+                "",
+                "# Facts",
+                "",
+                "1. The current system uses an FPGA and an external laptop. [DOC-001]",
+                "",
+                "# Inferences",
+                "",
+                "1. The strongest near-term architecture is hybrid. That preserves the current radar knowledge while removing the laptop. [DOC-001] [SRC-002] Confidence: high",
+                "",
+                "# Uncertainty Register",
+                "",
+                "- Data format remains unclear.",
+                "",
+                "# Evidence Gaps",
+                "",
+                "- Missing current model details.",
+                "",
+                "# Preliminary Disagreements",
+                "",
+                "- Hybrid versus end-to-end remains disputed. [SRC-002]",
+                "",
+                "# Source Evaluation",
+                "",
+                "- [DOC-001] Internal project packet.",
+            ]
+        )
+
+        errors = validate_stage_markdown_contract("research-a", markdown)
+        self.assertEqual(errors, [], errors)
+
+    def test_stage_markdown_validator_allows_unindented_numbered_item_continuations(self) -> None:
+        markdown = "\n".join(
+            [
+                "# Executive Summary",
+                "",
+                "Summary text. [DOC-001]",
+                "",
+                "# Facts",
+                "",
+                "1. Fact line one.",
+                "Continuation line with citation at the end. [DOC-001]",
+                "",
+                "# Inferences",
+                "",
+                "1. Inference first sentence.",
+                "Continuation line with supporting citation and confidence. [SRC-001] Confidence: medium",
+                "",
+                "# Uncertainty Register",
+                "",
+                "- Gap remains.",
+                "",
+                "# Evidence Gaps",
+                "",
+                "- More data needed.",
+                "",
+                "# Preliminary Disagreements",
+                "",
+                "- One disagreement exists. [SRC-002]",
+                "",
+                "# Source Evaluation",
+                "",
+                "- [DOC-001] Packet source.",
+            ]
+        )
+
+        errors = validate_stage_markdown_contract("research-a", markdown)
+        self.assertEqual(errors, [], errors)
+
+    def test_stdout_artifact_extraction_prefers_expected_heading_or_fenced_markdown(self) -> None:
+        stdout = "\n".join(
+            [
+                "# Notes",
+                "",
+                "I will now write the artifact.",
+                "",
+                "```markdown",
+                "# Executive Summary",
+                "",
+                "- Summary. [SRC-001]",
+                "",
+                "# Facts",
+                "",
+                "1. Fact. [SRC-001]",
+                "",
+                "# Inferences",
+                "",
+                "1. Inference. [SRC-001] Confidence: medium",
+                "",
+                "# Uncertainty Register",
+                "",
+                "- Gap.",
+                "",
+                "# Evidence Gaps",
+                "",
+                "- More data.",
+                "",
+                "# Preliminary Disagreements",
+                "",
+                "- Disagreement. [SRC-002]",
+                "",
+                "# Source Evaluation",
+                "",
+                "- Source note.",
+                "```",
+                "",
+                "I have completed the task.",
+            ]
+        )
+
+        artifact = extract_markdown_artifact("research-a", stdout)
+        self.assertTrue(artifact.startswith("# Executive Summary"))
+        self.assertNotIn("# Notes", artifact)
+        self.assertNotIn("I have completed", artifact)
+        self.assertNotIn("```", artifact)
 
 
 if __name__ == "__main__":

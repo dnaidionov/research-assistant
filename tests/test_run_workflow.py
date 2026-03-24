@@ -77,6 +77,7 @@ class RunWorkflowTests(unittest.TestCase):
         self.assertTrue((run_dir / "workflow-state.json").exists())
         self.assertTrue((run_dir / "prompt-packets").is_dir())
         self.assertTrue((run_dir / "stage-outputs").is_dir())
+        self.assertTrue((run_dir / "stage-claims").is_dir())
         self.assertTrue((run_dir / "audit").is_dir())
 
         state = json.loads((run_dir / "workflow-state.json").read_text(encoding="utf-8"))
@@ -124,10 +125,20 @@ class RunWorkflowTests(unittest.TestCase):
                 "06-judge.md",
             ],
         )
+        claim_names = sorted(path.name for path in (run_dir / "stage-claims").iterdir())
+        self.assertEqual(
+            claim_names,
+            [
+                "02-research-a.claims.json",
+                "03-research-b.claims.json",
+                "06-judge.claims.json",
+            ],
+        )
         manifest = json.loads((run_dir / "audit" / "manifest.json").read_text(encoding="utf-8"))
         manifest_paths = {entry["path"] for entry in manifest["files"]}
         self.assertIn("prompt-packets/01-intake.md", manifest_paths)
         self.assertIn("workflow-state.json", manifest_paths)
+        self.assertIn("stage-claims/02-research-a.claims.json", manifest_paths)
 
         research_a_packet = (run_dir / "prompt-packets" / "02-research-a.md").read_text(encoding="utf-8")
         self.assertIn("Upstream Stage Artifacts", research_a_packet)

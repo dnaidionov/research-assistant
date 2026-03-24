@@ -13,6 +13,8 @@ Produce an independent research pass. This pass must stand on its own and must n
 ## Non-Negotiable Rules
 
 - Every factual claim must include citations inline.
+- Use auditable external source IDs such as `[SRC-001]` or `[DOC-001]` for factual support.
+- Do not invent citation labels such as `[Brief]` or `[SRC-HW]` unless the packet already defines them explicitly.
 - Separate facts from inferences in distinct sections.
 - Record open questions and evidence gaps explicitly.
 - Do not speculate beyond what the cited material supports.
@@ -51,6 +53,7 @@ Return markdown using exactly these top-level sections in this order:
 - Use numbered items.
 - Each item must express one inference, interpretation, forecast, or synthesis step.
 - Each item must cite the supporting evidence it relies on.
+- Confidence labels are not citations and do not replace them.
 - Each item must end with an explicit confidence label: `Confidence: low|medium|high`.
 
 #### `# Uncertainty Register`

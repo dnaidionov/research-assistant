@@ -73,7 +73,8 @@ Reason:
 
 Status:
 - architectural decision accepted
-- not yet fully implemented in `scripts/extract_claims.py`
+- partially implemented in `scripts/extract_claims.py`
+- still relies on marker parsing rather than source-aware semantic adjudication
 
 ---
 
@@ -94,7 +95,8 @@ Accepted target classes:
 - report_structure
 
 Status:
-- current implementation still uses only `fact` and `inference`
+- current implementation now recognizes additional classes such as `evaluation`, `decision`, `open_question`, `evidence_gap`, `artifact_reference`, and `report_structure`
+- downstream validation still treats only a subset of those classes as first-class gate targets
 
 ---
 
@@ -110,7 +112,9 @@ Decision:
 - the JSON sidecar should minimally carry key claims, evidence sources, assumptions, uncertainties, and unresolved questions
 
 Status:
-- target architecture only; `run_workflow.py` does not scaffold sidecars yet
+- partially implemented
+- `run_workflow.py` now scaffolds claim sidecar targets for research and judge stages
+- the system still extracts those sidecars from markdown instead of requiring model-emitted structured outputs
 
 ---
 
@@ -123,3 +127,8 @@ Reason:
 Decision:
 - quality gates are part of the intended orchestration design
 - until those gates exist, the system should be described as an auditable scaffold rather than a reliable evidence adjudication engine
+
+Status:
+- partially implemented
+- `execute_workflow.py` now applies stage-aware citation gates for research and judge stages
+- the system is still not a trustworthy evidence adjudication engine because the gates depend on markdown structure and post-hoc extraction rather than first-class structured outputs

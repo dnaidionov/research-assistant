@@ -55,7 +55,8 @@
         "fact_count",
         "inference_count",
         "provenance_only_fact_ids",
-        "uncited_fact_ids"
+        "uncited_fact_ids",
+        "uncited_inference_ids"
       ],
       "properties": {
         "claim_type_counts": {
@@ -73,6 +74,10 @@
           "items": {"type": "string"}
         },
         "uncited_fact_ids": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "uncited_inference_ids": {
           "type": "array",
           "items": {"type": "string"}
         }

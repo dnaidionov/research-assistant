@@ -34,17 +34,22 @@ Claim extraction and artifact writing remain separate downstream steps. That spl
 
 ## `execute_workflow.py` Automation Scope
 
-`scripts/execute_workflow.py` automates the current 2-pass tool split:
+`scripts/execute_workflow.py` automates the current 2-pass workflow through configurable CLI adapters.
+
+The current default adapter assignment is:
 
 1. intake in Codex
-2. research A in Codex and research B in Antigravity in parallel
-3. critique A on B in Codex and critique B on A in Antigravity in parallel
-4. judge in Antigravity
-5. claim extraction
-6. final artifact generation
+2. research A in Codex and research B in Gemini in parallel
+3. critique A on B in Codex and critique B on A in Gemini in parallel
+4. judge in Gemini
+5. stage claim sidecar extraction and section-aware validation for research A, research B, and judge
+6. claim extraction
+7. final artifact generation
 
 The runner is file-driven. It waits on required stage output artifacts, updates `workflow-state.json`, and writes per-step logs into the run directory.
 It assumes the external CLIs can complete a stage from a single prompt and write the requested output artifact without manual intervention.
+It also emits live stage progress. In interactive terminals it redraws status in place; in captured output it emits ordered start and completion events.
+Antigravity remains available as an adapter option but is no longer the default secondary adapter.
 
 ## Stage Intent
 
@@ -57,10 +62,12 @@ It assumes the external CLIs can complete a stage from a single prompt and write
 - produce an independent research report
 - separate facts and inference
 - include inline citations
+- use canonical external citation IDs for evidence, not ad hoc labels or stage references
 
 ### 3. Research pass B
 - produce a second independent research report
 - preserve independent reasoning from pass A
+- follow the same canonical external citation scheme as pass A
 
 ### 4. Critique of A by B
 - challenge unsupported claims in pass A
@@ -74,6 +81,7 @@ It assumes the external CLIs can complete a stage from a single prompt and write
 - synthesize supported conclusions
 - keep unresolved disagreements visible
 - distinguish supported conclusions from open questions
+- preserve external evidence citations from the research record instead of replacing them with stage references
 
 ### 7. Claim extraction
 - convert markdown into a v1 claim register with stable `C001`-style IDs
@@ -95,6 +103,7 @@ The run directory contains:
 
 - `prompt-packets/`
 - `stage-outputs/`
+- `stage-claims/`
 - `workflow-state.json`
 - `WORK_ORDER.md`
 - `audit/`
@@ -129,25 +138,32 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 ### `scripts/execute_workflow.py`
 - ensures the target run exists
 - accepts a job name, a job id from `jobs-index` metadata, or an explicit job path
-- launches Codex and Antigravity adapters for the current 2-pass stage layout
+- resolves primary and secondary execution roles through named CLI adapters
+- defaults to Codex as the primary adapter and Gemini as the secondary adapter
+- keeps Antigravity available as an alternate adapter
 - passes each tool explicit stage metadata including stage id, prompt-packet path, and output path
+- wraps stdout-oriented chat adapters by recovering markdown artifacts from stdout when they do not write the requested stage file directly
+- reports stage start, completion, and failure status while the workflow runs
 - executes the two research stages in parallel
 - executes the two critique stages in parallel
+- extracts claim sidecars for `research-a`, `research-b`, and `judge`
+- applies section-aware fail-fast validation to research and judge markdown contracts before downstream stages continue
 - waits for judge completion before downstream processing
 - runs claim extraction and final artifact generation automatically
 - supports idempotent resume by skipping completed stage artifacts and downstream outputs
-- updates workflow state and writes execution logs
+- updates workflow state and marks failed stages explicitly when an adapter exits non-zero or leaves placeholder output behind
+- writes per-stage driver logs with command, return code, stdout, stderr, output-path status, and output preview for troubleshooting
 
 ### `scripts/extract_claims.py`
 - parses markdown into atomic claims
 - assigns stable `C001`-style IDs
 - separates bracketed markers into provenance, external evidence, and unclassified buckets
 - captures explicit confidence labels when present
-- marks claims as `fact` or `inference`
-- can fail on uncited facts in strict mode
+- classifies disagreements and confidence summaries as evaluation-oriented claims instead of defaulting them to facts
+- can fail on uncited facts and uncited inferences in strict mode when used as a hard validator
 - flags provenance-only supported facts for downstream gating
-- does not yet filter all non-claim residue reliably
-- does not yet classify evaluations, evidence gaps, or structure notes separately
+- rejects workflow-stage references as evidence citations
+- still relies on lexical and markdown-structure heuristics rather than semantic parsing
 
 ### `scripts/generate_final_artifact.py`
 - reads the judge artifact and claim register
@@ -171,6 +187,9 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - Final outputs may not contain uncited factual claims.
 - Facts and inference must remain distinguishable where possible.
 - Disagreements must be preserved until the judge stage.
+- Workflow provenance and external evidence are different and must not be conflated.
+- Stage references such as `research-a`, `judge`, or critique artifact IDs do not satisfy evidence-citation requirements.
+- Research and judge stages must pass section-aware citation validation before the workflow may continue downstream.
 
 ## Planned Hardening
 

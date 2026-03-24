@@ -1,0 +1,9 @@
+job_id: georadar
+display_name: "Research of Through-Wall Georadar upgrade with AI"
+local_path: ../../../jobs/georadar
+visibility: private
+status: active
+tags:
+  - AI
+  - georadar
+  - Geozondas

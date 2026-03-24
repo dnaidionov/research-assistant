@@ -19,6 +19,7 @@ These rules must not be violated by future changes.
 - Facts must be distinguishable from inference.
 - Claims must be traceable to sources.
 - Workflow provenance and external evidence must be modeled as different things.
+- External evidence citations must stay canonical and auditable; stage references are not evidence.
 - Source evaluation is required, not optional.
 - Uncertainty must be explicit where evidence is weak or mixed.
 - Non-claim artifacts such as structure notes and file references must not be promoted into truth validation unchanged.
