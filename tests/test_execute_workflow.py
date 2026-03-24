@@ -424,6 +424,53 @@ class ExecuteWorkflowTests(unittest.TestCase):
                     )
                     sys.exit(0)
 
+                if stage == "critique-b-on-a":
+                    output_path.write_text(
+                        "# Claims That Survive Review\\n\\n- One claim survives review. [SRC-010]\\n\\n"
+                        "# Unsupported Claims\\n\\n- Some claims need stronger support. [SRC-011]\\n\\n"
+                        "# Weak Sources Or Citation Problems\\n\\n- One citation is indirect. [SRC-012]\\n\\n"
+                        "# Omissions And Missing Alternatives\\n\\n- Missing alternative analysis. [SRC-013]\\n\\n"
+                        "# Overreach And Overconfident Inference\\n\\n- One conclusion is too strong. [SRC-014]\\n\\n"
+                        "# Unresolved Disagreements For Judge\\n\\n- Option A vs B remains disputed. [SRC-015]\\n\\n"
+                        "# Overall Critique Summary\\n\\n- Reliability is mixed. Confidence: medium\\n",
+                        encoding="utf-8",
+                    )
+                    sys.exit(0)
+
+                if stage == "judge":
+                    output_path.write_text(
+                        "# Supported Conclusions\\n\\n1. Option A has lower implementation risk. [SRC-001]\\n\\n"
+                        "# Inferences And Synthesis Judgments\\n\\n1. Inference: Option A is the safer near-term choice. [SRC-001, SRC-002] Confidence: medium\\n\\n"
+                        "# Unresolved Disagreements\\n\\n1. Hardware Selection remains unresolved because interface data is missing. [SRC-003]\\n\\n"
+                        "# Confidence Assessment\\n\\n- Medium confidence: evidence is incomplete and benchmark coverage is limited. [SRC-004]\\n\\n"
+                        "# Evidence Gaps\\n\\n- No direct benchmark compares both options in this environment. [SRC-005]\\n\\n"
+                        "# Rationale And Traceability\\n\\n- Research A favored Option A and critique B-on-A preserved upside concerns.\\n\\n"
+                        "# Recommended Final Artifact Structure\\n\\n- Summary, comparison, recommendation, uncertainty, references, open questions.\\n",
+                        encoding="utf-8",
+                    )
+                    if json_path is not None:
+                        json_path.write_text(
+                            json.dumps(
+                                {
+                                    "stage": "judge",
+                                    "supported_conclusions": [{"id": "judge-conclusion-1", "text": "Option A has lower implementation risk.", "evidence_sources": ["SRC-001"]}],
+                                    "synthesis_judgments": [{"id": "judge-inference-1", "text": "Option A is the safer near-term choice.", "evidence_sources": ["SRC-001", "SRC-002"], "confidence": "medium"}],
+                                    "unresolved_disagreements": ["Hardware selection remains unresolved because interface data is missing."],
+                                    "confidence_assessment": ["Medium confidence: evidence is incomplete and benchmark coverage is limited."],
+                                    "evidence_gaps": ["No direct benchmark compares both options in this environment."],
+                                    "rationale": ["Research A favored Option A and critique B-on-A preserved upside concerns."],
+                                    "recommended_artifact_structure": ["Summary", "Comparison", "Recommendation", "Uncertainty", "References", "Open Questions"],
+                                    "sources": [
+                                        {"id": "SRC-001", "title": "Canonical source SRC-001", "type": "report", "authority": "fixture", "locator": "https://example.com/src-001"},
+                                        {"id": "SRC-002", "title": "Canonical source SRC-002", "type": "report", "authority": "fixture", "locator": "https://example.com/src-002"}
+                                    ],
+                                },
+                                indent=2,
+                            ),
+                            encoding="utf-8",
+                        )
+                    sys.exit(0)
+
                 print("fallback", file=sys.stderr)
                 sys.exit(0)
                 """
@@ -454,6 +501,172 @@ class ExecuteWorkflowTests(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unresolved source", result.stderr.lower())
+
+    def test_runner_ignores_direct_model_edits_to_shared_source_registry(self) -> None:
+        self.gemini_bin.write_text(
+            textwrap.dedent(
+                """\
+                #!/usr/bin/env python3
+                import json
+                import re
+                import sys
+                from pathlib import Path
+
+                prompt = " ".join(sys.argv[1:])
+                output_match = re.search(r"OUTPUT_PATH=(.+)", prompt)
+                json_match = re.search(r"OUTPUT_JSON_PATH=(.+)", prompt)
+                source_match = re.search(r"SOURCE_REGISTRY_PATH=(.+)", prompt)
+                stage_match = re.search(r"STAGE_ID=([a-z0-9-]+)", prompt)
+                if not output_match or not stage_match:
+                    print("missing stage metadata", file=sys.stderr)
+                    sys.exit(2)
+
+                output_path = Path(output_match.group(1).strip())
+                json_path = Path(json_match.group(1).strip()) if json_match else None
+                source_path = Path(source_match.group(1).strip()) if source_match else None
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                if json_path is not None:
+                    json_path.parent.mkdir(parents=True, exist_ok=True)
+                stage = stage_match.group(1)
+
+                if stage == "research-b":
+                    output_path.write_text(
+                        "# Executive Summary\\n\\nResearch B summary. [SRC-200]\\n\\n"
+                        "# Facts\\n\\n1. Fact. [SRC-200]\\n\\n"
+                        "# Inferences\\n\\n1. Inference. [SRC-200] Confidence: high\\n\\n"
+                        "# Uncertainty Register\\n\\n- Gap.\\n\\n"
+                        "# Evidence Gaps\\n\\n- More data.\\n\\n"
+                        "# Preliminary Disagreements\\n\\n- Trade-off remains.\\n\\n"
+                        "# Source Evaluation\\n\\n- Source quality note.\\n",
+                        encoding="utf-8",
+                    )
+                    json_path.write_text(
+                        json.dumps(
+                            {
+                                "stage": "research-b",
+                                "summary": "Research B summary.",
+                                "facts": [{"id": "F-200", "text": "Fact.", "evidence_sources": ["SRC-200"]}],
+                                "inferences": [{"id": "I-200", "text": "Inference.", "evidence_sources": ["SRC-200"], "confidence": "high"}],
+                                "uncertainties": ["Gap."],
+                                "evidence_gaps": ["More data."],
+                                "preliminary_disagreements": ["Trade-off remains."],
+                                "source_evaluation": ["Source quality note."],
+                                "sources": [
+                                    {
+                                        "id": "SRC-200",
+                                        "title": "Canonical stage source",
+                                        "type": "report",
+                                        "authority": "fixture",
+                                        "locator": "https://example.com/src-200",
+                                    }
+                                ],
+                            },
+                            indent=2,
+                        ),
+                        encoding="utf-8",
+                    )
+                    source_path.write_text(
+                        json.dumps(
+                            {
+                                "run_id": "run-registry-guard",
+                                "sources": [
+                                    {
+                                        "id": "SRC-INJECTED",
+                                        "title": "Injected by model",
+                                        "type": "report",
+                                        "authority": "bad write",
+                                        "locator": "https://example.com/injected",
+                                    }
+                                ],
+                            },
+                            indent=2,
+                        ),
+                        encoding="utf-8",
+                    )
+                    sys.exit(0)
+
+                if stage == "critique-b-on-a":
+                    output_path.write_text(
+                        "# Claims That Survive Review\\n\\n- One claim survives review. [SRC-010]\\n\\n"
+                        "# Unsupported Claims\\n\\n- Some claims need stronger support. [SRC-011]\\n\\n"
+                        "# Weak Sources Or Citation Problems\\n\\n- One citation is indirect. [SRC-012]\\n\\n"
+                        "# Omissions And Missing Alternatives\\n\\n- Missing alternative analysis. [SRC-013]\\n\\n"
+                        "# Overreach And Overconfident Inference\\n\\n- One conclusion is too strong. [SRC-014]\\n\\n"
+                        "# Unresolved Disagreements For Judge\\n\\n- Option A vs B remains disputed. [SRC-015]\\n\\n"
+                        "# Overall Critique Summary\\n\\n- Reliability is mixed. Confidence: medium\\n",
+                        encoding="utf-8",
+                    )
+                    sys.exit(0)
+
+                if stage == "judge":
+                    output_path.write_text(
+                        "# Supported Conclusions\\n\\n1. Option A has lower implementation risk. [SRC-001]\\n\\n"
+                        "# Inferences And Synthesis Judgments\\n\\n1. Inference: Option A is the safer near-term choice. [SRC-001, SRC-002] Confidence: medium\\n\\n"
+                        "# Unresolved Disagreements\\n\\n1. Hardware Selection remains unresolved because interface data is missing. [SRC-003]\\n\\n"
+                        "# Confidence Assessment\\n\\n- Medium confidence: evidence is incomplete and benchmark coverage is limited. [SRC-004]\\n\\n"
+                        "# Evidence Gaps\\n\\n- No direct benchmark compares both options in this environment. [SRC-005]\\n\\n"
+                        "# Rationale And Traceability\\n\\n- Research A favored Option A and critique B-on-A preserved upside concerns.\\n\\n"
+                        "# Recommended Final Artifact Structure\\n\\n- Summary, comparison, recommendation, uncertainty, references, open questions.\\n",
+                        encoding="utf-8",
+                    )
+                    if json_path is not None:
+                        json_path.write_text(
+                            json.dumps(
+                                {
+                                    "stage": "judge",
+                                    "supported_conclusions": [{"id": "judge-conclusion-1", "text": "Option A has lower implementation risk.", "evidence_sources": ["SRC-001"]}],
+                                    "synthesis_judgments": [{"id": "judge-inference-1", "text": "Option A is the safer near-term choice.", "evidence_sources": ["SRC-001", "SRC-002"], "confidence": "medium"}],
+                                    "unresolved_disagreements": ["Hardware selection remains unresolved because interface data is missing."],
+                                    "confidence_assessment": ["Medium confidence: evidence is incomplete and benchmark coverage is limited."],
+                                    "evidence_gaps": ["No direct benchmark compares both options in this environment."],
+                                    "rationale": ["Research A favored Option A and critique B-on-A preserved upside concerns."],
+                                    "recommended_artifact_structure": ["Summary", "Comparison", "Recommendation", "Uncertainty", "References", "Open Questions"],
+                                    "sources": [
+                                        {"id": "SRC-001", "title": "Canonical source SRC-001", "type": "report", "authority": "fixture", "locator": "https://example.com/src-001"},
+                                        {"id": "SRC-002", "title": "Canonical source SRC-002", "type": "report", "authority": "fixture", "locator": "https://example.com/src-002"}
+                                    ],
+                                },
+                                indent=2,
+                            ),
+                            encoding="utf-8",
+                        )
+                    sys.exit(0)
+
+                print("fallback", file=sys.stderr)
+                sys.exit(0)
+                """
+            ),
+            encoding="utf-8",
+        )
+        self.gemini_bin.chmod(0o755)
+
+        result = subprocess.run(
+            [
+                "python3",
+                str(EXECUTE_WORKFLOW),
+                "--job-path",
+                str(self.job_dir),
+                "--run-id",
+                "run-registry-guard",
+                "--codex-bin",
+                str(self.codex_bin),
+                "--gemini-bin",
+                str(self.gemini_bin),
+                "--antigravity-bin",
+                str(self.antigravity_bin),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        sources_payload = json.loads(
+            (self.job_dir / "runs" / "run-registry-guard" / "sources.json").read_text(encoding="utf-8")
+        )
+        source_ids = {source["id"] for source in sources_payload["sources"]}
+        self.assertIn("SRC-200", source_ids)
+        self.assertNotIn("SRC-INJECTED", source_ids)
 
     def test_resume_skips_completed_stages(self) -> None:
         first = subprocess.run(

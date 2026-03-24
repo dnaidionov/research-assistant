@@ -152,9 +152,11 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - executes the two critique stages in parallel
 - validates structured research and judge outputs against source-aware contracts before downstream execution continues
 - merges stage-declared sources into the run-level `sources.json` registry and rejects unresolved source IDs
+- treats `sources.json` as runner-owned state; stage agents may read it but should not modify it directly, and direct edits are discarded before merge
 - extracts claim sidecars for `research-a`, `research-b`, and `judge`
 - uses structured judge JSON for automated claim-register generation when available
 - keeps section-aware markdown validation as a migration backstop for research and judge contracts
+- keeps non-truth-critical narrative sections flexible in structured validation so usable research is not rejected over presentation-shape variance
 - waits for judge completion before downstream processing
 - runs claim extraction and final artifact generation automatically
 - supports idempotent resume by skipping completed stage artifacts and downstream outputs

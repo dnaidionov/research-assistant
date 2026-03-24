@@ -83,6 +83,8 @@ Implemented today:
 - scaffolded run-level source registries
 - scaffolded structured JSON stage outputs for research A, research B, and judge
 - unified structured-stage validation for research and judge outputs, including source-ID resolution against the run registry
+- flexible validation for non-truth-critical narrative sections such as summaries, uncertainties, and source-evaluation notes
+- runner-owned source-registry merging; stage agents may declare sources in stage JSON but the runner treats `sources.json` as read-only during execution
 - scaffolded claim-sidecar targets for research and judge stages
 - per-stage driver logs that capture command execution plus output-artifact status for debugging
 - markdown claim extraction with stable IDs
@@ -103,6 +105,7 @@ Known limitations in the current repo:
 - downstream trust is still limited because critiques and some compatibility paths still rely on markdown as a machine-readable exchange format
 - provenance vs evidence separation is still marker-based, not semantic
 - the workflow still depends on prompt compliance for canonical citation labels; malformed labels are rejected downstream rather than normalized automatically
+- long-running parallel stages can still delay surfaced failure because the runner waits for sibling futures to settle before exiting the stage group
 
 ## Ranked Shortcomings
 

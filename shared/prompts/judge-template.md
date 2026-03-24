@@ -105,6 +105,7 @@ Rules:
 - Every cited external source id must be declared in `sources`.
 - Every `sources` item must include `id`, `title`, `type`, `authority`, and `locator`.
 - Workflow-stage references may appear in `rationale` for provenance, but never as evidence.
+- Treat `{source_registry_path}` as read-only reference material. Do not modify it directly; declare sources in this stage JSON and let the runner merge them.
 
 ## Source Materials
 

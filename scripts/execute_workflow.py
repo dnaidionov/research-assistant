@@ -329,16 +329,21 @@ def ensure_structured_stage_output(stage_id: str, run_dir: Path, markdown_path: 
     return json_path, True
 
 
-def validate_and_merge_structured_stage_output(stage_id: str, run_dir: Path, json_path: Path) -> list[str]:
+def validate_structured_stage_output(
+    stage_id: str,
+    json_path: Path,
+    source_registry: dict[str, object],
+) -> list[str]:
+    payload = load_contract_json(json_path)
+    return validate_stage_json(stage_id, payload, source_registry)
+
+
+def merge_stage_sources_into_registry(stage_id: str, run_dir: Path) -> None:
     source_path = source_registry_path(run_dir)
     source_registry = load_contract_json(source_path)
-    payload = load_contract_json(json_path)
-    errors = validate_stage_json(stage_id, payload, source_registry)
-    if errors:
-        return errors
+    payload = load_contract_json(stage_structured_output_path(run_dir, stage_id))
     merged = merge_source_registry(source_registry, list(payload.get("sources", [])))
     persist_source_registry(source_path, merged)
-    return []
 
 
 def set_stage_status(state: dict[str, object], stage_id: str, status: str) -> None:
@@ -391,7 +396,7 @@ def build_agent_prompt(stage: StageExecution, run_dir: Path) -> str:
                 if json_output_path is not None
                 else "This stage does not require a structured JSON artifact."
             ),
-            f"Use `{sources_path}` as the run-level source registry reference.",
+            f"Use `{sources_path}` as the run-level source registry reference only. Do not modify that file directly.",
             "Do not leave placeholder content in the output file.",
             "Use upstream stage output artifacts when the prompt packet references them.",
         ]
@@ -439,6 +444,10 @@ def run_agent_stage(
     prompt = build_agent_prompt(stage, run_dir)
     output_path = stage_output_path(run_dir, stage.output_name)
     structured_output_path = stage_structured_output_path(run_dir, stage.stage_id) if is_structured_stage(stage.stage_id) else None
+    source_registry_file = source_registry_path(run_dir) if is_structured_stage(stage.stage_id) else None
+    source_registry_snapshot = (
+        source_registry_file.read_text(encoding="utf-8") if source_registry_file is not None and source_registry_file.is_file() else None
+    )
     log_path = run_dir / "logs" / f"{stage.stage_id}.{adapter.name}.driver.log"
     cmd = adapter.command_builder(adapter_bin, job_dir, prompt)
 
@@ -450,6 +459,7 @@ def run_agent_stage(
     )
     recovered_from_stdout = False
     recovered_structured_from_markdown = False
+    restored_source_registry = False
     structured_output_exists = structured_output_path.is_file() if structured_output_path is not None else False
     structured_output_complete = is_json_artifact_complete(structured_output_path) if structured_output_path is not None else False
     structured_validation_errors: list[str] = []
@@ -458,6 +468,13 @@ def run_agent_stage(
     output_exists = output_path.is_file()
     output_complete = is_stage_output_complete(output_path)
     if completed.returncode == 0 and output_complete and structured_output_path is not None:
+        if (
+            source_registry_file is not None
+            and source_registry_snapshot is not None
+            and source_registry_file.read_text(encoding="utf-8") != source_registry_snapshot
+        ):
+            source_registry_file.write_text(source_registry_snapshot, encoding="utf-8")
+            restored_source_registry = True
         structured_output_path, recovered_structured_from_markdown = ensure_structured_stage_output(
             stage.stage_id,
             run_dir,
@@ -467,10 +484,10 @@ def run_agent_stage(
         structured_output_complete = is_json_artifact_complete(structured_output_path)
         if structured_output_complete:
             try:
-                structured_validation_errors = validate_and_merge_structured_stage_output(
+                structured_validation_errors = validate_structured_stage_output(
                     stage.stage_id,
-                    run_dir,
                     structured_output_path,
+                    json.loads(source_registry_snapshot) if source_registry_snapshot is not None else {"sources": []},
                 )
             except ValueError as exc:
                 structured_validation_errors = [str(exc)]
@@ -506,6 +523,9 @@ def run_agent_stage(
                 "",
                 "STRUCTURED_OUTPUT_RECOVERED_FROM_MARKDOWN:",
                 str(recovered_structured_from_markdown),
+                "",
+                "SOURCE_REGISTRY_RESTORED_AFTER_STAGE:",
+                str(restored_source_registry),
                 "",
                 "STRUCTURED_OUTPUT_PREVIEW:",
                 read_output_preview(structured_output_path) if structured_output_path is not None else "<not-applicable>",
@@ -659,6 +679,8 @@ def run_stage_group(
             adapter_name = role_assignments[stage.agent_role]
             reporter.complete(adapter_name, stage.stage_id)
             save_state(state_path, state)
+            if is_structured_stage(stage.stage_id):
+                merge_stage_sources_into_registry(stage.stage_id, run_dir)
             run_stage_claim_extraction(stage.stage_id, run_dir, job_dir, state, state_path, reporter)
         else:
             runnable.append(stage)
@@ -681,6 +703,8 @@ def run_stage_group(
                 stage_id, status = future.result()
                 set_stage_status(state, stage_id, status)
                 save_state(state_path, state)
+                if is_structured_stage(stage_id):
+                    merge_stage_sources_into_registry(stage_id, run_dir)
                 run_stage_claim_extraction(stage_id, run_dir, job_dir, state, state_path, reporter)
             except Exception as exc:
                 set_stage_status(state, stage.stage_id, "failed")

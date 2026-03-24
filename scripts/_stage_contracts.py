@@ -337,6 +337,10 @@ def _validate_claim_list(
 
 
 def _validate_text_entry_list(items: object, field_name: str, errors: list[str]) -> None:
+    if isinstance(items, str):
+        if not items.strip():
+            errors.append(f"{field_name} must not be empty.")
+        return
     if not isinstance(items, list):
         errors.append(f"{field_name} must be a list.")
         return
@@ -351,18 +355,71 @@ def _validate_text_entry_list(items: object, field_name: str, errors: list[str])
         _require_string(item.get("text"), f"{field_name}[{position}].text", errors)
 
 
+def _validate_flexible_object_list(
+    items: object,
+    field_name: str,
+    errors: list[str],
+    *,
+    accepted_text_keys: tuple[str, ...],
+    accepted_source_keys: tuple[str, ...] = (),
+) -> None:
+    if isinstance(items, str):
+        if not items.strip():
+            errors.append(f"{field_name} must not be empty.")
+        return
+    if not isinstance(items, list):
+        errors.append(f"{field_name} must be a list or string.")
+        return
+    for position, item in enumerate(items, start=1):
+        if isinstance(item, str):
+            if not item.strip():
+                errors.append(f"{field_name}[{position}] must not be empty.")
+            continue
+        if not isinstance(item, dict):
+            errors.append(f"{field_name}[{position}] must be a string or object.")
+            continue
+        if not any(isinstance(item.get(key), str) and item.get(key).strip() for key in accepted_text_keys):
+            accepted = ", ".join(accepted_text_keys)
+            errors.append(f"{field_name}[{position}] must include one of: {accepted}.")
+        for key in accepted_source_keys:
+            source_id = item.get(key)
+            if source_id is not None and (not isinstance(source_id, str) or not SOURCE_ID_PATTERN.match(source_id)):
+                errors.append(f"{field_name}[{position}].{key} must be a canonical external source ID.")
+
+
 def _validate_source_evaluation(items: object, errors: list[str]) -> None:
+    if isinstance(items, str):
+        if not items.strip():
+            errors.append("source_evaluation must not be empty.")
+        return
     if not isinstance(items, list):
         errors.append("source_evaluation must be a list.")
         return
     for position, item in enumerate(items, start=1):
-        if not isinstance(item, dict):
-            errors.append(f"source_evaluation[{position}] must be an object.")
+        if isinstance(item, str):
+            if not item.strip():
+                errors.append(f"source_evaluation[{position}] must not be empty.")
             continue
-        _require_string(item.get("notes"), f"source_evaluation[{position}].notes", errors)
-        source_id = item.get("source_id")
-        if source_id is not None and (not isinstance(source_id, str) or not SOURCE_ID_PATTERN.match(source_id)):
-            errors.append(f"source_evaluation[{position}].source_id must be a canonical external source ID.")
+        if not isinstance(item, dict):
+            errors.append(f"source_evaluation[{position}] must be a string or object.")
+            continue
+        if not any(
+            isinstance(item.get(key), str) and item.get(key).strip()
+            for key in ("text", "notes", "limitation", "quality", "source_name", "biases_or_freshness")
+        ):
+            errors.append(
+                f"source_evaluation[{position}] must include one of: text, notes, limitation, quality, source_name, biases_or_freshness."
+            )
+        for key in ("source_id",):
+            source_id = item.get(key)
+            if source_id is not None and (not isinstance(source_id, str) or not SOURCE_ID_PATTERN.match(source_id)):
+                errors.append(f"source_evaluation[{position}].{key} must be a canonical external source ID.")
+        source_group = item.get("source_group")
+        if source_group is not None:
+            if not isinstance(source_group, list) or not all(
+                isinstance(source_id, str) and SOURCE_ID_PATTERN.match(source_id) for source_id in source_group
+            ):
+                errors.append(f"source_evaluation[{position}].source_group must contain canonical external source IDs.")
 
 
 def validate_stage_json(stage_id: str, payload: dict[str, object], source_registry: dict[str, object]) -> list[str]:
@@ -388,9 +445,19 @@ def validate_stage_json(stage_id: str, payload: dict[str, object], source_regist
         _validate_claim_list(
             payload.get("inferences"), "inferences", source_index, errors, require_id=True, require_confidence=True
         )
-        _validate_text_entry_list(payload.get("uncertainties"), "uncertainties", errors)
-        _validate_text_entry_list(payload.get("evidence_gaps"), "evidence_gaps", errors)
-        _validate_text_entry_list(payload.get("preliminary_disagreements"), "preliminary_disagreements", errors)
+        _validate_flexible_object_list(
+            payload.get("uncertainties"),
+            "uncertainties",
+            errors,
+            accepted_text_keys=("text", "issue", "reason", "impact", "reduction_strategy", "what_would_reduce_it"),
+        )
+        _validate_flexible_object_list(payload.get("evidence_gaps"), "evidence_gaps", errors, accepted_text_keys=("text",))
+        _validate_flexible_object_list(
+            payload.get("preliminary_disagreements"),
+            "preliminary_disagreements",
+            errors,
+            accepted_text_keys=("text",),
+        )
         _validate_source_evaluation(payload.get("source_evaluation"), errors)
         return errors
 
@@ -487,6 +554,42 @@ def _append_claim(
     claims.append(record)
 
 
+def _entry_text(item: object) -> str:
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        for key in (
+            "text",
+            "issue",
+            "reason",
+            "impact",
+            "reduction_strategy",
+            "what_would_reduce_it",
+            "notes",
+            "limitation",
+            "quality",
+            "source_name",
+            "biases_or_freshness",
+        ):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+    raise TypeError("Unsupported entry type for claim-map conversion.")
+
+
+def _entry_sources(item: object) -> list[str]:
+    if isinstance(item, dict):
+        if isinstance(item.get("evidence_sources"), list):
+            return [source for source in item["evidence_sources"] if isinstance(source, str)]
+        source_values = []
+        for key in ("source_id", "id"):
+            value = item.get(key)
+            if isinstance(value, str) and SOURCE_ID_PATTERN.match(value):
+                source_values.append(value)
+        return source_values
+    return []
+
+
 def build_claim_map_from_stage_json(stage_id: str, payload: dict[str, object]) -> dict[str, object]:
     claims: list[dict[str, object]] = []
     if stage_id in {"research-a", "research-b"}:
@@ -513,9 +616,9 @@ def build_claim_map_from_stage_json(stage_id: str, payload: dict[str, object]) -
             _append_claim(
                 claims,
                 claim_id=f"{stage_id}-gap-{index:03d}",
-                text=item["text"],
+                text=_entry_text(item),
                 claim_type="evidence_gap",
-                evidence_sources=list(item.get("evidence_sources", [])),
+                evidence_sources=_entry_sources(item),
                 section="Evidence Gaps",
             )
     elif stage_id == "judge":
@@ -542,31 +645,31 @@ def build_claim_map_from_stage_json(stage_id: str, payload: dict[str, object]) -
             _append_claim(
                 claims,
                 claim_id=f"judge-disagreement-{index:03d}",
-                text=item["text"],
+                text=_entry_text(item),
                 claim_type="evaluation",
-                evidence_sources=list(item.get("evidence_sources", [])),
+                evidence_sources=_entry_sources(item),
                 section="Unresolved Disagreements",
             )
         for index, item in enumerate(payload.get("confidence_assessment", []), start=1):
             _append_claim(
                 claims,
                 claim_id=f"judge-confidence-{index:03d}",
-                text=item["text"],
+                text=_entry_text(item),
                 claim_type="evaluation",
-                evidence_sources=list(item.get("evidence_sources", [])),
+                evidence_sources=_entry_sources(item),
                 section="Confidence Assessment",
             )
         for index, item in enumerate(payload.get("evidence_gaps", []), start=1):
             _append_claim(
                 claims,
                 claim_id=f"judge-gap-{index:03d}",
-                text=item["text"],
+                text=_entry_text(item),
                 claim_type="evidence_gap",
-                evidence_sources=list(item.get("evidence_sources", [])),
+                evidence_sources=_entry_sources(item),
                 section="Evidence Gaps",
             )
         for index, item in enumerate(payload.get("recommended_artifact_structure", []), start=1):
-            text = item if isinstance(item, str) else item["text"]
+            text = _entry_text(item)
             _append_claim(
                 claims,
                 claim_id=f"judge-structure-{index:03d}",
