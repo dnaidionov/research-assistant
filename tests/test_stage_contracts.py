@@ -87,6 +87,40 @@ class StageContractTests(unittest.TestCase):
 
         self.assertEqual(errors, [], errors)
 
+    def test_accepts_source_evaluation_items_with_assessment_or_source_metadata(self) -> None:
+        payload = {
+            "stage": "research-a",
+            "summary": "Feasible with a hybrid architecture.",
+            "facts": [
+                {"id": "F-001", "text": "Fact.", "evidence_sources": ["SRC-001"]}
+            ],
+            "inferences": [
+                {"id": "I-001", "text": "Inference.", "evidence_sources": ["SRC-001"], "confidence": "high"}
+            ],
+            "uncertainties": ["Gap."],
+            "evidence_gaps": ["Missing benchmark."],
+            "preliminary_disagreements": ["Architecture trade-off remains."],
+            "source_evaluation": [
+                {"source_group": "SRC-001", "assessment": "Primary source for baseline constraints."},
+                {
+                    "id": "SRC-002",
+                    "title": "Vendor spec",
+                    "type": "official documentation",
+                    "authority": "primary",
+                    "locator": "https://example.com/src-002",
+                },
+            ],
+            "sources": [
+                {"id": "SRC-001", "title": "Source 1", "type": "document", "authority": "vendor", "locator": "https://example.com/src-001"},
+                {"id": "SRC-002", "title": "Source 2", "type": "document", "authority": "vendor", "locator": "https://example.com/src-002"},
+            ],
+        }
+        registry = source_registry_placeholder("run-xyz")
+
+        errors = validate_stage_json("research-a", payload, registry)
+
+        self.assertEqual(errors, [], errors)
+
 
 if __name__ == "__main__":
     unittest.main()

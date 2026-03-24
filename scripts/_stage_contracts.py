@@ -403,20 +403,18 @@ def _validate_source_evaluation(items: object, errors: list[str]) -> None:
         if not isinstance(item, dict):
             errors.append(f"source_evaluation[{position}] must be a string or object.")
             continue
-        if not any(
-            isinstance(item.get(key), str) and item.get(key).strip()
-            for key in ("text", "notes", "limitation", "quality", "source_name", "biases_or_freshness")
-        ):
-            errors.append(
-                f"source_evaluation[{position}] must include one of: text, notes, limitation, quality, source_name, biases_or_freshness."
-            )
+        if not any(isinstance(value, str) and value.strip() for value in item.values()):
+            errors.append(f"source_evaluation[{position}] must include at least one non-empty string field.")
         for key in ("source_id",):
             source_id = item.get(key)
             if source_id is not None and (not isinstance(source_id, str) or not SOURCE_ID_PATTERN.match(source_id)):
                 errors.append(f"source_evaluation[{position}].{key} must be a canonical external source ID.")
         source_group = item.get("source_group")
         if source_group is not None:
-            if not isinstance(source_group, list) or not all(
+            if isinstance(source_group, str):
+                if not SOURCE_ID_PATTERN.match(source_group):
+                    errors.append(f"source_evaluation[{position}].source_group must contain canonical external source IDs.")
+            elif not isinstance(source_group, list) or not all(
                 isinstance(source_id, str) and SOURCE_ID_PATTERN.match(source_id) for source_id in source_group
             ):
                 errors.append(f"source_evaluation[{position}].source_group must contain canonical external source IDs.")
