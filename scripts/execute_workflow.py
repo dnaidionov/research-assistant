@@ -39,6 +39,7 @@ DEFAULT_JOBS_INDEX_ROOT = Path(__file__).resolve().parents[1] / "jobs-index"
 STAGE_CLAIM_STAGE_IDS = {"research-a", "research-b", "judge"}
 CONFIDENCE_LABEL_PATTERN = re.compile(r"\bconfidence\s*:\s*(low|medium|high)\b", re.IGNORECASE)
 FENCED_BLOCK_PATTERN = re.compile(r"```(?:markdown)?\n(.*?)```", re.IGNORECASE | re.DOTALL)
+JSON_FENCED_BLOCK_PATTERN = re.compile(r"```json\s*(\{.*?\})\s*```", re.IGNORECASE | re.DOTALL)
 
 
 @dataclass(frozen=True)
@@ -256,6 +257,17 @@ def extract_markdown_artifact(stage_id: str, stdout: str) -> str | None:
     return artifact + "\n"
 
 
+def extract_structured_json_artifact(stage_id: str, stdout: str) -> dict[str, object] | None:
+    for match in JSON_FENCED_BLOCK_PATTERN.finditer(stdout):
+        try:
+            payload = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            continue
+        if payload.get("stage") == stage_id:
+            return payload
+    return None
+
+
 def recover_output_from_stdout(adapter: CLIAdapter, stage_id: str, output_path: Path, stdout: str) -> bool:
     if not adapter.stdout_artifact_recovery or output_path.suffix.lower() != ".md":
         return False
@@ -459,6 +471,7 @@ def run_agent_stage(
     )
     recovered_from_stdout = False
     recovered_structured_from_markdown = False
+    recovered_structured_from_stdout = False
     restored_source_registry = False
     structured_output_exists = structured_output_path.is_file() if structured_output_path is not None else False
     structured_output_complete = is_json_artifact_complete(structured_output_path) if structured_output_path is not None else False
@@ -468,6 +481,11 @@ def run_agent_stage(
     output_exists = output_path.is_file()
     output_complete = is_stage_output_complete(output_path)
     if completed.returncode == 0 and output_complete and structured_output_path is not None:
+        if not is_json_artifact_complete(structured_output_path):
+            recovered_payload = extract_structured_json_artifact(stage.stage_id, completed.stdout)
+            if recovered_payload is not None:
+                write_json(structured_output_path, recovered_payload)
+                recovered_structured_from_stdout = True
         if (
             source_registry_file is not None
             and source_registry_snapshot is not None
@@ -523,6 +541,9 @@ def run_agent_stage(
                 "",
                 "STRUCTURED_OUTPUT_RECOVERED_FROM_MARKDOWN:",
                 str(recovered_structured_from_markdown),
+                "",
+                "STRUCTURED_OUTPUT_RECOVERED_FROM_STDOUT:",
+                str(recovered_structured_from_stdout),
                 "",
                 "SOURCE_REGISTRY_RESTORED_AFTER_STAGE:",
                 str(restored_source_registry),

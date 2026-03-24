@@ -11,7 +11,12 @@ EXECUTE_WORKFLOW = REPO_ROOT / "scripts" / "execute_workflow.py"
 import sys
 
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
-from execute_workflow import ProgressReporter, extract_markdown_artifact, validate_stage_markdown_contract
+from execute_workflow import (
+    ProgressReporter,
+    extract_markdown_artifact,
+    extract_structured_json_artifact,
+    validate_stage_markdown_contract,
+)
 
 
 class FakeTTYStream:
@@ -1158,6 +1163,35 @@ class ExecuteWorkflowTests(unittest.TestCase):
         self.assertNotIn("# Notes", artifact)
         self.assertNotIn("I have completed", artifact)
         self.assertNotIn("```", artifact)
+
+    def test_structured_json_artifact_extraction_prefers_fenced_json_block(self) -> None:
+        stdout = "\n".join(
+            [
+                "# Executive Summary",
+                "",
+                "Summary text without inline citations.",
+                "",
+                "```json",
+                "{",
+                '  "stage": "research-b",',
+                '  "summary": "Recovered summary.",',
+                '  "facts": [{"id": "F-1", "text": "Fact.", "evidence_sources": ["SRC-001"]}],',
+                '  "inferences": [{"id": "I-1", "text": "Inference.", "evidence_sources": ["SRC-001"], "confidence": "high"}],',
+                '  "uncertainties": ["Gap."],',
+                '  "evidence_gaps": ["More data."],',
+                '  "preliminary_disagreements": ["Trade-off remains."],',
+                '  "source_evaluation": ["Useful source note."],',
+                '  "sources": [{"id": "SRC-001", "title": "Source", "type": "report", "authority": "fixture", "locator": "https://example.com/src-001"}]',
+                "}",
+                "```",
+            ]
+        )
+
+        artifact = extract_structured_json_artifact("research-b", stdout)
+
+        self.assertIsNotNone(artifact)
+        self.assertEqual(artifact["stage"], "research-b")
+        self.assertEqual(artifact["inferences"][0]["evidence_sources"], ["SRC-001"])
 
 
 if __name__ == "__main__":

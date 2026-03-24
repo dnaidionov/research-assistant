@@ -85,6 +85,7 @@ Implemented today:
 - unified structured-stage validation for research and judge outputs, including source-ID resolution against the run registry
 - flexible validation for non-truth-critical narrative sections such as summaries, uncertainties, and source-evaluation notes
 - runner-owned source-registry merging; stage agents may declare sources in stage JSON but the runner treats `sources.json` as read-only during execution
+- stdout-oriented adapters can now recover fenced stage JSON artifacts directly from stdout before falling back to markdown-to-JSON synthesis
 - scaffolded claim-sidecar targets for research and judge stages
 - per-stage driver logs that capture command execution plus output-artifact status for debugging
 - markdown claim extraction with stable IDs

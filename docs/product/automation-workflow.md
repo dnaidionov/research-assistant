@@ -146,7 +146,8 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - keeps Antigravity available as an alternate adapter
 - passes each tool explicit stage metadata including stage id, prompt-packet path, markdown output path, structured-output path where required, and source-registry path
 - wraps stdout-oriented chat adapters by recovering markdown artifacts from stdout when they do not write the requested stage file directly
-- synthesizes structured JSON from markdown only as a migration fallback when a structured stage does not write its JSON file directly
+- recovers fenced structured JSON artifacts from stdout when adapters emit them there
+- synthesizes structured JSON from markdown only as a last-resort migration fallback when a structured stage does not write its JSON file directly and no fenced JSON artifact is available
 - reports stage start, completion, and failure status while the workflow runs
 - executes the two research stages in parallel
 - executes the two critique stages in parallel
