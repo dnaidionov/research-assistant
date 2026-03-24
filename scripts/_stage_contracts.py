@@ -452,15 +452,6 @@ def _validate_source_evaluation(items: object, errors: list[str]) -> None:
             source_id = item.get(key)
             if source_id is not None and (not isinstance(source_id, str) or not SOURCE_ID_PATTERN.match(source_id)):
                 errors.append(f"source_evaluation[{position}].{key} must be a canonical external source ID.")
-        source_group = item.get("source_group")
-        if source_group is not None:
-            if isinstance(source_group, str):
-                if not SOURCE_ID_PATTERN.match(source_group):
-                    errors.append(f"source_evaluation[{position}].source_group must contain canonical external source IDs.")
-            elif not isinstance(source_group, list) or not all(
-                isinstance(source_id, str) and SOURCE_ID_PATTERN.match(source_id) for source_id in source_group
-            ):
-                errors.append(f"source_evaluation[{position}].source_group must contain canonical external source IDs.")
 
 
 def validate_stage_json(stage_id: str, payload: dict[str, object], source_registry: dict[str, object]) -> list[str]:

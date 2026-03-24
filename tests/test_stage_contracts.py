@@ -121,6 +121,32 @@ class StageContractTests(unittest.TestCase):
 
         self.assertEqual(errors, [], errors)
 
+    def test_accepts_source_evaluation_group_labels(self) -> None:
+        payload = {
+            "stage": "research-b",
+            "summary": "Feasible with edge compute.",
+            "facts": [
+                {"id": "FACT-001", "text": "Fact one.", "evidence_sources": ["SRC-001"]}
+            ],
+            "inferences": [
+                {"id": "INF-001", "text": "Inference built on prior facts.", "evidence_sources": ["SRC-001"], "confidence": "high"}
+            ],
+            "uncertainties": ["Gap."],
+            "evidence_gaps": ["Missing benchmark."],
+            "preliminary_disagreements": ["Architecture trade-off remains."],
+            "source_evaluation": [
+                {"source_group": "Academic Research (IEEE)", "quality": "high", "limitation": "Lab-biased results."}
+            ],
+            "sources": [
+                {"id": "SRC-001", "title": "Source 1", "type": "document", "authority": "vendor", "locator": "https://example.com/src-001"}
+            ],
+        }
+        registry = source_registry_placeholder("run-xyz")
+
+        errors = validate_stage_json("research-b", payload, registry)
+
+        self.assertEqual(errors, [], errors)
+
     def test_normalizes_local_fact_references_inside_inferences(self) -> None:
         payload = {
             "stage": "research-b",
