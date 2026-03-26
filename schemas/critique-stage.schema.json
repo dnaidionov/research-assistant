@@ -1,0 +1,38 @@
+{
+  "type": "object",
+  "required": [
+    "stage",
+    "supported_claims",
+    "unsupported_claims",
+    "weak_source_issues",
+    "omissions",
+    "overreach",
+    "unresolved_disagreements",
+    "summary",
+    "sources"
+  ],
+  "properties": {
+    "stage": {"type": "string", "enum": ["critique-a-on-b", "critique-b-on-a"]},
+    "supported_claims": {"type": "array"},
+    "unsupported_claims": {"type": "array"},
+    "weak_source_issues": {"type": "array"},
+    "omissions": {"type": "array"},
+    "overreach": {"type": "array"},
+    "unresolved_disagreements": {"type": "array"},
+    "summary": {
+      "oneOf": [
+        {"type": "string"},
+        {"type": "array"},
+        {
+          "type": "object",
+          "required": ["text"],
+          "properties": {
+            "text": {"type": "string"},
+            "confidence": {"type": "string", "enum": ["low", "medium", "high"]}
+          }
+        }
+      ]
+    },
+    "sources": {"type": "array"}
+  }
+}

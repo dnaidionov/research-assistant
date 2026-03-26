@@ -274,6 +274,65 @@ class ValidateJobTests(unittest.TestCase):
             self.assertFalse(payload["checks"]["final_artifact_ready"])
             self.assertTrue(any("uncited facts" in error.lower() for error in payload["errors"]))
 
+    def test_final_artifact_readiness_fails_on_uncited_inferences(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            job_dir = self._make_job(Path(tmpdir))
+            claims_path = job_dir / "evidence" / "claims-run-001.json"
+            judge_path = job_dir / "runs" / "run-001" / "stage-outputs" / "06-judge.md"
+            judge_path.parent.mkdir(parents=True)
+            judge_path.write_text(
+                "# Supported Conclusions\n1. Option A is viable. [SRC-001]\n",
+                encoding="utf-8",
+            )
+            claims_path.write_text(
+                """{
+  "claims": [
+    {
+      "id": "C002",
+      "text": "Option A should be preferred.",
+      "type": "inference",
+      "provenance": ["JUDGE"],
+      "evidence_sources": [],
+      "unclassified_markers": [],
+      "confidence": "medium"
+    }
+  ],
+  "summary": {
+    "claim_type_counts": {"inference": 1},
+    "claims_with_unclassified_markers": [],
+    "fact_count": 0,
+    "inference_count": 1,
+    "provenance_only_fact_ids": [],
+    "uncited_fact_ids": [],
+    "uncited_inference_ids": ["C002"]
+  }
+}""",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(VALIDATE_JOB),
+                    "--job-dir",
+                    str(job_dir),
+                    "--json",
+                    "--final-artifact-ready",
+                    "--judge-artifact",
+                    str(judge_path),
+                    "--claim-register",
+                    str(claims_path),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            payload = json.loads(result.stdout)
+            self.assertFalse(payload["checks"]["final_artifact_ready"])
+            self.assertTrue(any("uncited inferences" in error.lower() for error in payload["errors"]))
+
 
 if __name__ == "__main__":
     unittest.main()

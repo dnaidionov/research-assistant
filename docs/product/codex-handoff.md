@@ -19,8 +19,8 @@ The current v1 now supports:
 3. rendering prompt packets for the six core execution stages
 4. writing workflow state and work orders
 5. generating placeholder stage outputs
-6. scaffolding authoritative structured JSON outputs for research and judge stages plus a run-level `sources.json`
-7. scaffolding research and judge claim-sidecar targets inside each run
+6. scaffolding authoritative structured JSON outputs for research, critique, and judge stages plus a run-level `sources.json`
+7. scaffolding research, critique, and judge claim-sidecar targets inside each run
 8. extracting atomic claims from markdown into a claim register with stable `C001`-style IDs and separated provenance/evidence markers
 9. generating a downstream structured final artifact with external references only
 10. automating the current adapter-driven execution split through a separate workflow runner
@@ -32,12 +32,13 @@ The current default automated split is:
 2. `research-a` in Codex and `research-b` in Gemini in parallel
 3. `critique-a-on-b` in Codex and `critique-b-on-a` in Gemini in parallel
 4. `judge` in Gemini
-5. structured-output validation and stage claim sidecar generation for `research-a`, `research-b`, and `judge`
+5. structured-output validation and stage claim sidecar generation for `research-a`, `research-b`, both critiques, and `judge`
 6. claim extraction
 7. final artifact generation
 
-The runner is file-driven and resume-safe. It depends on the selected external CLIs being able to consume a single stage prompt. For structured research and judge stages it now passes both markdown and JSON output targets plus the run-level source-registry path. For stdout-oriented chat adapters such as Gemini and Antigravity, the runner can recover markdown stage artifacts from stdout when the adapter does not write the requested file directly, and it can synthesize structured JSON from markdown as a migration fallback. Antigravity remains supported as an alternate adapter.
+The runner is file-driven and resume-safe. It depends on the selected external CLIs being able to consume a single stage prompt. For structured research, critique, and judge stages it now passes both markdown and JSON output targets plus the run-level source-registry path. A shared stage-validation path handles source-aware JSON validation, markdown-contract backstops, canonical markdown regeneration, and structured claim-map generation for those stages. Structured stages no longer synthesize authoritative JSON from markdown; if JSON is missing, that is a contract failure unless recoverable structured JSON appears in stdout. For stdout-oriented chat adapters such as Gemini and Antigravity, the runner can still recover markdown stage artifacts from stdout as a compatibility path. Antigravity remains supported as an alternate adapter.
 Driver logs record the invoked command, return code, stdout, stderr, output-path status, and a preview of the generated artifact so placeholder or misdirected-output failures can be diagnosed after the fact.
+`workflow-state.json` now advances to terminal run-level statuses such as `completed` and `failed` instead of remaining stuck at `scaffolded` after execution.
 
 ## Canonical Research Lifecycle
 

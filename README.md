@@ -165,13 +165,17 @@ The current structured-contract rollout also expects authoritative JSON artifact
 
 - `research-a` at `stage-outputs/02-research-a.json`
 - `research-b` at `stage-outputs/03-research-b.json`
+- `critique-a-on-b` at `stage-outputs/04-critique-a-on-b.json`
+- `critique-b-on-a` at `stage-outputs/05-critique-b-on-a.json`
 - `judge` at `stage-outputs/06-judge.json`
 
 The run-level source registry lives at:
 
 `~/Projects/research-hub/jobs/my-project-1/runs/run-001/sources.json`
 
-Validated claim sidecars for `research-a`, `research-b`, and `judge` are written into:
+That registry now normalizes source records into explicit source classes such as `external_evidence`, `job_input`, and `recovered_provisional`.
+
+Validated claim sidecars for `research-a`, `research-b`, both critiques, and `judge` are written into:
 
 `~/Projects/research-hub/jobs/my-project-1/runs/run-001/stage-claims/`
 
@@ -182,7 +186,8 @@ Example:
 - `research-a` and `research-b` should consume `stage-outputs/01-intake.json`
 - critiques should consume the relevant research outputs from `stage-outputs/`
 - `judge` should consume the critique outputs from `stage-outputs/`
-- `research-a`, `research-b`, and `judge` must produce valid structured JSON and pass source-aware citation validation before downstream workflow stages continue
+- `research-a`, `research-b`, both critiques, and `judge` must produce valid structured JSON and pass source-aware citation validation before downstream workflow stages continue
+- structured stages are no longer allowed to backfill authoritative JSON from markdown; they must write JSON directly or emit recoverable structured JSON in stdout
 
 The rendered prompt packets and `WORK_ORDER.md` now state these upstream artifact paths explicitly.
 

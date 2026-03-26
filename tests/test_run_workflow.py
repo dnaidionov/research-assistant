@@ -123,7 +123,9 @@ class RunWorkflowTests(unittest.TestCase):
                 "02-research-a.md",
                 "03-research-b.json",
                 "03-research-b.md",
+                "04-critique-a-on-b.json",
                 "04-critique-a-on-b.md",
+                "05-critique-b-on-a.json",
                 "05-critique-b-on-a.md",
                 "06-judge.json",
                 "06-judge.md",
@@ -135,6 +137,8 @@ class RunWorkflowTests(unittest.TestCase):
             [
                 "02-research-a.claims.json",
                 "03-research-b.claims.json",
+                "04-critique-a-on-b.claims.json",
+                "05-critique-b-on-a.claims.json",
                 "06-judge.claims.json",
             ],
         )
@@ -144,6 +148,7 @@ class RunWorkflowTests(unittest.TestCase):
         self.assertIn("workflow-state.json", manifest_paths)
         self.assertIn("sources.json", manifest_paths)
         self.assertIn("stage-outputs/02-research-a.json", manifest_paths)
+        self.assertIn("stage-outputs/04-critique-a-on-b.json", manifest_paths)
         self.assertIn("stage-claims/02-research-a.claims.json", manifest_paths)
 
         research_a_packet = (run_dir / "prompt-packets" / "02-research-a.md").read_text(encoding="utf-8")

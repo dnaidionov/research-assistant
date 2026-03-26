@@ -6,6 +6,8 @@ Critic Role: `{critic_label}`
 Target Role: `{target_label}`
 Depends On: `{depends_on}`
 Expected Output: `{stage_output_path}`
+Expected Structured Output: `{stage_structured_output_path}`
+Run Source Registry: `{source_registry_path}`
 
 ## Objective
 
@@ -22,6 +24,11 @@ Critique the target research pass adversarially. The goal is to find unsupported
 - If a conclusion outruns the cited evidence, classify it as overreach rather than a simple disagreement.
 
 ## Output Contract
+
+Write two artifacts:
+
+- Markdown at `{stage_output_path}`
+- Structured JSON at `{stage_structured_output_path}`
 
 Return markdown using exactly these top-level sections in this order:
 
@@ -70,6 +77,30 @@ Return markdown using exactly these top-level sections in this order:
 
 - Summarize the major failure modes of the target report.
 - State the overall reliability judgment with an explicit confidence label: `Confidence: low|medium|high`.
+
+### Structured JSON Contract
+
+Write JSON with these top-level keys:
+
+- `stage`
+- `supported_claims`
+- `unsupported_claims`
+- `weak_source_issues`
+- `omissions`
+- `overreach`
+- `unresolved_disagreements`
+- `summary`
+- `sources`
+
+Rules:
+
+- `stage` must equal `{stage_id}`.
+- `supported_claims`, `unsupported_claims`, `weak_source_issues`, `omissions`, `overreach`, and `unresolved_disagreements` must be structured lists.
+- `unsupported_claims` should preserve the challenged claim, why support is inadequate, and what evidence would be needed where possible.
+- `summary` may be a string, a list, or an object with `text` and optional `confidence`.
+- Every cited external source id must be declared in `sources`.
+- Every `sources` item must include `id`, `title`, `type`, `authority`, and `locator`.
+- Treat `{source_registry_path}` as read-only reference material. Do not modify it directly; declare sources in this stage JSON and let the runner merge them.
 
 ## Source Materials
 
