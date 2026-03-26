@@ -23,6 +23,7 @@ from _stage_contracts import (
     merge_source_registry,
     parse_markdown_sections,
     persist_source_registry,
+    render_stage_markdown_from_json,
     source_registry_path,
     source_registry_placeholder,
     stage_structured_output_path,
@@ -631,7 +632,12 @@ def run_stage_claim_extraction(
         payload = load_contract_json(json_path)
         claim_map = build_claim_map_from_stage_json(stage_id, payload)
         write_json(claim_output, claim_map)
-        validation_errors = validate_stage_markdown_contract(stage_id, stage_output.read_text(encoding="utf-8"))
+        stage_markdown = stage_output.read_text(encoding="utf-8")
+        validation_errors = validate_stage_markdown_contract(stage_id, stage_markdown)
+        if validation_errors:
+            rendered_markdown = render_stage_markdown_from_json(stage_id, payload)
+            stage_output.write_text(rendered_markdown, encoding="utf-8")
+            validation_errors = validate_stage_markdown_contract(stage_id, rendered_markdown)
         completed_return_code = 0
     else:
         cmd = [

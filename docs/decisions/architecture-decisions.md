@@ -116,6 +116,7 @@ Status:
 - partially implemented
 - `run_workflow.py` now scaffolds authoritative JSON outputs for research and judge stages, plus a run-level `sources.json`
 - `execute_workflow.py` validates those structured artifacts and uses them as the canonical gate for research and judge stages
+- when structured JSON is valid but the paired markdown artifact is weaker than the markdown contract, the runner now regenerates markdown from the structured artifact so downstream markdown-only stages consume a normalized bridge representation
 - critique stages are still markdown-only, and markdown-to-JSON synthesis still exists as a migration fallback when adapters fail to write structured outputs directly
 
 ---

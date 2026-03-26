@@ -320,6 +320,77 @@ def normalize_stage_citations(stage_id: str, payload: dict[str, object]) -> dict
     return normalized
 
 
+def _format_evidence_sources(sources: list[str]) -> str:
+    return f" [{', '.join(sources)}]" if sources else ""
+
+
+def _entry_lines(items: object) -> list[str]:
+    if isinstance(items, str):
+        return [items]
+    lines: list[str] = []
+    if isinstance(items, list):
+        for item in items:
+            text = _entry_text(item)
+            sources = _entry_sources(item)
+            suffix = _format_evidence_sources(sources)
+            lines.append(f"- {text}{suffix}".rstrip())
+    return lines
+
+
+def render_stage_markdown_from_json(stage_id: str, payload: dict[str, object]) -> str:
+    payload = normalize_stage_citations(stage_id, payload)
+    lines: list[str] = []
+
+    if stage_id in {"research-a", "research-b"}:
+        lines.extend(["# Executive Summary", ""])
+        summary_items = payload.get("summary")
+        if isinstance(summary_items, str):
+            lines.append(summary_items)
+        else:
+            for item in summary_items or []:
+                lines.append(_entry_text(item) + _format_evidence_sources(_entry_sources(item)))
+        lines.extend(["", "# Facts", ""])
+        for index, item in enumerate(payload.get("facts", []), start=1):
+            lines.append(f"{index}. {item['text']}{_format_evidence_sources(list(item.get('evidence_sources', [])))}")
+        lines.extend(["", "# Inferences", ""])
+        for index, item in enumerate(payload.get("inferences", []), start=1):
+            lines.append(
+                f"{index}. {item['text']}{_format_evidence_sources(list(item.get('evidence_sources', [])))} Confidence: {item['confidence']}"
+            )
+        lines.extend(["", "# Uncertainty Register", ""])
+        lines.extend(_entry_lines(payload.get("uncertainties")))
+        lines.extend(["", "# Evidence Gaps", ""])
+        lines.extend(_entry_lines(payload.get("evidence_gaps")))
+        lines.extend(["", "# Preliminary Disagreements", ""])
+        lines.extend(_entry_lines(payload.get("preliminary_disagreements")))
+        lines.extend(["", "# Source Evaluation", ""])
+        lines.extend(_entry_lines(payload.get("source_evaluation")))
+        return "\n".join(lines).rstrip() + "\n"
+
+    if stage_id == "judge":
+        lines.extend(["# Supported Conclusions", ""])
+        for index, item in enumerate(payload.get("supported_conclusions", []), start=1):
+            lines.append(f"{index}. {item['text']}{_format_evidence_sources(list(item.get('evidence_sources', [])))}")
+        lines.extend(["", "# Inferences And Synthesis Judgments", ""])
+        for index, item in enumerate(payload.get("synthesis_judgments", []), start=1):
+            lines.append(
+                f"{index}. {item['text']}{_format_evidence_sources(list(item.get('evidence_sources', [])))} Confidence: {item['confidence']}"
+            )
+        lines.extend(["", "# Unresolved Disagreements", ""])
+        lines.extend(_entry_lines(payload.get("unresolved_disagreements")))
+        lines.extend(["", "# Confidence Assessment", ""])
+        lines.extend(_entry_lines(payload.get("confidence_assessment")))
+        lines.extend(["", "# Evidence Gaps", ""])
+        lines.extend(_entry_lines(payload.get("evidence_gaps")))
+        lines.extend(["", "# Rationale And Traceability", ""])
+        lines.extend(_entry_lines(payload.get("rationale")))
+        lines.extend(["", "# Recommended Final Artifact Structure", ""])
+        lines.extend(_entry_lines(payload.get("recommended_artifact_structure")))
+        return "\n".join(lines).rstrip() + "\n"
+
+    raise KeyError(f"Stage {stage_id} does not have a structured markdown contract.")
+
+
 def _require_string(value: object, field_name: str, errors: list[str]) -> None:
     if not isinstance(value, str) or not value.strip():
         errors.append(f"{field_name} must be a non-empty string.")

@@ -88,6 +88,7 @@ Implemented today:
 - stdout-oriented adapters can now recover fenced stage JSON artifacts directly from stdout before falling back to markdown-to-JSON synthesis
 - structured inferences may reference local fact IDs for convenience, but the runner now resolves those references back to canonical external source IDs before validation
 - scaffolded claim-sidecar targets for research and judge stages
+- when structured JSON passes but the paired markdown artifact is weaker than the stage contract, the runner now regenerates canonical markdown from the authoritative JSON so downstream markdown-only stages consume a normalized bridge artifact
 - per-stage driver logs that capture command execution plus output-artifact status for debugging
 - markdown claim extraction with stable IDs
 - structured claim-register generation from judge JSON in the automated workflow path
@@ -104,7 +105,7 @@ Known limitations in the current repo:
 - claim extraction outside the automated structured path is still lexical and markdown-structure-driven, not semantic
 - the claim model is too coarse for adjudication; `fact` and `inference` are not enough
 - structured-output enforcement is partial; only research and judge stages are structure-first today
-- downstream trust is still limited because critiques and some compatibility paths still rely on markdown as a machine-readable exchange format
+- downstream trust is still limited because critiques and some compatibility paths still rely on markdown as a machine-readable exchange format, even though structured stages now rewrite bridge markdown from authoritative JSON
 - provenance vs evidence separation is still marker-based, not semantic
 - the workflow still depends on prompt compliance for canonical citation labels; malformed labels are rejected downstream rather than normalized automatically
 - long-running parallel stages can still delay surfaced failure because the runner waits for sibling futures to settle before exiting the stage group

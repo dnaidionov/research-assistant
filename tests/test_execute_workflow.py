@@ -998,6 +998,157 @@ class ExecuteWorkflowTests(unittest.TestCase):
         judge_sidecar = json.loads((run_dir / "stage-claims" / "06-judge.claims.json").read_text(encoding="utf-8"))
         self.assertEqual(judge_sidecar["status"], "not_started")
 
+    def test_rewrites_structured_stage_markdown_from_valid_json_when_markdown_citations_are_missing(self) -> None:
+        self.gemini_bin.write_text(
+            textwrap.dedent(
+                """\
+                #!/usr/bin/env python3
+                import json
+                import re
+                import sys
+                from pathlib import Path
+
+                prompt = " ".join(sys.argv[1:])
+                output_match = re.search(r"OUTPUT_PATH=(.+)", prompt)
+                json_match = re.search(r"OUTPUT_JSON_PATH=(.+)", prompt)
+                stage_match = re.search(r"STAGE_ID=([a-z0-9-]+)", prompt)
+                if not output_match or not stage_match:
+                    print("missing stage metadata", file=sys.stderr)
+                    sys.exit(2)
+
+                output_path = Path(output_match.group(1).strip())
+                json_path = Path(json_match.group(1).strip()) if json_match else None
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                if json_path is not None:
+                    json_path.parent.mkdir(parents=True, exist_ok=True)
+                stage = stage_match.group(1)
+
+                if stage == "research-b":
+                    output_path.write_text(
+                        "# Executive Summary\\n\\nResearch B summary.\\n\\n"
+                        "# Facts\\n\\n1. Fact. [SRC-200]\\n\\n"
+                        "# Inferences\\n\\n1. Inference without markdown citation. Confidence: high\\n\\n"
+                        "# Uncertainty Register\\n\\n- Gap.\\n\\n"
+                        "# Evidence Gaps\\n\\n- More data.\\n\\n"
+                        "# Preliminary Disagreements\\n\\n- Trade-off remains.\\n\\n"
+                        "# Source Evaluation\\n\\n- Source quality note.\\n",
+                        encoding="utf-8",
+                    )
+                    json_path.write_text(
+                        json.dumps(
+                            {
+                                "stage": "research-b",
+                                "summary": "Research B summary.",
+                                "facts": [{"id": "F-200", "text": "Fact.", "evidence_sources": ["SRC-200"]}],
+                                "inferences": [{"id": "I-200", "text": "Inference from valid JSON.", "evidence_sources": ["SRC-200"], "confidence": "high"}],
+                                "uncertainties": ["Gap."],
+                                "evidence_gaps": ["More data."],
+                                "preliminary_disagreements": ["Trade-off remains."],
+                                "source_evaluation": ["Source quality note."],
+                                "sources": [
+                                    {
+                                        "id": "SRC-200",
+                                        "title": "Canonical stage source",
+                                        "type": "report",
+                                        "authority": "fixture",
+                                        "locator": "https://example.com/src-200",
+                                    }
+                                ],
+                            },
+                            indent=2,
+                        ),
+                        encoding="utf-8",
+                    )
+                    sys.exit(0)
+
+                if stage == "critique-b-on-a":
+                    output_path.write_text(
+                        "# Claims That Survive Review\\n\\n- One claim survives review. [SRC-210]\\n\\n"
+                        "# Unsupported Claims\\n\\n- Some claims need stronger support. [SRC-211]\\n\\n"
+                        "# Weak Sources Or Citation Problems\\n\\n- One citation is indirect. [SRC-212]\\n\\n"
+                        "# Omissions And Missing Alternatives\\n\\n- Missing alternative analysis. [SRC-213]\\n\\n"
+                        "# Overreach And Overconfident Inference\\n\\n- One conclusion is too strong. [SRC-214]\\n\\n"
+                        "# Unresolved Disagreements For Judge\\n\\n- Option A vs B remains disputed. [SRC-215]\\n\\n"
+                        "# Overall Critique Summary\\n\\n- Reliability is mixed. Confidence: medium\\n",
+                        encoding="utf-8",
+                    )
+                    sys.exit(0)
+
+                if stage == "judge":
+                    output_path.write_text(
+                        "# Supported Conclusions\\n\\n1. Option A has lower implementation risk. [SRC-200]\\n\\n"
+                        "# Inferences And Synthesis Judgments\\n\\n1. Option A is the safer near-term choice. [SRC-200] Confidence: medium\\n\\n"
+                        "# Unresolved Disagreements\\n\\n- Trade-off remains unresolved. [SRC-215]\\n\\n"
+                        "# Confidence Assessment\\n\\n- Medium confidence because evidence is incomplete. [SRC-200]\\n\\n"
+                        "# Evidence Gaps\\n\\n- Comparative benchmark is still missing. [SRC-216]\\n\\n"
+                        "# Rationale And Traceability\\n\\n- Research B preserved the strongest cited inference.\\n\\n"
+                        "# Recommended Final Artifact Structure\\n\\n- Summary, evidence, recommendation, uncertainty, references.\\n",
+                        encoding="utf-8",
+                    )
+                    json_path.write_text(
+                        json.dumps(
+                            {
+                                "stage": "judge",
+                                "supported_conclusions": [
+                                    {"id": "C-200", "text": "Option A has lower implementation risk.", "evidence_sources": ["SRC-200"]}
+                                ],
+                                "synthesis_judgments": [
+                                    {"id": "J-200", "text": "Option A is the safer near-term choice.", "evidence_sources": ["SRC-200"], "confidence": "medium"}
+                                ],
+                                "unresolved_disagreements": ["Trade-off remains unresolved."],
+                                "confidence_assessment": ["Medium confidence because evidence is incomplete."],
+                                "evidence_gaps": ["Comparative benchmark is still missing."],
+                                "rationale": ["Research B preserved the strongest cited inference."],
+                                "recommended_artifact_structure": ["Summary, evidence, recommendation, uncertainty, references."],
+                                "sources": [
+                                    {
+                                        "id": "SRC-200",
+                                        "title": "Canonical stage source",
+                                        "type": "report",
+                                        "authority": "fixture",
+                                        "locator": "https://example.com/src-200",
+                                    }
+                                ],
+                            },
+                            indent=2,
+                        ),
+                        encoding="utf-8",
+                    )
+                    sys.exit(0)
+
+                print("fallback", file=sys.stderr)
+                sys.exit(0)
+                """
+            ),
+            encoding="utf-8",
+        )
+        self.gemini_bin.chmod(0o755)
+
+        result = subprocess.run(
+            [
+                "python3",
+                str(EXECUTE_WORKFLOW),
+                "--job-path",
+                str(self.job_dir),
+                "--run-id",
+                "run-markdown-rewrite",
+                "--codex-bin",
+                str(self.codex_bin),
+                "--gemini-bin",
+                str(self.gemini_bin),
+                "--antigravity-bin",
+                str(self.antigravity_bin),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rewritten_markdown = (self.job_dir / "runs" / "run-markdown-rewrite" / "stage-outputs" / "03-research-b.md").read_text(encoding="utf-8")
+        self.assertIn("[SRC-200]", rewritten_markdown)
+        self.assertIn("Confidence: high", rewritten_markdown)
+
     def test_rejects_unknown_adapter_name(self) -> None:
         result = subprocess.run(
             [
