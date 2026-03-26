@@ -102,6 +102,17 @@ Rules:
 - Every `supported_conclusions` item must contain `id`, `text`, and `evidence_sources`.
 - Every `synthesis_judgments` item must contain `id`, `text`, `evidence_sources`, and `confidence`.
 - `confidence` must be `low`, `medium`, or `high`.
+- `unresolved_disagreements` may be either:
+  - a list of strings or `{{ "text": ... }}` entries, or
+  - a list of structured disagreement objects with `point`, `case_a`, `case_b`, and `reason_unresolved`
+- `confidence_assessment` may be either:
+  - a string
+  - a list of strings or `{{ "text": ... }}` entries
+  - an object with `summary` and optional `topics`, where each topic contains `topic`, optional `confidence`, and `rationale`
+- `recommended_artifact_structure` may be either:
+  - a string
+  - a list of strings or `{{ "text": ... }}` entries
+  - an object with `sections`, where `sections` is a list of section titles
 - Every cited external source id must be declared in `sources`.
 - Every `sources` item must include `id`, `title`, `type`, `authority`, and `locator`.
 - Workflow-stage references may appear in `rationale` for provenance, but never as evidence.

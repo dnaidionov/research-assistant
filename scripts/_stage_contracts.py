@@ -337,6 +337,69 @@ def _entry_lines(items: object) -> list[str]:
     return lines
 
 
+def _judge_disagreement_lines(items: object) -> list[str]:
+    if isinstance(items, str):
+        return [f"- {items}"]
+    lines: list[str] = []
+    if isinstance(items, list):
+        for index, item in enumerate(items, start=1):
+            if isinstance(item, dict) and isinstance(item.get("point"), str) and item.get("point", "").strip():
+                lines.append(f"{index}. {item['point']}")
+                case_a = item.get("case_a")
+                case_b = item.get("case_b")
+                unresolved = item.get("reason_unresolved")
+                if isinstance(case_a, str) and case_a.strip():
+                    lines.append(f"   Case A: {case_a}")
+                if isinstance(case_b, str) and case_b.strip():
+                    lines.append(f"   Case B: {case_b}")
+                if isinstance(unresolved, str) and unresolved.strip():
+                    lines.append(f"   Why unresolved: {unresolved}")
+                continue
+            text = _entry_text(item)
+            sources = _entry_sources(item)
+            suffix = _format_evidence_sources(sources)
+            lines.append(f"{index}. {text}{suffix}".rstrip())
+    return lines
+
+
+def _judge_confidence_lines(items: object) -> list[str]:
+    if isinstance(items, dict):
+        lines: list[str] = []
+        summary = items.get("summary")
+        if isinstance(summary, str) and summary.strip():
+            lines.append(f"- {summary}")
+        topics = items.get("topics")
+        if isinstance(topics, list):
+            for topic in topics:
+                if isinstance(topic, dict):
+                    parts = []
+                    topic_name = topic.get("topic")
+                    confidence = topic.get("confidence")
+                    rationale = topic.get("rationale")
+                    if isinstance(topic_name, str) and topic_name.strip():
+                        parts.append(topic_name)
+                    if isinstance(confidence, str) and confidence.strip():
+                        parts.append(f"Confidence: {confidence}")
+                    if isinstance(rationale, str) and rationale.strip():
+                        parts.append(rationale)
+                    if parts:
+                        lines.append(f"- {'; '.join(parts)}")
+                elif isinstance(topic, str) and topic.strip():
+                    lines.append(f"- {topic}")
+        return lines
+    entry_lines = _entry_lines(items)
+    return [line if line.startswith("- ") else f"- {line}" for line in entry_lines]
+
+
+def _judge_recommended_structure_lines(items: object) -> list[str]:
+    if isinstance(items, dict):
+        sections = items.get("sections")
+        if isinstance(sections, list):
+            return [f"- {section}" for section in sections if isinstance(section, str) and section.strip()]
+    entry_lines = _entry_lines(items)
+    return [line if line.startswith("- ") else f"- {line}" for line in entry_lines]
+
+
 def render_stage_markdown_from_json(stage_id: str, payload: dict[str, object]) -> str:
     payload = normalize_stage_citations(stage_id, payload)
     lines: list[str] = []
@@ -377,15 +440,15 @@ def render_stage_markdown_from_json(stage_id: str, payload: dict[str, object]) -
                 f"{index}. {item['text']}{_format_evidence_sources(list(item.get('evidence_sources', [])))} Confidence: {item['confidence']}"
             )
         lines.extend(["", "# Unresolved Disagreements", ""])
-        lines.extend(_entry_lines(payload.get("unresolved_disagreements")))
+        lines.extend(_judge_disagreement_lines(payload.get("unresolved_disagreements")))
         lines.extend(["", "# Confidence Assessment", ""])
-        lines.extend(_entry_lines(payload.get("confidence_assessment")))
+        lines.extend(_judge_confidence_lines(payload.get("confidence_assessment")))
         lines.extend(["", "# Evidence Gaps", ""])
         lines.extend(_entry_lines(payload.get("evidence_gaps")))
         lines.extend(["", "# Rationale And Traceability", ""])
         lines.extend(_entry_lines(payload.get("rationale")))
         lines.extend(["", "# Recommended Final Artifact Structure", ""])
-        lines.extend(_entry_lines(payload.get("recommended_artifact_structure")))
+        lines.extend(_judge_recommended_structure_lines(payload.get("recommended_artifact_structure")))
         return "\n".join(lines).rstrip() + "\n"
 
     raise KeyError(f"Stage {stage_id} does not have a structured markdown contract.")
@@ -467,6 +530,69 @@ def _validate_text_entry_list(items: object, field_name: str, errors: list[str])
             errors.append(f"{field_name}[{position}] must be a string or object.")
             continue
         _require_string(item.get("text"), f"{field_name}[{position}].text", errors)
+
+
+def _validate_judge_unresolved_disagreements(items: object, errors: list[str]) -> None:
+    if isinstance(items, str):
+        if not items.strip():
+            errors.append("unresolved_disagreements must not be empty.")
+        return
+    if not isinstance(items, list):
+        errors.append("unresolved_disagreements must be a list.")
+        return
+    for position, item in enumerate(items, start=1):
+        if isinstance(item, str):
+            if not item.strip():
+                errors.append(f"unresolved_disagreements[{position}] must not be empty.")
+            continue
+        if not isinstance(item, dict):
+            errors.append(f"unresolved_disagreements[{position}] must be a string or object.")
+            continue
+        if any(key in item for key in ("point", "case_a", "case_b", "reason_unresolved")):
+            _require_string(item.get("point"), f"unresolved_disagreements[{position}].point", errors)
+            _require_string(item.get("case_a"), f"unresolved_disagreements[{position}].case_a", errors)
+            _require_string(item.get("case_b"), f"unresolved_disagreements[{position}].case_b", errors)
+            _require_string(item.get("reason_unresolved"), f"unresolved_disagreements[{position}].reason_unresolved", errors)
+            continue
+        _require_string(item.get("text"), f"unresolved_disagreements[{position}].text", errors)
+
+
+def _validate_confidence_assessment(items: object, errors: list[str]) -> None:
+    if isinstance(items, dict):
+        _require_string(items.get("summary"), "confidence_assessment.summary", errors)
+        topics = items.get("topics")
+        if topics is not None:
+            if not isinstance(topics, list):
+                errors.append("confidence_assessment.topics must be a list.")
+            else:
+                for position, topic in enumerate(topics, start=1):
+                    if isinstance(topic, str):
+                        if not topic.strip():
+                            errors.append(f"confidence_assessment.topics[{position}] must not be empty.")
+                        continue
+                    if not isinstance(topic, dict):
+                        errors.append(f"confidence_assessment.topics[{position}] must be a string or object.")
+                        continue
+                    _require_string(topic.get("topic"), f"confidence_assessment.topics[{position}].topic", errors)
+                    confidence = topic.get("confidence")
+                    if confidence is not None and confidence not in {"low", "medium", "high"}:
+                        errors.append(f"confidence_assessment.topics[{position}].confidence must be low, medium, or high.")
+                    _require_string(topic.get("rationale"), f"confidence_assessment.topics[{position}].rationale", errors)
+        return
+    _validate_text_entry_list(items, "confidence_assessment", errors)
+
+
+def _validate_recommended_artifact_structure(items: object, errors: list[str]) -> None:
+    if isinstance(items, dict):
+        sections = items.get("sections")
+        if not isinstance(sections, list):
+            errors.append("recommended_artifact_structure.sections must be a list.")
+            return
+        for position, section in enumerate(sections, start=1):
+            if not isinstance(section, str) or not section.strip():
+                errors.append(f"recommended_artifact_structure.sections[{position}] must be a non-empty string.")
+        return
+    _validate_text_entry_list(items, "recommended_artifact_structure", errors)
 
 
 def _validate_flexible_object_list(
@@ -581,11 +707,11 @@ def validate_stage_json(stage_id: str, payload: dict[str, object], source_regist
         require_id=True,
         require_confidence=True,
     )
-    _validate_text_entry_list(payload.get("unresolved_disagreements"), "unresolved_disagreements", errors)
-    _validate_text_entry_list(payload.get("confidence_assessment"), "confidence_assessment", errors)
+    _validate_judge_unresolved_disagreements(payload.get("unresolved_disagreements"), errors)
+    _validate_confidence_assessment(payload.get("confidence_assessment"), errors)
     _validate_text_entry_list(payload.get("evidence_gaps"), "evidence_gaps", errors)
     _validate_text_entry_list(payload.get("rationale"), "rationale", errors)
-    _validate_text_entry_list(payload.get("recommended_artifact_structure"), "recommended_artifact_structure", errors)
+    _validate_recommended_artifact_structure(payload.get("recommended_artifact_structure"), errors)
     return errors
 
 
@@ -664,6 +790,9 @@ def _entry_text(item: object) -> str:
     if isinstance(item, dict):
         for key in (
             "text",
+            "point",
+            "summary",
+            "topic",
             "issue",
             "reason",
             "impact",
@@ -755,15 +884,40 @@ def build_claim_map_from_stage_json(stage_id: str, payload: dict[str, object]) -
                 evidence_sources=_entry_sources(item),
                 section="Unresolved Disagreements",
             )
-        for index, item in enumerate(payload.get("confidence_assessment", []), start=1):
-            _append_claim(
-                claims,
-                claim_id=f"judge-confidence-{index:03d}",
-                text=_entry_text(item),
-                claim_type="evaluation",
-                evidence_sources=_entry_sources(item),
-                section="Confidence Assessment",
-            )
+        confidence_assessment = payload.get("confidence_assessment", [])
+        if isinstance(confidence_assessment, dict):
+            summary = confidence_assessment.get("summary")
+            if isinstance(summary, str) and summary.strip():
+                _append_claim(
+                    claims,
+                    claim_id="judge-confidence-001",
+                    text=summary,
+                    claim_type="evaluation",
+                    evidence_sources=[],
+                    section="Confidence Assessment",
+                )
+            topics = confidence_assessment.get("topics")
+            if isinstance(topics, list):
+                for index, item in enumerate(topics, start=1):
+                    _append_claim(
+                        claims,
+                        claim_id=f"judge-confidence-topic-{index:03d}",
+                        text=_entry_text(item),
+                        claim_type="evaluation",
+                        evidence_sources=_entry_sources(item),
+                        section="Confidence Assessment",
+                    )
+        else:
+            confidence_items = [confidence_assessment] if isinstance(confidence_assessment, str) else confidence_assessment
+            for index, item in enumerate(confidence_items, start=1):
+                _append_claim(
+                    claims,
+                    claim_id=f"judge-confidence-{index:03d}",
+                    text=_entry_text(item),
+                    claim_type="evaluation",
+                    evidence_sources=_entry_sources(item),
+                    section="Confidence Assessment",
+                )
         for index, item in enumerate(payload.get("evidence_gaps", []), start=1):
             _append_claim(
                 claims,
@@ -773,7 +927,14 @@ def build_claim_map_from_stage_json(stage_id: str, payload: dict[str, object]) -
                 evidence_sources=_entry_sources(item),
                 section="Evidence Gaps",
             )
-        for index, item in enumerate(payload.get("recommended_artifact_structure", []), start=1):
+        recommended_structure = payload.get("recommended_artifact_structure", [])
+        if isinstance(recommended_structure, dict):
+            structure_items = recommended_structure.get("sections", [])
+        elif isinstance(recommended_structure, str):
+            structure_items = [recommended_structure]
+        else:
+            structure_items = recommended_structure
+        for index, item in enumerate(structure_items, start=1):
             text = _entry_text(item)
             _append_claim(
                 claims,

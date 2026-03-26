@@ -8,7 +8,13 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from _stage_contracts import normalize_stage_citations, source_registry_placeholder, validate_stage_json
+from _stage_contracts import (
+    build_claim_map_from_stage_json,
+    normalize_stage_citations,
+    render_stage_markdown_from_json,
+    source_registry_placeholder,
+    validate_stage_json,
+)
 
 
 class StageContractTests(unittest.TestCase):
@@ -179,6 +185,106 @@ class StageContractTests(unittest.TestCase):
 
         self.assertEqual(normalized["inferences"][0]["evidence_sources"], ["SRC-001", "SRC-002"])
         self.assertEqual(errors, [], errors)
+
+    def test_accepts_flexible_non_critical_judge_sections(self) -> None:
+        payload = {
+            "stage": "judge",
+            "supported_conclusions": [
+                {"id": "SC-001", "text": "Hybrid edge architecture is feasible.", "evidence_sources": ["SRC-001"]}
+            ],
+            "synthesis_judgments": [
+                {
+                    "id": "SJ-001",
+                    "text": "Thermal design is the main blocker.",
+                    "evidence_sources": ["SRC-001", "SRC-002"],
+                    "confidence": "high",
+                }
+            ],
+            "unresolved_disagreements": [
+                {
+                    "point": "Platform choice",
+                    "case_a": "Jetson provides higher headroom.",
+                    "case_b": "Host plus accelerator reduces thermal load.",
+                    "reason_unresolved": "System power budget is still unknown.",
+                }
+            ],
+            "confidence_assessment": {
+                "summary": "High confidence in feasibility, medium confidence in platform choice.",
+                "topics": [
+                    {
+                        "topic": "Feasibility",
+                        "confidence": "high",
+                        "rationale": "The compute path is supported by cited module capabilities.",
+                    }
+                ],
+            },
+            "evidence_gaps": ["Measured enclosure thermals under sustained compute load."],
+            "rationale": "Judge favors the hybrid path but preserves the power dispute for auditability.",
+            "recommended_artifact_structure": {
+                "sections": ["Executive Summary", "Architecture", "Thermal Risks", "Roadmap"]
+            },
+            "sources": [
+                {"id": "SRC-001", "title": "Source 1", "type": "document", "authority": "vendor", "locator": "https://example.com/src-001"},
+                {"id": "SRC-002", "title": "Source 2", "type": "document", "authority": "vendor", "locator": "https://example.com/src-002"},
+            ],
+        }
+        registry = source_registry_placeholder("run-xyz")
+
+        errors = validate_stage_json("judge", payload, registry)
+
+        self.assertEqual(errors, [], errors)
+
+    def test_builds_claim_map_and_markdown_from_flexible_judge_sections(self) -> None:
+        payload = {
+            "stage": "judge",
+            "supported_conclusions": [
+                {"id": "SC-001", "text": "Hybrid edge architecture is feasible.", "evidence_sources": ["SRC-001"]}
+            ],
+            "synthesis_judgments": [
+                {
+                    "id": "SJ-001",
+                    "text": "Thermal design is the main blocker.",
+                    "evidence_sources": ["SRC-001", "SRC-002"],
+                    "confidence": "high",
+                }
+            ],
+            "unresolved_disagreements": [
+                {
+                    "point": "Platform choice",
+                    "case_a": "Jetson provides higher headroom.",
+                    "case_b": "Host plus accelerator reduces thermal load.",
+                    "reason_unresolved": "System power budget is still unknown.",
+                }
+            ],
+            "confidence_assessment": {
+                "summary": "High confidence in feasibility, medium confidence in platform choice.",
+                "topics": [
+                    {
+                        "topic": "Feasibility",
+                        "confidence": "high",
+                        "rationale": "The compute path is supported by cited module capabilities.",
+                    }
+                ],
+            },
+            "evidence_gaps": ["Measured enclosure thermals under sustained compute load."],
+            "rationale": "Judge favors the hybrid path but preserves the power dispute for auditability.",
+            "recommended_artifact_structure": {
+                "sections": ["Executive Summary", "Architecture", "Thermal Risks", "Roadmap"]
+            },
+            "sources": [
+                {"id": "SRC-001", "title": "Source 1", "type": "document", "authority": "vendor", "locator": "https://example.com/src-001"},
+                {"id": "SRC-002", "title": "Source 2", "type": "document", "authority": "vendor", "locator": "https://example.com/src-002"},
+            ],
+        }
+
+        claim_map = build_claim_map_from_stage_json("judge", payload)
+        markdown = render_stage_markdown_from_json("judge", payload)
+
+        self.assertTrue(any(claim["text"] == "Platform choice" for claim in claim_map["claims"]))
+        self.assertTrue(any(claim["text"] == "Executive Summary" for claim in claim_map["claims"]))
+        self.assertIn("Platform choice", markdown)
+        self.assertIn("High confidence in feasibility, medium confidence in platform choice.", markdown)
+        self.assertIn("- Executive Summary", markdown)
 
 
 if __name__ == "__main__":

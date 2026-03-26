@@ -89,6 +89,7 @@ Implemented today:
 - structured inferences may reference local fact IDs for convenience, but the runner now resolves those references back to canonical external source IDs before validation
 - scaffolded claim-sidecar targets for research and judge stages
 - when structured JSON passes but the paired markdown artifact is weaker than the stage contract, the runner now regenerates canonical markdown from the authoritative JSON so downstream markdown-only stages consume a normalized bridge artifact
+- judge validation now accepts richer non-core synthesis structures such as disagreement objects, topic-based confidence summaries, and object-based recommended artifact outlines, and the bridge layers normalize those shapes for markdown and claim-map consumers
 - per-stage driver logs that capture command execution plus output-artifact status for debugging
 - markdown claim extraction with stable IDs
 - structured claim-register generation from judge JSON in the automated workflow path

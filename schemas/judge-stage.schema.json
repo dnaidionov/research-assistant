@@ -38,11 +38,89 @@
         }
       }
     },
-    "unresolved_disagreements": {"type": "array"},
-    "confidence_assessment": {"type": "array"},
-    "evidence_gaps": {"type": "array"},
-    "rationale": {"type": "array"},
-    "recommended_artifact_structure": {"type": "array"},
+    "unresolved_disagreements": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {"type": "string"},
+          {
+            "type": "object",
+            "required": ["text"],
+            "properties": {
+              "text": {"type": "string"}
+            }
+          },
+          {
+            "type": "object",
+            "required": ["point", "case_a", "case_b", "reason_unresolved"],
+            "properties": {
+              "point": {"type": "string"},
+              "case_a": {"type": "string"},
+              "case_b": {"type": "string"},
+              "reason_unresolved": {"type": "string"}
+            }
+          }
+        ]
+      }
+    },
+    "confidence_assessment": {
+      "oneOf": [
+        {"type": "string"},
+        {"type": "array"},
+        {
+          "type": "object",
+          "required": ["summary"],
+          "properties": {
+            "summary": {"type": "string"},
+            "topics": {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {"type": "string"},
+                  {
+                    "type": "object",
+                    "required": ["topic", "rationale"],
+                    "properties": {
+                      "topic": {"type": "string"},
+                      "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                      "rationale": {"type": "string"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "evidence_gaps": {
+      "oneOf": [
+        {"type": "string"},
+        {"type": "array"}
+      ]
+    },
+    "rationale": {
+      "oneOf": [
+        {"type": "string"},
+        {"type": "array"}
+      ]
+    },
+    "recommended_artifact_structure": {
+      "oneOf": [
+        {"type": "string"},
+        {"type": "array"},
+        {
+          "type": "object",
+          "required": ["sections"],
+          "properties": {
+            "sections": {
+              "type": "array",
+              "items": {"type": "string"}
+            }
+          }
+        }
+      ]
+    },
     "sources": {"type": "array"}
   }
 }
