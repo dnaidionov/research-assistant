@@ -84,6 +84,7 @@ class ExtractClaimsTests(unittest.TestCase):
             self.assertEqual(payload["summary"]["claim_type_counts"]["fact"], 2)
             self.assertEqual(payload["summary"]["claim_type_counts"]["inference"], 1)
             self.assertEqual(payload["summary"]["provenance_only_fact_ids"], [])
+            self.assertEqual(payload["summary"]["uncited_inference_ids"], [])
 
     def test_strict_mode_rejects_uncited_facts(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -150,6 +151,38 @@ class ExtractClaimsTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("provenance-only", result.stderr.lower())
+
+    def test_strict_mode_rejects_uncited_inferences(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "report.md"
+            output_path = Path(tmpdir) / "claims.json"
+            input_path.write_text(
+                "\n".join(
+                    [
+                        "## Inferences",
+                        "- This likely improves the workflow. Confidence: medium",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(EXTRACT_CLAIMS),
+                    "--input",
+                    str(input_path),
+                    "--output",
+                    str(output_path),
+                    "--strict",
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("uncited inference", result.stderr.lower())
 
     def test_handles_imperfect_markdown_and_splits_atomic_claims(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -257,6 +290,111 @@ class ExtractClaimsTests(unittest.TestCase):
             self.assertEqual(payload["claims"][0]["type"], "evaluation")
             self.assertEqual(payload["claims"][0]["provenance"], ["JUDGE"])
             self.assertEqual(payload["claims"][0]["evidence_sources"], ["SRC-020"])
+
+    def test_judge_stage_references_do_not_count_as_external_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "judge.md"
+            output_path = Path(tmpdir) / "claims.json"
+            input_path.write_text(
+                "\n".join(
+                    [
+                        "# Supported Conclusions",
+                        "1. Option A is feasible. [02-research-a][03-research-b]",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(EXTRACT_CLAIMS),
+                    "--input",
+                    str(input_path),
+                    "--output",
+                    str(output_path),
+                    "--strict",
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            claim = payload["claims"][0]
+            self.assertEqual(claim["evidence_sources"], [])
+            self.assertEqual(claim["unclassified_markers"], ["02-research-a", "03-research-b"])
+            self.assertEqual(payload["summary"]["uncited_fact_ids"], ["C001"])
+
+    def test_classifies_disagreements_and_confidence_as_non_fact_claims(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "judge.md"
+            output_path = Path(tmpdir) / "claims.json"
+            input_path.write_text(
+                "\n".join(
+                    [
+                        "# Unresolved Disagreements",
+                        "1. **Hardware Selection (NVIDIA vs. Xilinx/TI):** Trade-off remains unresolved due to missing ADC data.",
+                        "",
+                        "# Confidence Assessment",
+                        "- **Medium Confidence:** Specific hardware selection remains uncertain.",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(EXTRACT_CLAIMS),
+                    "--input",
+                    str(input_path),
+                    "--output",
+                    str(output_path),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual([claim["type"] for claim in payload["claims"]], ["evaluation", "evaluation"])
+            self.assertEqual(payload["summary"]["uncited_fact_ids"], [])
+
+    def test_does_not_split_on_vs_abbreviation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "judge.md"
+            output_path = Path(tmpdir) / "claims.json"
+            input_path.write_text(
+                "\n".join(
+                    [
+                        "# Unresolved Disagreements",
+                        "1. **Hardware Selection (NVIDIA vs. Xilinx/TI):** Trade-off remains unresolved. [SRC-001]",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(EXTRACT_CLAIMS),
+                    "--input",
+                    str(input_path),
+                    "--output",
+                    str(output_path),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(len(payload["claims"]), 1)
+            self.assertIn("NVIDIA vs. Xilinx/TI", payload["claims"][0]["text"])
 
     def test_classifies_evidence_gaps_and_open_questions(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

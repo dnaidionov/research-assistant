@@ -5,6 +5,8 @@ Run ID: `{run_id}`
 Role: `{researcher_label}`
 Depends On: `{depends_on}`
 Expected Output: `{stage_output_path}`
+Expected Structured Output: `{stage_structured_output_path}`
+Run Source Registry: `{source_registry_path}`
 
 ## Objective
 
@@ -13,6 +15,8 @@ Produce an independent research pass. This pass must stand on its own and must n
 ## Non-Negotiable Rules
 
 - Every factual claim must include citations inline.
+- Use auditable external source IDs such as `[SRC-001]` or `[DOC-001]` for factual support.
+- Do not invent citation labels such as `[Brief]` or `[SRC-HW]` unless the packet already defines them explicitly.
 - Separate facts from inferences in distinct sections.
 - Record open questions and evidence gaps explicitly.
 - Do not speculate beyond what the cited material supports.
@@ -21,6 +25,11 @@ Produce an independent research pass. This pass must stand on its own and must n
 - Source quality matters. If a source is weak, say so instead of laundering it into a stronger claim.
 
 ## Output Contract
+
+Write two artifacts:
+
+- Markdown at `{stage_output_path}`
+- Structured JSON at `{stage_structured_output_path}`
 
 Return markdown using exactly these top-level sections in this order:
 
@@ -51,6 +60,7 @@ Return markdown using exactly these top-level sections in this order:
 - Use numbered items.
 - Each item must express one inference, interpretation, forecast, or synthesis step.
 - Each item must cite the supporting evidence it relies on.
+- Confidence labels are not citations and do not replace them.
 - Each item must end with an explicit confidence label: `Confidence: low|medium|high`.
 
 #### `# Uncertainty Register`
@@ -69,6 +79,31 @@ Return markdown using exactly these top-level sections in this order:
 #### `# Source Evaluation`
 
 - For each meaningful source group used, note source quality, likely limitations, and any bias or freshness concerns.
+
+### Structured JSON Contract
+
+Write JSON with these top-level keys:
+
+- `stage`
+- `summary`
+- `facts`
+- `inferences`
+- `uncertainties`
+- `evidence_gaps`
+- `preliminary_disagreements`
+- `source_evaluation`
+- `sources`
+
+Rules:
+
+- `stage` must equal `{stage_id}`.
+- Every `facts` item must contain `id`, `text`, and `evidence_sources`.
+- Every `inferences` item must contain `id`, `text`, `evidence_sources`, and `confidence`.
+- `confidence` must be `low`, `medium`, or `high`.
+- Every cited source id must be declared in `sources`.
+- Every `sources` item must include `id`, `title`, `type`, `authority`, and `locator`.
+- Preserve canonical external source IDs. Do not use workflow-stage references as evidence.
+- Treat `{source_registry_path}` as read-only reference material. Do not modify it directly; declare sources in this stage JSON and let the runner merge them.
 
 ## Source Materials
 

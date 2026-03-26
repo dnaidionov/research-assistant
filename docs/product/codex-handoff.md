@@ -19,21 +19,25 @@ The current v1 now supports:
 3. rendering prompt packets for the six core execution stages
 4. writing workflow state and work orders
 5. generating placeholder stage outputs
-6. extracting atomic claims from markdown into a claim register with stable `C001`-style IDs and separated provenance/evidence markers
-7. generating a downstream structured final artifact with external references only
-8. automating the current Codex/Antigravity execution split through a separate workflow runner
-9. preserving audit artifacts inside the job repo
+6. scaffolding authoritative structured JSON outputs for research and judge stages plus a run-level `sources.json`
+7. scaffolding research and judge claim-sidecar targets inside each run
+8. extracting atomic claims from markdown into a claim register with stable `C001`-style IDs and separated provenance/evidence markers
+9. generating a downstream structured final artifact with external references only
+10. automating the current adapter-driven execution split through a separate workflow runner
+11. preserving audit artifacts inside the job repo
 
-The current automated split is:
+The current default automated split is:
 
 1. `intake` in Codex
-2. `research-a` in Codex and `research-b` in Antigravity in parallel
-3. `critique-a-on-b` in Codex and `critique-b-on-a` in Antigravity in parallel
-4. `judge` in Antigravity
-5. claim extraction
-6. final artifact generation
+2. `research-a` in Codex and `research-b` in Gemini in parallel
+3. `critique-a-on-b` in Codex and `critique-b-on-a` in Gemini in parallel
+4. `judge` in Gemini
+5. structured-output validation and stage claim sidecar generation for `research-a`, `research-b`, and `judge`
+6. claim extraction
+7. final artifact generation
 
-The runner is file-driven and resume-safe. It depends on the external CLIs being able to consume a single stage prompt and write the requested artifact path non-interactively.
+The runner is file-driven and resume-safe. It depends on the selected external CLIs being able to consume a single stage prompt. For structured research and judge stages it now passes both markdown and JSON output targets plus the run-level source-registry path. For stdout-oriented chat adapters such as Gemini and Antigravity, the runner can recover markdown stage artifacts from stdout when the adapter does not write the requested file directly, and it can synthesize structured JSON from markdown as a migration fallback. Antigravity remains supported as an alternate adapter.
+Driver logs record the invoked command, return code, stdout, stderr, output-path status, and a preview of the generated artifact so placeholder or misdirected-output failures can be diagnosed after the fact.
 
 ## Canonical Research Lifecycle
 
@@ -46,7 +50,7 @@ The runner is file-driven and resume-safe. It depends on the external CLIs being
 7. claim extraction
 8. artifact writing
 
-`scripts/run_workflow.py` currently scaffolds stages 1 through 6. `scripts/execute_workflow.py` can now run those six stages with the current Codex/Antigravity split and then trigger downstream claim extraction and artifact writing.
+`scripts/run_workflow.py` currently scaffolds stages 1 through 6. `scripts/execute_workflow.py` can now run those six stages with the current adapter-driven split and then trigger downstream claim extraction and artifact writing.
 
 ## Constraints
 
@@ -62,6 +66,8 @@ Inside a job repo:
 
 - `runs/<run-id>/prompt-packets/`
 - `runs/<run-id>/stage-outputs/`
+- `runs/<run-id>/stage-claims/`
+- `runs/<run-id>/sources.json`
 - `runs/<run-id>/workflow-state.json`
 - `runs/<run-id>/WORK_ORDER.md`
 - `runs/<run-id>/audit/`

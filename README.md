@@ -63,6 +63,11 @@ Each job:
 3. Run research workflow
 4. Store all outputs inside the job repo
 
+For the current design assessment and forward plan, see:
+
+- [Product Spec](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/product-spec.md)
+- [Redesign Proposal](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/redesign-proposal.md)
+
 ## Operator Quickstart
 
 This is the shortest direct path to using the framework as it exists today.
@@ -128,6 +133,8 @@ This creates:
 
 - `runs/run-001/prompt-packets/`
 - `runs/run-001/stage-outputs/`
+- `runs/run-001/stage-claims/`
+- `runs/run-001/sources.json`
 - `runs/run-001/workflow-state.json`
 - `runs/run-001/WORK_ORDER.md`
 - `runs/run-001/audit/`
@@ -135,10 +142,7 @@ This creates:
 
 ### 4. Execute the six scaffolded stages
 
-You now have two options:
-
-- run the workflow manually stage by stage
-- use the automated orchestrator if you split execution between Codex and Antigravity
+This section describes the manual path. If you use the automated CLI-adapter runner, skip ahead to step 7.
 
 Open the rendered prompt packets under:
 
@@ -157,6 +161,20 @@ Put the actual outputs into:
 
 `~/Projects/research-hub/jobs/my-project-1/runs/run-001/stage-outputs/`
 
+The current structured-contract rollout also expects authoritative JSON artifacts for:
+
+- `research-a` at `stage-outputs/02-research-a.json`
+- `research-b` at `stage-outputs/03-research-b.json`
+- `judge` at `stage-outputs/06-judge.json`
+
+The run-level source registry lives at:
+
+`~/Projects/research-hub/jobs/my-project-1/runs/run-001/sources.json`
+
+Validated claim sidecars for `research-a`, `research-b`, and `judge` are written into:
+
+`~/Projects/research-hub/jobs/my-project-1/runs/run-001/stage-claims/`
+
 When a stage depends on an earlier stage, use the prior stage output artifact from `stage-outputs/`, not the prior prompt packet from `prompt-packets/`.
 
 Example:
@@ -164,29 +182,116 @@ Example:
 - `research-a` and `research-b` should consume `stage-outputs/01-intake.json`
 - critiques should consume the relevant research outputs from `stage-outputs/`
 - `judge` should consume the critique outputs from `stage-outputs/`
+- `research-a`, `research-b`, and `judge` must produce valid structured JSON and pass source-aware citation validation before downstream workflow stages continue
 
 The rendered prompt packets and `WORK_ORDER.md` now state these upstream artifact paths explicitly.
 
 Important:
 
 - the framework does not call provider APIs yet
-- execution can be manual or handled by an external adapter or CLI-based orchestrator
+- stage execution can be manual or handled by an external adapter or CLI-based orchestrator
 - all factual claims must remain cited
 - facts and inference must stay separated where possible
 - unresolved disagreement must remain visible through the judge stage
 
-### 5. Automate the Codex/Antigravity split
+### Example execution mapping
 
-If you want to run the current split automatically:
+This is an example, not a hard requirement. The framework stays provider-agnostic.
+
+- `intake`: `ChatGPT` or `Codex`
+- `research-a`: `ChatGPT`
+- `research-b`: `Gemini`
+- `critique-a-on-b`: same model family used for `research-a`
+- `critique-b-on-a`: same model family used for `research-b`
+- `judge`: the strongest reasoning model you trust most
+
+Why this example is reasonable:
+
+- using different models for `research-a` and `research-b` increases useful disagreement
+- keeping each critique with its original research perspective preserves adversarial pressure
+- using the strongest model for `judge` improves synthesis quality when evidence is mixed
+
+Recommended operator pattern:
+
+- use `Codex` to scaffold runs, manage files, and keep the repo state clean
+- use model UIs or APIs such as `ChatGPT` and `Gemini` to execute the prompt packets
+- write each stage result back into the matching file under `stage-outputs/`
+
+### 5. Extract a claim register from a markdown report
+
+For any markdown report, generate a JSON claim register like this:
+
+```bash
+python3 scripts/extract_claims.py \
+  --input ~/Projects/research-hub/jobs/my-project-1/runs/run-001/stage-outputs/06-judge.md \
+  --output ~/Projects/research-hub/jobs/my-project-1/evidence/claims-run-001.json
+```
+
+Strict mode fails if extracted fact or inference claims have no external evidence sources:
+
+```bash
+python3 scripts/extract_claims.py \
+  --input ~/Projects/research-hub/jobs/my-project-1/runs/run-001/stage-outputs/06-judge.md \
+  --output ~/Projects/research-hub/jobs/my-project-1/evidence/claims-run-001.json \
+  --strict
+```
+
+The claim register now separates:
+
+- `provenance` = internal workflow artifacts that asserted or preserved a claim
+- `evidence_sources` = external sources that support a claim about the world
+- `unclassified_markers` = markers that could not be safely classified
+
+For final outputs, provenance is useful for audit, but it is not enough evidence on its own.
+
+### 6. Generate the final artifact
+
+Once the judge artifact and claim register are ready, generate the final user-facing artifact like this:
+
+```bash
+python3 scripts/generate_final_artifact.py \
+  --judge-input ~/Projects/research-hub/jobs/my-project-1/runs/run-001/stage-outputs/06-judge.md \
+  --claim-register ~/Projects/research-hub/jobs/my-project-1/evidence/claims-run-001.json \
+  --output ~/Projects/research-hub/jobs/my-project-1/outputs/final-run-001.md
+```
+
+This script will fail if the claim register still contains:
+
+- uncited facts
+- uncited inferences where strict validation applies
+- provenance-only supported facts
+- unclassified markers
+
+The final artifact includes:
+
+- executive summary
+- options comparison
+- recommendation
+- confidence and uncertainty
+- references
+- open questions
+
+Important:
+
+- the references section is for external sources only
+- internal workflow provenance stays in audit artifacts, not in the user-facing references list
+
+### 7. Automate the CLI split
+
+The runner is adapter-based. Today the default configuration is:
 
 - `intake` in Codex
 - `research-a` in Codex
-- `research-b` in Antigravity
+- `research-b` in Gemini
 - `critique-a-on-b` in Codex
-- `critique-b-on-a` in Antigravity
-- `judge` in Antigravity
-- then `extract_claims.py`
-- then `generate_final_artifact.py`
+- `critique-b-on-a` in Gemini
+- `judge` in Gemini
+
+Then the runner will also perform:
+
+- `extract_claims.py --strict`
+- `validate_job.py --final-artifact-ready`
+- `generate_final_artifact.py`
 
 Use:
 
@@ -217,9 +322,19 @@ This runner will:
 - run `research-a` and `research-b` in parallel
 - run `critique-a-on-b` and `critique-b-on-a` in parallel
 - wait for both critiques before running `judge`
-- extract claims after the judge output exists
-- generate the final artifact after claim extraction passes readiness checks
+- extract claims from the structured judge artifact when available
+- validate final-artifact readiness before generation
+- generate the final artifact after readiness checks pass
 - resume safely if a prior run already completed some stages
+- report stage progress while it runs
+
+In an interactive terminal, the runner redraws the current status in place. In non-interactive output capture, it emits ordered event lines such as:
+
+- `codex: intake started`
+- `codex: intake completed`
+- `codex: research-a started`
+- `gemini: research-b started`
+- `system: claim-extraction completed`
 
 It writes stage execution logs into:
 
@@ -232,124 +347,56 @@ It also updates:
 Current adapter assumptions:
 
 - Codex is invoked via the `codex` CLI
-- Antigravity is invoked via the `antigravity chat --mode agent --yes` CLI path
-- both CLIs can read an instruction prompt and write the requested stage artifact without interactive editing
+- Gemini is invoked via `gemini -p <prompt> -y`
+- Antigravity remains available as an optional adapter via `antigravity chat --mode agent --yes`
+- adapters must be able to read an instruction prompt and write the requested stage artifact without interactive editing
 
-You can override the binaries if needed:
+You can override the binaries or the selected adapters if needed:
 
 ```bash
 python3 scripts/execute_workflow.py \
   --job-path ~/Projects/research-hub/jobs/my-project-1 \
   --run-id run-001 \
   --codex-bin /path/to/codex \
+  --gemini-bin /path/to/gemini \
   --antigravity-bin /path/to/antigravity
 ```
 
-The automated runner uses this fixed execution order:
+To switch the secondary execution role back to Antigravity:
+
+```bash
+python3 scripts/execute_workflow.py \
+  --job-path ~/Projects/research-hub/jobs/my-project-1 \
+  --run-id run-001 \
+  --secondary-adapter antigravity
+```
+
+The automated runner uses this fixed stage order:
 
 1. `intake` in Codex
-2. `research-a` in Codex and `research-b` in Antigravity in parallel
-3. `critique-a-on-b` in Codex and `critique-b-on-a` in Antigravity in parallel
-4. `judge` in Antigravity
+2. `research-a` in the primary adapter and `research-b` in the secondary adapter in parallel
+3. `critique-a-on-b` in the primary adapter and `critique-b-on-a` in the secondary adapter in parallel
+4. `judge` in the secondary adapter
 5. `extract_claims.py --strict`
 6. `validate_job.py --final-artifact-ready`
 7. `generate_final_artifact.py`
 
-This is intentionally file-driven rather than provider-integrated. The runner passes each tool the stage id, prompt-packet path, and required output path, then waits for the expected artifact to exist and no longer contain placeholder content.
-
-### Example execution mapping
-
-This is an example, not a hard requirement. The framework stays provider-agnostic.
-
-- `intake`: `ChatGPT` or `Codex`
-- `research-a`: `ChatGPT`
-- `research-b`: `Gemini`
-- `critique-a-on-b`: same model family used for `research-a`
-- `critique-b-on-a`: same model family used for `research-b`
-- `judge`: the strongest reasoning model you trust most
-
-Why this example is reasonable:
-
-- using different models for `research-a` and `research-b` increases useful disagreement
-- keeping each critique with its original research perspective preserves adversarial pressure
-- using the strongest model for `judge` improves synthesis quality when evidence is mixed
-
-Recommended operator pattern:
-
-- use `Codex` to scaffold runs, manage files, and keep the repo state clean
-- use model UIs or APIs such as `ChatGPT` and `Gemini` to execute the prompt packets
-- write each stage result back into the matching file under `stage-outputs/`
-
-### 6. Extract a claim register from a markdown report
-
-For any markdown report, generate a JSON claim register like this:
-
-```bash
-python3 scripts/extract_claims.py \
-  --input ~/Projects/research-hub/jobs/my-project-1/runs/run-001/stage-outputs/06-judge.md \
-  --output ~/Projects/research-hub/jobs/my-project-1/evidence/claims-run-001.json
-```
-
-Strict mode fails if extracted fact claims have no external evidence sources:
-
-```bash
-python3 scripts/extract_claims.py \
-  --input ~/Projects/research-hub/jobs/my-project-1/runs/run-001/stage-outputs/06-judge.md \
-  --output ~/Projects/research-hub/jobs/my-project-1/evidence/claims-run-001.json \
-  --strict
-```
-
-The claim register now separates:
-
-- `provenance` = internal workflow artifacts that asserted or preserved a claim
-- `evidence_sources` = external sources that support a claim about the world
-- `unclassified_markers` = markers that could not be safely classified
-
-For final outputs, provenance is useful for audit, but it is not enough evidence on its own.
-
-### 7. Generate the final artifact
-
-Once the judge artifact and claim register are ready, generate the final user-facing artifact like this:
-
-```bash
-python3 scripts/generate_final_artifact.py \
-  --judge-input ~/Projects/research-hub/jobs/my-project-1/runs/run-001/stage-outputs/06-judge.md \
-  --claim-register ~/Projects/research-hub/jobs/my-project-1/evidence/claims-run-001.json \
-  --output ~/Projects/research-hub/jobs/my-project-1/outputs/final-run-001.md
-```
-
-This script will fail if the claim register still contains:
-
-- uncited facts
-- provenance-only supported facts
-- unclassified markers
-
-The final artifact includes:
-
-- executive summary
-- options comparison
-- recommendation
-- confidence and uncertainty
-- references
-- open questions
-
-Important:
-
-- the references section is for external sources only
-- internal workflow provenance stays in audit artifacts, not in the user-facing references list
+This is intentionally file-driven rather than provider-integrated. The runner passes each adapter the stage id, prompt-packet path, markdown output path, structured-output path where required, and the run-level source registry path. It waits for the expected artifact to exist and no longer contain placeholder content. For structured stages, it validates the JSON contract and cited source IDs before downstream execution continues. Markdown-to-JSON synthesis remains only as a migration fallback when a structured stage fails to write its JSON file directly.
 
 ### 8. What is still manual
+
+If you use the current automated runner for the supported Codex/Gemini default split, these are still manual:
 
 - source retrieval
 - citation verification against source content
 - promotion of accepted outputs into final job-level deliverables
-- configuring or replacing the external execution adapters if your Codex or Antigravity setup differs from the current CLI assumptions
+- configuring or replacing external execution adapters if your local CLI setup differs from the current adapter assumptions
 
 ### 9. What the framework gives you now
 
 - independent job repos
 - auditable run scaffolding
-- automated Codex/Antigravity execution for the current 2-pass workflow shape
+- automated adapter-driven execution for the current 2-pass workflow shape
 - strict prompt packets
 - workflow state and work order files
 - placeholder output targets

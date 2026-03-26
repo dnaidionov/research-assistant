@@ -73,7 +73,9 @@ Reason:
 
 Status:
 - architectural decision accepted
-- not yet fully implemented in `scripts/extract_claims.py`
+- partially implemented in `scripts/extract_claims.py` and the structured-stage runner path
+- the workflow now enforces source-ID resolution through a run-level registry for structured research and judge outputs
+- the deeper provenance-versus-evidence distinction still relies on marker parsing rather than source-aware semantic adjudication
 
 ---
 
@@ -94,7 +96,8 @@ Accepted target classes:
 - report_structure
 
 Status:
-- current implementation still uses only `fact` and `inference`
+- current implementation now recognizes additional classes such as `evaluation`, `decision`, `open_question`, `evidence_gap`, `artifact_reference`, and `report_structure`
+- downstream validation still treats only a subset of those classes as first-class gate targets
 
 ---
 
@@ -110,7 +113,11 @@ Decision:
 - the JSON sidecar should minimally carry key claims, evidence sources, assumptions, uncertainties, and unresolved questions
 
 Status:
-- target architecture only; `run_workflow.py` does not scaffold sidecars yet
+- partially implemented
+- `run_workflow.py` now scaffolds authoritative JSON outputs for research and judge stages, plus a run-level `sources.json`
+- `execute_workflow.py` validates those structured artifacts and uses them as the canonical gate for research and judge stages
+- when structured JSON is valid but the paired markdown artifact is weaker than the markdown contract, the runner now regenerates markdown from the structured artifact so downstream markdown-only stages consume a normalized bridge representation
+- critique stages are still markdown-only, and markdown-to-JSON synthesis still exists as a migration fallback when adapters fail to write structured outputs directly
 
 ---
 
@@ -123,3 +130,29 @@ Reason:
 Decision:
 - quality gates are part of the intended orchestration design
 - until those gates exist, the system should be described as an auditable scaffold rather than a reliable evidence adjudication engine
+
+Status:
+- partially implemented
+- `execute_workflow.py` now applies source-aware structured gates for research and judge stages
+- the system is still not a trustworthy evidence adjudication engine because critique stages remain markdown-only, source governance is still shallow, and migration fallbacks still synthesize structure from prose when adapters do not comply
+
+---
+
+## Decision 12: Do not transition to a full agentic workflow before contract hardening
+
+Reason:
+- the current system's primary failures are contract mismatches, bridge failures, and fragmented validation semantics
+- adding a hub-and-spoke agent runtime before critique structure, validation unification, and source-governance hardening would multiply failure surfaces rather than simplify them
+- the right role for agentic orchestration is after the system has one authoritative machine-readable contract and a clearer control-plane boundary
+
+Alternatives considered:
+- Plan 1: contract-first hardening of stage schemas, validation, source handling, publication, and workflow state
+- Plan 2: staged transition to a hub-and-spoke orchestrator with bounded worker agents for intake, research, critique, and judge
+
+Decision:
+- Plan 1 is the recommended immediate direction
+- Plan 2 remains a credible future architecture, but it should follow the high-priority Plan 1 prerequisites rather than replace them
+
+Status:
+- accepted as current roadmap guidance
+- not yet implemented

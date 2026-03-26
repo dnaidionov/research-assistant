@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "required": ["run_id", "sources"],
+  "properties": {
+    "run_id": {"type": "string"},
+    "notes": {"type": "string"},
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "type", "authority", "locator"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^(?:SRC|DOC)-[A-Z0-9._-]+$|^S[0-9]{1,6}$|^https?://\\S+$"
+          },
+          "title": {"type": "string"},
+          "type": {"type": "string"},
+          "authority": {"type": "string"},
+          "locator": {"type": "string"},
+          "acquisition_provenance": {"type": "string"}
+        }
+      }
+    }
+  }
+}

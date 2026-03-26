@@ -24,10 +24,10 @@ PLAIN_HEADING_PATTERN = re.compile(
     re.IGNORECASE,
 )
 CONFIDENCE_PATTERN = re.compile(
-    r"(?:^|[\s;,(])confidence\s*[:=-]?\s*(low|medium|high)\b",
+    r"(?:^|[\s;,(])confidence\s*[:=-]?\s*(low|medium(?:\s*-\s*high)?|high)\b",
     re.IGNORECASE,
 )
-SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?])\s+(?!(?:Confidence)\b)(?=[A-Z0-9\"'`])")
+SENTENCE_SPLIT_PATTERN = re.compile(r"(?<!\bvs\.)(?<=[.!?])\s+(?!(?:Confidence)\b)(?=[A-Z0-9\"'`])")
 PROVENANCE_TOKEN_PATTERN = re.compile(
     r"^(?:PASS|CRIT|JUDGE|INTAKE|WORK[_-]?ORDER|RUN|STAGE|SYNTHESIS|ARTIFACT)"
     r"(?:[-_][A-Z0-9]+)*$",
@@ -90,7 +90,9 @@ def extract_confidence(text: str) -> tuple[str | None, str]:
     match = CONFIDENCE_PATTERN.search(text)
     if not match:
         return None, text
-    confidence = match.group(1).lower()
+    confidence = re.sub(r"\s*-\s*", "-", match.group(1).lower())
+    if confidence == "medium-high":
+        confidence = "high"
     cleaned = normalize_whitespace(CONFIDENCE_PATTERN.sub(" ", text))
     return confidence, cleaned
 
@@ -109,6 +111,8 @@ def canonical_heading(text: str) -> str | None:
 
 def claim_type_for_heading(heading: str | None) -> str:
     lowered = (heading or "").lower()
+    if "unresolved disagreement" in lowered or "confidence assessment" in lowered:
+        return "evaluation"
     if "evidence gap" in lowered:
         return "evidence_gap"
     if "open question" in lowered:
@@ -267,6 +271,11 @@ def build_payload(claims: list[dict[str, object]]) -> dict[str, object]:
         for claim in claims
         if claim["type"] == "fact" and not claim["evidence_sources"]
     ]
+    uncited_inferences = [
+        claim["id"]
+        for claim in claims
+        if claim["type"] == "inference" and not claim["evidence_sources"]
+    ]
     provenance_only_facts = [
         claim["id"]
         for claim in claims
@@ -284,6 +293,7 @@ def build_payload(claims: list[dict[str, object]]) -> dict[str, object]:
             "inference_count": claim_type_counts.get("inference", 0),
             "provenance_only_fact_ids": provenance_only_facts,
             "uncited_fact_ids": uncited_facts,
+            "uncited_inference_ids": uncited_inferences,
         },
     }
 
@@ -300,7 +310,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--strict",
         action="store_true",
-        help="Return a non-zero exit code when any extracted fact claim lacks external evidence sources.",
+        help="Return a non-zero exit code when any extracted fact or inference claim lacks external evidence sources.",
     )
     return parser.parse_args()
 
@@ -335,11 +345,14 @@ def main() -> int:
         return 1
 
     uncited_facts = payload["summary"]["uncited_fact_ids"]
+    uncited_inferences = payload["summary"]["uncited_inference_ids"]
     provenance_only_facts = payload["summary"]["provenance_only_fact_ids"]
-    if args.strict and uncited_facts:
+    if args.strict and (uncited_facts or uncited_inferences):
         parts = []
         if uncited_facts:
             parts.append("Uncited fact claims detected: " + ", ".join(uncited_facts))
+        if uncited_inferences:
+            parts.append("Uncited inference claims detected: " + ", ".join(uncited_inferences))
         if provenance_only_facts:
             parts.append("Provenance-only fact claims detected: " + ", ".join(provenance_only_facts))
         print(" ".join(parts), file=sys.stderr)
