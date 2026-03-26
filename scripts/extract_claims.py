@@ -10,6 +10,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Iterable
 
+from _stage_contracts import build_claim_map_from_stage_json
 from _workflow_lib import write_json
 
 
@@ -328,9 +329,17 @@ def main() -> int:
         return 1
 
     try:
-        markdown = input_path.read_text(encoding="utf-8")
-        claims = extract_claims(markdown)
-        payload = build_payload(claims)
+        if input_path.suffix.lower() == ".json":
+            structured_payload = json.loads(input_path.read_text(encoding="utf-8"))
+            stage_id = structured_payload.get("stage")
+            if isinstance(stage_id, str) and stage_id in {"research-a", "research-b", "critique-a-on-b", "critique-b-on-a", "judge"}:
+                payload = build_claim_map_from_stage_json(stage_id, structured_payload)
+            else:
+                raise ValueError("JSON input is not a recognized structured stage artifact.")
+        else:
+            markdown = input_path.read_text(encoding="utf-8")
+            claims = extract_claims(markdown)
+            payload = build_payload(claims)
         write_json(output_path, payload)
     except UnicodeDecodeError:
         print(f"Could not decode input file as UTF-8: {input_path}", file=sys.stderr)

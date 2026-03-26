@@ -30,16 +30,16 @@ Independent research report with canonical external citations and fact or infere
 Second independent research report with the same evidence rules.
 
 ### Phase 4: Critique of A by B
-Adversarial review of pass A.
+Adversarial review of pass A with structured critique output plus a human-readable markdown view.
 
 ### Phase 5: Critique of B by A
-Adversarial review of pass B.
+Adversarial review of pass B with structured critique output plus a human-readable markdown view.
 
 ### Phase 6: Judge Synthesis
 Resolution and synthesis while preserving unresolved disagreements and retaining external evidence citations.
 
 ### Phase 6.5: Structured Stage Validation
-Research and judge stages now produce authoritative structured JSON artifacts alongside markdown. The runner validates those JSON artifacts, resolves cited source IDs through a run-level source registry, and blocks downstream execution when the contract is broken.
+Research, critique, and judge stages now produce authoritative structured JSON artifacts alongside markdown. The runner validates those JSON artifacts, resolves cited source IDs through a run-level source registry, and blocks downstream execution when the contract is broken.
 
 ### Phase 7: Claim Extraction
 Claim-register generation from the structured judge artifact when available, with markdown extraction retained as a compatibility path.
@@ -71,7 +71,7 @@ Each job must be able to produce:
 
 ## Current Implementation Status
 
-The current repo now implements a mixed structure-first workflow for research and judge stages, with markdown compatibility layers still present. It still does not implement a trustworthy evidence adjudication system.
+The current repo now implements a broader structure-first workflow for research, critique, and judge stages, with markdown compatibility layers still present. It still does not implement a trustworthy evidence adjudication system.
 
 Implemented today:
 
@@ -81,34 +81,40 @@ Implemented today:
 - explicit stage dependencies and per-stage prompt packets
 - placeholder stage outputs, workflow state, and run audit artifacts
 - scaffolded run-level source registries
-- scaffolded structured JSON stage outputs for research A, research B, and judge
-- unified structured-stage validation for research and judge outputs, including source-ID resolution against the run registry
+- scaffolded structured JSON stage outputs for research A, research B, both critique stages, and judge
+- explicit intake-contract validation for the intake JSON stage
+- unified structured-stage validation for research, critique, and judge outputs, including source-ID resolution against the run registry
 - flexible validation for non-truth-critical narrative sections such as summaries, uncertainties, and source-evaluation notes
 - runner-owned source-registry merging; stage agents may declare sources in stage JSON but the runner treats `sources.json` as read-only during execution
 - stdout-oriented adapters can now recover fenced stage JSON artifacts directly from stdout before falling back to markdown-to-JSON synthesis
+- source records now normalize into explicit source classes such as `external_evidence`, `job_input`, `workflow_provenance`, and `recovered_provisional`
 - structured inferences may reference local fact IDs for convenience, but the runner now resolves those references back to canonical external source IDs before validation
-- scaffolded claim-sidecar targets for research and judge stages
-- when structured JSON passes but the paired markdown artifact is weaker than the stage contract, the runner now regenerates canonical markdown from the authoritative JSON so downstream markdown-only stages consume a normalized bridge artifact
+- scaffolded claim-sidecar targets for research, critique, and judge stages
+- shared structured-stage validation now centralizes source-aware JSON validation, markdown-contract backstops, canonical markdown regeneration, and claim-map generation for structured stages
+- when structured JSON passes but the paired markdown artifact is weaker than the stage contract, the runner now rewrites canonical markdown from the authoritative JSON during stage validation rather than delaying that repair until later post-processing
 - judge validation now accepts richer non-core synthesis structures such as disagreement objects, topic-based confidence summaries, and object-based recommended artifact outlines, and the bridge layers normalize those shapes for markdown and claim-map consumers
+- critique validation now accepts structured section payloads for supported claims, unsupported claims, weak-source issues, omissions, overreach, unresolved disagreements, and critique summaries with confidence
 - per-stage driver logs that capture command execution plus output-artifact status for debugging
 - markdown claim extraction with stable IDs
 - structured claim-register generation from judge JSON in the automated workflow path
 - provenance vs external evidence separation inside the claim register
 - lexical claim classification, including evaluation handling for disagreement and confidence sections
 - strict failure on uncited extracted facts
-- section-aware markdown validation retained as a migration backstop for required fact and inference sections
+- section-aware markdown validation retained as a migration backstop for required fact, inference, and critique-summary sections
 - separate downstream final artifact generation with readiness gating, now preferring structured judge JSON over markdown scraping and rendering followable reference entries rather than bare source IDs
+- shared publication validation for claim-register readiness now powers both repo-level final-artifact readiness checks and the final artifact generator itself
+- final publication now rejects referenced provisional or workflow-provenance sources when structured source records are available
 - prompt contracts that explicitly forbid replacing evidence citations with workflow-stage references
+- stage-claim extraction now logs internal failures explicitly instead of failing silently before emitting a driver log
+- workflow-state now advances to terminal run-level statuses such as `completed` and `failed` during execution rather than remaining stuck at the scaffold status
+- standalone claim extraction can now consume structured stage JSON directly instead of always falling back to lexical markdown parsing
 
 Known limitations in the current repo:
 
-- critique stages still use markdown-only contracts
-- claim extraction outside the automated structured path is still lexical and markdown-structure-driven, not semantic
 - the claim model is too coarse for adjudication; `fact` and `inference` are not enough
-- structured-output enforcement is partial; only research and judge stages are structure-first today
-- downstream trust is still limited because critiques and some compatibility paths still rely on markdown as a machine-readable exchange format, even though structured stages now rewrite bridge markdown from authoritative JSON
+- downstream trust is still limited because stdout recovery remains in place for some adapters and markdown is still used as a bridge artifact even though structured stages are authoritative
 - provenance vs evidence separation is still marker-based, not semantic
-- the workflow still depends on prompt compliance for canonical citation labels; malformed labels are rejected downstream rather than normalized automatically
+- the workflow still depends on prompt compliance for structured JSON writes from some adapters; markdown stdout recovery remains a compatibility path rather than a strong adapter contract
 - long-running parallel stages can still delay surfaced failure because the runner waits for sibling futures to settle before exiting the stage group
 
 ## Ranked Shortcomings
@@ -116,16 +122,16 @@ Known limitations in the current repo:
 The current shortcomings, in priority order, are:
 
 1. Structured execution is only partially rolled out.
-   Research and judge now have authoritative JSON contracts, but critiques are still markdown-only and compatibility fallbacks still synthesize structure from prose when adapters fail to write JSON directly.
+   Research, critique, and judge now have authoritative JSON contracts, and intake is now contract-validated, but publication and adapter compatibility paths still sit outside one canonical normalized execution model.
 
 2. Validation semantics are still fragmented across the workflow.
-   Structured-stage validation is better than before, but markdown validation, lexical extraction, final-artifact gating, and repo validation are still separate mechanisms with different failure semantics.
+   Structured-stage validation is better than before, but lexical extraction, stage validation, final-artifact gating, and repo validation are still separate mechanisms with different failure semantics.
 
 3. Adapter contracts are still weaker than they should be.
-   The runner now passes explicit structured-output paths and a source-registry path, but it still carries migration fallbacks such as markdown recovery and markdown-to-JSON synthesis.
+   The runner now passes explicit structured-output paths and a source-registry path and no longer synthesizes structured JSON from markdown, but it still carries stdout-recovery compatibility paths for some adapters.
 
 4. Source identity is now modeled, but source governance is still shallow.
-   A run-level `sources.json` exists and source IDs must resolve, but the system does not yet enforce richer deduplication, freshness, or authority policies.
+   A run-level `sources.json` exists, source IDs must resolve, and source classes now exist, but the system still does not enforce richer freshness, authority scoring, or stronger provenance policies.
 
 5. Provenance-versus-evidence separation is still marker-based.
    The architecture is correct, but the implementation still infers the distinction from token shapes rather than source-aware semantics.
@@ -186,10 +192,10 @@ Target structured shape:
 
 Priority order for the next iteration:
 
-1. extend authoritative structured contracts to critique stages
-2. collapse fragmented validation into one shared stage-validation module and one publication gate
-3. remove markdown-to-JSON synthesis once adapters comply with deterministic structured writes
-4. strengthen source-registry governance beyond simple ID resolution
+1. remove stdout artifact-recovery compatibility paths once adapters comply with deterministic structured writes
+2. strengthen source-registry governance beyond source classes and ID resolution
+3. unify publication around the same normalized contract model as the core execution stages
+4. tighten intake and stage schemas further where live runs expose underconstrained fields
 5. upgrade from marker-based provenance/evidence separation to stronger semantic classification only if real workflow failures justify the added complexity
 
 The concrete redesign path that operationalizes those priorities is documented in [redesign-proposal.md](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/redesign-proposal.md).

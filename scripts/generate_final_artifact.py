@@ -8,6 +8,8 @@ import re
 import sys
 from pathlib import Path
 
+from _publication import final_artifact_input_errors, referenced_source_publication_errors
+from _stage_contracts import normalize_source_record
 from _workflow_lib import write_text
 
 
@@ -109,10 +111,12 @@ def infer_job_dir_from_judge_path(judge_path: Path) -> Path | None:
 
 
 def normalize_reference_record(reference_id: str, record: dict[str, object], judge_path: Path) -> dict[str, str]:
-    title = str(record.get("title") or reference_id)
-    source_type = str(record.get("type") or "").strip()
-    authority = str(record.get("authority") or "").strip()
-    locator = str(record.get("locator") or "").strip()
+    normalized_source = normalize_source_record(record)
+    title = str(normalized_source.get("title") or reference_id)
+    source_type = str(normalized_source.get("type") or "").strip()
+    authority = str(normalized_source.get("authority") or "").strip()
+    locator = str(normalized_source.get("locator") or "").strip()
+    source_class = str(normalized_source.get("source_class") or "").strip()
 
     if source_type == "project_brief":
         job_dir = infer_job_dir_from_judge_path(judge_path)
@@ -127,6 +131,7 @@ def normalize_reference_record(reference_id: str, record: dict[str, object], jud
         "title": title,
         "type": source_type,
         "authority": authority,
+        "source_class": source_class,
         "locator": locator,
     }
 
@@ -212,17 +217,13 @@ def render_structured_confidence_lines(confidence_assessment: object) -> list[st
 
 
 def validate_inputs(judge_text: str, payload: dict[str, object]) -> None:
-    summary = payload["summary"]
-    if summary.get("uncited_fact_ids"):
-        raise ValueError("Cannot generate final artifact: uncited facts remain in the claim register.")
-    if summary.get("uncited_inference_ids"):
-        raise ValueError("Cannot generate final artifact: uncited inferences remain in the claim register.")
-    if summary.get("provenance_only_fact_ids"):
-        raise ValueError("Cannot generate final artifact: provenance-only fact support remains in the claim register.")
-    if summary.get("claims_with_unclassified_markers"):
-        raise ValueError("Cannot generate final artifact: unclassified markers remain in the claim register.")
-    if not judge_text.strip():
-        raise ValueError("Cannot generate final artifact: judge artifact is empty.")
+    errors = final_artifact_input_errors(judge_text, payload)
+    if errors:
+        normalized = errors[0]
+        normalized = normalized.replace("Claim register contains ", "Cannot generate final artifact: ")
+        normalized = normalized.replace(" and is not ready for final artifact generation.", "")
+        normalized = normalized.replace("provenance-only supported facts", "provenance-only fact support")
+        raise ValueError(normalized)
 
 
 def choose_recommendation(claims: list[dict[str, object]], sections: dict[str, list[str]]) -> list[str]:
@@ -319,6 +320,9 @@ def render_artifact(
     references = used_reference_ids or extract_reference_ids(claims)
     if not references:
         raise ValueError("Cannot generate final artifact: no external references are available.")
+    source_errors = referenced_source_publication_errors(references, source_index)
+    if source_errors:
+        raise ValueError(source_errors[0])
     reference_lines = render_reference_lines(references, source_index)
 
     parts = [

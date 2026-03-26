@@ -42,7 +42,7 @@ The current default adapter assignment is:
 2. research A in Codex and research B in Gemini in parallel
 3. critique A on B in Codex and critique B on A in Gemini in parallel
 4. judge in Gemini
-5. structured-output validation and stage claim sidecar generation for research A, research B, and judge
+5. structured-output validation and stage claim sidecar generation for research A, research B, both critique stages, and judge
 6. claim extraction
 7. final artifact generation
 
@@ -72,10 +72,12 @@ Antigravity remains available as an adapter option but is no longer the default 
 ### 4. Critique of A by B
 - challenge unsupported claims in pass A
 - preserve disagreements for adjudication
+- emit a structured critique artifact alongside the markdown view
 
 ### 5. Critique of B by A
 - challenge unsupported claims in pass B
 - preserve disagreements for adjudication
+- emit a structured critique artifact alongside the markdown view
 
 ### 6. Judge
 - synthesize supported conclusions
@@ -133,7 +135,7 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - renders prompt packets for the six execution stages
 - writes explicit upstream stage-output artifact references into prompt packets and the work order
 - scaffolds the run-level source registry at `sources.json`
-- scaffolds structured JSON output targets for research A, research B, and judge
+- scaffolds structured JSON output targets for research A, research B, both critique stages, and judge
 - writes `workflow-state.json`
 - writes `WORK_ORDER.md`
 - writes run audit files and placeholder output targets
@@ -147,26 +149,31 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - passes each tool explicit stage metadata including stage id, prompt-packet path, markdown output path, structured-output path where required, and source-registry path
 - wraps stdout-oriented chat adapters by recovering markdown artifacts from stdout when they do not write the requested stage file directly
 - recovers fenced structured JSON artifacts from stdout when adapters emit them there
-- synthesizes structured JSON from markdown only as a last-resort migration fallback when a structured stage does not write its JSON file directly and no fenced JSON artifact is available
+- no longer synthesizes authoritative structured JSON from markdown for structured stages; missing JSON is now a contract failure unless recoverable structured JSON is present in stdout
 - reports stage start, completion, and failure status while the workflow runs
 - executes the two research stages in parallel
 - executes the two critique stages in parallel
-- validates structured research and judge outputs against source-aware contracts before downstream execution continues
+- validates structured research, critique, and judge outputs against source-aware contracts before downstream execution continues
+- applies a shared structured-stage validator that also repairs weak markdown bridge artifacts from authoritative JSON when possible
+- validates the intake JSON stage against its own explicit contract before research can proceed
 - merges stage-declared sources into the run-level `sources.json` registry and rejects unresolved source IDs
 - treats `sources.json` as runner-owned state; stage agents may read it but should not modify it directly, and direct edits are discarded before merge
-- extracts claim sidecars for `research-a`, `research-b`, and `judge`
+- normalizes source records into explicit source classes for downstream publication policy
+- extracts claim sidecars for `research-a`, `research-b`, `critique-a-on-b`, `critique-b-on-a`, and `judge`
 - uses structured judge JSON for automated claim-register generation when available
-- keeps section-aware markdown validation as a migration backstop for research and judge contracts
+- keeps section-aware markdown validation as a migration backstop for research, critique, and judge contracts, but now through one shared stage-validation path
 - keeps non-truth-critical narrative sections flexible in structured validation so usable research is not rejected over presentation-shape variance
 - resolves local fact or conclusion IDs inside structured inference evidence lists back to canonical external source IDs before validation
 - waits for judge completion before downstream processing
 - runs claim extraction and final artifact generation automatically
 - supports idempotent resume by skipping completed stage artifacts and downstream outputs
 - updates workflow state and marks failed stages explicitly when an adapter exits non-zero or leaves placeholder output behind
+- recomputes terminal run-level workflow status so completed runs do not remain marked as `scaffolded`
 - writes per-stage driver logs with command, return code, stdout, stderr, output-path status, and output preview for troubleshooting
 
 ### `scripts/extract_claims.py`
 - parses markdown into atomic claims
+- can consume structured stage JSON directly and build claim maps without markdown heuristics when the input is an authoritative stage artifact
 - assigns stable `C001`-style IDs
 - separates bracketed markers into provenance, external evidence, and unclassified buckets
 - captures explicit confidence labels when present
@@ -178,7 +185,9 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 
 ### `scripts/generate_final_artifact.py`
 - reads the judge artifact and claim register
-- rejects uncited facts, provenance-only facts, and unclassified markers
+- applies the shared publication-validation rules before rendering
+- rejects uncited facts, uncited inferences, provenance-only facts, and unclassified markers
+- rejects referenced provisional or workflow-provenance sources when structured source records are available
 - writes a structured final artifact with external references only
 - keeps workflow provenance out of the user-facing references section
 
@@ -188,7 +197,7 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - checks that key config and artifact files are readable
 - validates that `runs/` is a usable directory path
 - checks that job-template requirements remain consistent with product docs
-- can validate minimum readiness for final artifact generation
+- can validate minimum readiness for final artifact generation using the same publication rules as the final artifact generator
 - returns structured validation results with explicit exit codes
 
 ## Constraints
@@ -200,14 +209,14 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - Disagreements must be preserved until the judge stage.
 - Workflow provenance and external evidence are different and must not be conflated.
 - Stage references such as `research-a`, `judge`, or critique artifact IDs do not satisfy evidence-citation requirements.
-- Research and judge stages must pass structured source-aware validation before the workflow may continue downstream.
+- Research, critique, and judge stages must pass structured source-aware validation before the workflow may continue downstream.
 
 ## Planned Hardening
 
 The intended next hardening steps are:
 
-1. extend structured contracts to critique stages
-2. collapse stage validation and publication gating into a shared validation module
-3. remove markdown-to-JSON migration fallbacks once adapters write JSON deterministically
-4. strengthen source-registry governance beyond simple ID resolution
+1. remove stdout-recovery compatibility paths once adapters write JSON deterministically
+2. strengthen source-registry governance beyond source classes and simple ID resolution
+3. unify publication around the same normalized contract model as the core execution stages
+4. tighten intake and stage schemas further where live runs expose underconstrained fields
 5. replace marker-based provenance/evidence classification with stronger semantic handling only if the simpler approach proves insufficient

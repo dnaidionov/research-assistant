@@ -6,16 +6,20 @@ Replace the current prose-first workflow contract with a structure-first workflo
 
 Implementation status:
 
-- Research and judge stages now have a partial structure-first rollout in code.
-- Critique stages and some compatibility paths are still prose-first.
+- Research, critique, and judge stages now have a broader structure-first rollout in code.
+- Some compatibility paths are still prose-first or prose-derived.
 - Structured research and judge stages now regenerate canonical markdown from authoritative JSON when the markdown bridge artifact is weaker than contract, but that is still a migration bridge rather than the target design.
+- Structured critique stages now follow the same pattern, which removes one major markdown-only seam but does not eliminate the bridge architecture itself.
 - Judge-side non-core synthesis sections now accept richer object forms in code, which reduces false failures but also reinforces the need for explicit schema-governed stage contracts across every stage.
 - Final artifact generation now prefers structured judge JSON when available and renders followable references from structured source records, which is closer to the target architecture than the earlier markdown-only renderer.
+- Publication gating is now shared between repo readiness validation and final artifact generation, which removes one concrete cross-layer inconsistency but does not yet solve the broader stage-validation split.
+- A shared stage-validation module now centralizes structured JSON checks, markdown-contract backstops, canonical markdown regeneration, and structured claim-map generation for core stages.
+- Structured stages no longer synthesize authoritative JSON from markdown, intake now has explicit contract validation, and source records now normalize into explicit source classes.
 - This document remains the forward plan for completing the migration.
 
 ## Problem Statement
 
-The current design still depends too much on freeform markdown for critiques and migration fallback paths. That still creates recurring failures in four places:
+The current design still depends too much on freeform markdown in migration fallback paths and bridge layers. That still creates recurring failures in four places:
 
 - stage validation depends on markdown structure
 - claim sidecars are reconstructed after the fact

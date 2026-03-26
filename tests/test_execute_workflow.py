@@ -15,8 +15,8 @@ from execute_workflow import (
     ProgressReporter,
     extract_markdown_artifact,
     extract_structured_json_artifact,
-    validate_stage_markdown_contract,
 )
+from _stage_validation import validate_stage_markdown_contract
 
 
 class FakeTTYStream:
@@ -165,6 +165,35 @@ class ExecuteWorkflowTests(unittest.TestCase):
                         "# Overall Critique Summary\\n\\n- Reliability is mixed. Confidence: medium\\n",
                         encoding="utf-8",
                     )
+                    if json_path is not None:
+                        json_path.write_text(
+                            json.dumps({{
+                                "stage": stage,
+                                "supported_claims": [{{"text": "One claim survives review.", "evidence_sources": ["SRC-010"]}}],
+                                "unsupported_claims": [
+                                    {{
+                                        "target_claim": "Some claims need stronger support.",
+                                        "reason": "Support is incomplete.",
+                                        "needed_evidence": "Direct benchmark evidence.",
+                                        "evidence_sources": ["SRC-011"]
+                                    }}
+                                ],
+                                "weak_source_issues": [{{"text": "One citation is indirect.", "evidence_sources": ["SRC-012"]}}],
+                                "omissions": [{{"text": "Missing alternative analysis.", "evidence_sources": ["SRC-013"]}}],
+                                "overreach": [{{"text": "One conclusion is too strong.", "evidence_sources": ["SRC-014"]}}],
+                                "unresolved_disagreements": [{{"text": "Option A vs B remains disputed.", "evidence_sources": ["SRC-015"]}}],
+                                "summary": {{"text": "Reliability is mixed.", "confidence": "medium"}},
+                                "sources": [
+                                    {{"id": "SRC-010", "title": "Canonical source SRC-010", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-010"}},
+                                    {{"id": "SRC-011", "title": "Canonical source SRC-011", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-011"}},
+                                    {{"id": "SRC-012", "title": "Canonical source SRC-012", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-012"}},
+                                    {{"id": "SRC-013", "title": "Canonical source SRC-013", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-013"}},
+                                    {{"id": "SRC-014", "title": "Canonical source SRC-014", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-014"}},
+                                    {{"id": "SRC-015", "title": "Canonical source SRC-015", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-015"}}
+                                ]
+                            }}, indent=2),
+                            encoding="utf-8",
+                        )
                 elif stage == "judge":
                     output_path.write_text(
                         "# Supported Conclusions\\n\\n1. Option A has lower implementation risk. [SRC-001]\\n\\n"
@@ -232,13 +261,14 @@ class ExecuteWorkflowTests(unittest.TestCase):
         )
         path.chmod(0o755)
 
-    def _write_stdout_only_executor(self, path: Path, markdown: str) -> None:
+    def _write_stdout_only_executor(self, path: Path, markdown: str, json_payload: str | None = None) -> None:
+        stdout = markdown if json_payload is None else f"{markdown}\n\n```json\n{json_payload}\n```"
         path.write_text(
             textwrap.dedent(
                 f"""\
                 #!/usr/bin/env python3
                 import sys
-                print({markdown!r})
+                print({stdout!r})
                 sys.exit(0)
                 """
             ),
@@ -246,28 +276,34 @@ class ExecuteWorkflowTests(unittest.TestCase):
         )
         path.chmod(0o755)
 
-    def _write_research_b_stdout_executor(self, path: Path, markdown: str) -> None:
+    def _write_research_b_stdout_executor(self, path: Path, markdown: str, json_payload: str | None = None) -> None:
+        stdout = markdown if json_payload is None else f"{markdown}\n\n```json\n{json_payload}\n```"
         path.write_text(
             textwrap.dedent(
                 f"""\
                 #!/usr/bin/env python3
+                import json
                 import re
                 import sys
                 from pathlib import Path
 
                 prompt = " ".join(sys.argv[1:])
                 output_match = re.search(r"OUTPUT_PATH=(.+)", prompt)
+                json_match = re.search(r"OUTPUT_JSON_PATH=(.+)", prompt)
                 stage_match = re.search(r"STAGE_ID=([a-z0-9-]+)", prompt)
                 if not output_match or not stage_match:
                     print("missing stage metadata", file=sys.stderr)
                     sys.exit(2)
 
                 output_path = Path(output_match.group(1).strip())
+                json_path = Path(json_match.group(1).strip()) if json_match else None
                 output_path.parent.mkdir(parents=True, exist_ok=True)
+                if json_path is not None:
+                    json_path.parent.mkdir(parents=True, exist_ok=True)
                 stage = stage_match.group(1)
 
                 if stage == "research-b":
-                    print({markdown!r})
+                    print({stdout!r})
                     sys.exit(0)
 
                 if stage == "critique-b-on-a":
@@ -281,6 +317,35 @@ class ExecuteWorkflowTests(unittest.TestCase):
                         "# Overall Critique Summary\\n\\n- Reliability is mixed. Confidence: medium\\n",
                         encoding="utf-8",
                     )
+                    if json_path is not None:
+                        json_path.write_text(
+                            json.dumps({{
+                                "stage": "critique-b-on-a",
+                                "supported_claims": [{{"text": "One claim survives review.", "evidence_sources": ["SRC-010"]}}],
+                                "unsupported_claims": [
+                                    {{
+                                        "target_claim": "Some claims need stronger support.",
+                                        "reason": "Support is incomplete.",
+                                        "needed_evidence": "Direct benchmark evidence.",
+                                        "evidence_sources": ["SRC-011"]
+                                    }}
+                                ],
+                                "weak_source_issues": [{{"text": "One citation is indirect.", "evidence_sources": ["SRC-012"]}}],
+                                "omissions": [{{"text": "Missing alternative analysis.", "evidence_sources": ["SRC-013"]}}],
+                                "overreach": [{{"text": "One conclusion is too strong.", "evidence_sources": ["SRC-014"]}}],
+                                "unresolved_disagreements": [{{"text": "Option A vs B remains disputed.", "evidence_sources": ["SRC-015"]}}],
+                                "summary": {{"text": "Reliability is mixed.", "confidence": "medium"}},
+                                "sources": [
+                                    {{"id": "SRC-010", "title": "Canonical source SRC-010", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-010"}},
+                                    {{"id": "SRC-011", "title": "Canonical source SRC-011", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-011"}},
+                                    {{"id": "SRC-012", "title": "Canonical source SRC-012", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-012"}},
+                                    {{"id": "SRC-013", "title": "Canonical source SRC-013", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-013"}},
+                                    {{"id": "SRC-014", "title": "Canonical source SRC-014", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-014"}},
+                                    {{"id": "SRC-015", "title": "Canonical source SRC-015", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-015"}}
+                                ]
+                            }}, indent=2),
+                            encoding="utf-8",
+                        )
                     sys.exit(0)
 
                 if stage == "judge":
@@ -294,6 +359,27 @@ class ExecuteWorkflowTests(unittest.TestCase):
                         "# Recommended Final Artifact Structure\\n\\n- Summary, comparison, recommendation, uncertainty, references, open questions.\\n",
                         encoding="utf-8",
                     )
+                    if json_path is not None:
+                        json_path.write_text(
+                            json.dumps(
+                                {{
+                                    "stage": "judge",
+                                    "supported_conclusions": [{{"id": "judge-conclusion-1", "text": "Option A has lower implementation risk.", "evidence_sources": ["SRC-001"]}}],
+                                    "synthesis_judgments": [{{"id": "judge-inference-1", "text": "Option A is the safer near-term choice.", "evidence_sources": ["SRC-001", "SRC-002"], "confidence": "medium"}}],
+                                    "unresolved_disagreements": ["Hardware selection remains unresolved because interface data is missing."],
+                                    "confidence_assessment": ["Medium confidence: evidence is incomplete and benchmark coverage is limited."],
+                                    "evidence_gaps": ["No direct benchmark compares both options in this environment."],
+                                    "rationale": ["Research A favored Option A and critique B-on-A preserved upside concerns."],
+                                    "recommended_artifact_structure": ["Summary", "Comparison", "Recommendation", "Uncertainty", "References", "Open Questions"],
+                                    "sources": [
+                                        {{"id": "SRC-001", "title": "Canonical source SRC-001", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-001"}},
+                                        {{"id": "SRC-002", "title": "Canonical source SRC-002", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-002"}}
+                                    ],
+                                }},
+                                indent=2,
+                            ),
+                            encoding="utf-8",
+                        )
                     sys.exit(0)
 
                 print(f"unexpected stage: {{stage}}", file=sys.stderr)
@@ -353,6 +439,8 @@ class ExecuteWorkflowTests(unittest.TestCase):
         self.assertTrue(final_artifact.is_file())
         self.assertTrue((run_dir / "stage-claims" / "02-research-a.claims.json").is_file())
         self.assertTrue((run_dir / "stage-claims" / "03-research-b.claims.json").is_file())
+        self.assertTrue((run_dir / "stage-claims" / "04-critique-a-on-b.claims.json").is_file())
+        self.assertTrue((run_dir / "stage-claims" / "05-critique-b-on-a.claims.json").is_file())
         self.assertTrue((run_dir / "stage-claims" / "06-judge.claims.json").is_file())
 
         payload = json.loads(claim_register.read_text(encoding="utf-8"))
@@ -440,6 +528,38 @@ class ExecuteWorkflowTests(unittest.TestCase):
                         "# Overall Critique Summary\\n\\n- Reliability is mixed. Confidence: medium\\n",
                         encoding="utf-8",
                     )
+                    if json_path is not None:
+                        json_path.write_text(
+                            json.dumps(
+                                {
+                                    "stage": "critique-b-on-a",
+                                    "supported_claims": [{"text": "One claim survives review.", "evidence_sources": ["SRC-010"]}],
+                                    "unsupported_claims": [
+                                        {
+                                            "target_claim": "Some claims need stronger support.",
+                                            "reason": "Support is incomplete.",
+                                            "needed_evidence": "Direct benchmark evidence.",
+                                            "evidence_sources": ["SRC-011"],
+                                        }
+                                    ],
+                                    "weak_source_issues": [{"text": "One citation is indirect.", "evidence_sources": ["SRC-012"]}],
+                                    "omissions": [{"text": "Missing alternative analysis.", "evidence_sources": ["SRC-013"]}],
+                                    "overreach": [{"text": "One conclusion is too strong.", "evidence_sources": ["SRC-014"]}],
+                                    "unresolved_disagreements": [{"text": "Option A vs B remains disputed.", "evidence_sources": ["SRC-015"]}],
+                                    "summary": {"text": "Reliability is mixed.", "confidence": "medium"},
+                                    "sources": [
+                                        {"id": "SRC-010", "title": "Canonical source SRC-010", "type": "report", "authority": "fixture", "locator": "https://example.com/src-010"},
+                                        {"id": "SRC-011", "title": "Canonical source SRC-011", "type": "report", "authority": "fixture", "locator": "https://example.com/src-011"},
+                                        {"id": "SRC-012", "title": "Canonical source SRC-012", "type": "report", "authority": "fixture", "locator": "https://example.com/src-012"},
+                                        {"id": "SRC-013", "title": "Canonical source SRC-013", "type": "report", "authority": "fixture", "locator": "https://example.com/src-013"},
+                                        {"id": "SRC-014", "title": "Canonical source SRC-014", "type": "report", "authority": "fixture", "locator": "https://example.com/src-014"},
+                                        {"id": "SRC-015", "title": "Canonical source SRC-015", "type": "report", "authority": "fixture", "locator": "https://example.com/src-015"},
+                                    ],
+                                },
+                                indent=2,
+                            ),
+                            encoding="utf-8",
+                        )
                     sys.exit(0)
 
                 if stage == "judge":
@@ -601,6 +721,38 @@ class ExecuteWorkflowTests(unittest.TestCase):
                         "# Overall Critique Summary\\n\\n- Reliability is mixed. Confidence: medium\\n",
                         encoding="utf-8",
                     )
+                    if json_path is not None:
+                        json_path.write_text(
+                            json.dumps(
+                                {
+                                    "stage": "critique-b-on-a",
+                                    "supported_claims": [{"text": "One claim survives review.", "evidence_sources": ["SRC-010"]}],
+                                    "unsupported_claims": [
+                                        {
+                                            "target_claim": "Some claims need stronger support.",
+                                            "reason": "Support is incomplete.",
+                                            "needed_evidence": "Direct benchmark evidence.",
+                                            "evidence_sources": ["SRC-011"],
+                                        }
+                                    ],
+                                    "weak_source_issues": [{"text": "One citation is indirect.", "evidence_sources": ["SRC-012"]}],
+                                    "omissions": [{"text": "Missing alternative analysis.", "evidence_sources": ["SRC-013"]}],
+                                    "overreach": [{"text": "One conclusion is too strong.", "evidence_sources": ["SRC-014"]}],
+                                    "unresolved_disagreements": [{"text": "Option A vs B remains disputed.", "evidence_sources": ["SRC-015"]}],
+                                    "summary": {"text": "Reliability is mixed.", "confidence": "medium"},
+                                    "sources": [
+                                        {"id": "SRC-010", "title": "Canonical source SRC-010", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-010"},
+                                        {"id": "SRC-011", "title": "Canonical source SRC-011", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-011"},
+                                        {"id": "SRC-012", "title": "Canonical source SRC-012", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-012"},
+                                        {"id": "SRC-013", "title": "Canonical source SRC-013", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-013"},
+                                        {"id": "SRC-014", "title": "Canonical source SRC-014", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-014"},
+                                        {"id": "SRC-015", "title": "Canonical source SRC-015", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-015"},
+                                    ],
+                                },
+                                indent=2,
+                            ),
+                            encoding="utf-8",
+                        )
                     sys.exit(0)
 
                 if stage == "judge":
@@ -627,8 +779,8 @@ class ExecuteWorkflowTests(unittest.TestCase):
                                     "rationale": ["Research A favored Option A and critique B-on-A preserved upside concerns."],
                                     "recommended_artifact_structure": ["Summary", "Comparison", "Recommendation", "Uncertainty", "References", "Open Questions"],
                                     "sources": [
-                                        {"id": "SRC-001", "title": "Canonical source SRC-001", "type": "report", "authority": "fixture", "locator": "https://example.com/src-001"},
-                                        {"id": "SRC-002", "title": "Canonical source SRC-002", "type": "report", "authority": "fixture", "locator": "https://example.com/src-002"}
+                                        {"id": "SRC-001", "title": "Canonical source SRC-001", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-001"},
+                                        {"id": "SRC-002", "title": "Canonical source SRC-002", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-002"}
                                     ],
                                 },
                                 indent=2,
@@ -865,7 +1017,150 @@ class ExecuteWorkflowTests(unittest.TestCase):
         self.assertIn("OUTPUT_COMPLETE:\nFalse", driver_log)
         self.assertIn("Status: not started", driver_log)
 
+    def test_fails_when_intake_output_breaks_contract(self) -> None:
+        self.codex_bin.write_text(
+            textwrap.dedent(
+                """\
+                #!/usr/bin/env python3
+                import json
+                import re
+                import sys
+                from pathlib import Path
+
+                prompt = " ".join(sys.argv[1:])
+                output_match = re.search(r"OUTPUT_PATH=(.+)", prompt)
+                stage_match = re.search(r"STAGE_ID=([a-z0-9-]+)", prompt)
+                if not output_match or not stage_match:
+                    print("missing stage metadata", file=sys.stderr)
+                    sys.exit(2)
+
+                output_path = Path(output_match.group(1).strip())
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                stage = stage_match.group(1)
+
+                if stage == "intake":
+                    output_path.write_text(json.dumps({"question": "", "scope": "invalid"}, indent=2), encoding="utf-8")
+                    sys.exit(0)
+
+                print("unexpected stage", file=sys.stderr)
+                sys.exit(2)
+                """
+            ),
+            encoding="utf-8",
+        )
+        self.codex_bin.chmod(0o755)
+
+        result = subprocess.run(
+            [
+                "python3",
+                str(EXECUTE_WORKFLOW),
+                "--job-path",
+                str(self.job_dir),
+                "--run-id",
+                "run-bad-intake",
+                "--codex-bin",
+                str(self.codex_bin),
+                "--gemini-bin",
+                str(self.gemini_bin),
+                "--antigravity-bin",
+                str(self.antigravity_bin),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("intake validation", result.stderr.lower())
+        state = json.loads((self.job_dir / "runs" / "run-bad-intake" / "workflow-state.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["status"], "failed")
+
     def test_wraps_gemini_stdout_into_stage_output_when_file_is_not_written(self) -> None:
+        self._write_research_b_stdout_executor(
+            self.gemini_bin,
+            "\n".join(
+                [
+                    "I will first inspect the prompt packet.",
+                    "# Executive Summary",
+                    "",
+                    "- Research B summary. [SRC-002]",
+                    "",
+                    "# Facts",
+                    "",
+                    "1. Option B has evidence behind it. [SRC-002]",
+                    "",
+                    "# Inferences",
+                    "",
+                    "1. Option B may be viable. [SRC-002] Confidence: medium",
+                    "",
+                    "# Uncertainty Register",
+                    "",
+                    "- Coverage is incomplete. [SRC-003]",
+                    "",
+                    "# Evidence Gaps",
+                    "",
+                    "- Benchmarking is incomplete. [SRC-004]",
+                    "",
+                    "# Preliminary Disagreements",
+                    "",
+                    "- The other option may be stronger on another axis. [SRC-005]",
+                    "",
+                    "# Source Evaluation",
+                    "",
+                    "- Sources are limited but relevant. [SRC-006]",
+                ]
+            ),
+            json_payload="""{
+  "stage": "research-b",
+  "summary": [{"text": "Research B summary.", "evidence_sources": ["SRC-002"]}],
+  "facts": [{"id": "F-001", "text": "Option B has evidence behind it.", "evidence_sources": ["SRC-002"]}],
+  "inferences": [{"id": "I-001", "text": "Option B may be viable.", "evidence_sources": ["SRC-002"], "confidence": "medium"}],
+  "uncertainties": [{"text": "Coverage is incomplete.", "evidence_sources": ["SRC-003"]}],
+  "evidence_gaps": [{"text": "Benchmarking is incomplete.", "evidence_sources": ["SRC-004"]}],
+  "preliminary_disagreements": [{"text": "The other option may be stronger on another axis.", "evidence_sources": ["SRC-005"]}],
+  "source_evaluation": [{"notes": "Sources are limited but relevant.", "source_id": "SRC-006"}],
+  "sources": [
+    {"id": "SRC-002", "title": "Canonical source SRC-002", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-002"},
+    {"id": "SRC-003", "title": "Canonical source SRC-003", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-003"},
+    {"id": "SRC-004", "title": "Canonical source SRC-004", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-004"},
+    {"id": "SRC-005", "title": "Canonical source SRC-005", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-005"},
+    {"id": "SRC-006", "title": "Canonical source SRC-006", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-006"}
+  ]
+}""",
+        )
+
+        result = subprocess.run(
+            [
+                "python3",
+                str(EXECUTE_WORKFLOW),
+                "--job-path",
+                str(self.job_dir),
+                "--run-id",
+                "run-stdout-gemini",
+                "--codex-bin",
+                str(self.codex_bin),
+                "--gemini-bin",
+                str(self.gemini_bin),
+                "--antigravity-bin",
+                str(self.antigravity_bin),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        run_dir = self.job_dir / "runs" / "run-stdout-gemini"
+        research_b = (run_dir / "stage-outputs" / "03-research-b.md").read_text(encoding="utf-8")
+        self.assertTrue(research_b.startswith("# Executive Summary"))
+        self.assertNotIn("I will first inspect", research_b)
+
+        state = json.loads((run_dir / "workflow-state.json").read_text(encoding="utf-8"))
+        statuses = {stage["id"]: stage["status"] for stage in state["stages"]}
+        self.assertEqual(statuses["research-b"], "completed")
+        self.assertEqual(state["status"], "completed")
+
+    def test_structured_stage_fails_when_adapter_only_returns_markdown_without_json_artifact(self) -> None:
         self._write_research_b_stdout_executor(
             self.gemini_bin,
             "\n".join(
@@ -909,7 +1204,7 @@ class ExecuteWorkflowTests(unittest.TestCase):
                 "--job-path",
                 str(self.job_dir),
                 "--run-id",
-                "run-stdout-gemini",
+                "run-missing-structured-json",
                 "--codex-bin",
                 str(self.codex_bin),
                 "--gemini-bin",
@@ -922,15 +1217,10 @@ class ExecuteWorkflowTests(unittest.TestCase):
             text=True,
         )
 
-        self.assertEqual(result.returncode, 0, result.stderr)
-        run_dir = self.job_dir / "runs" / "run-stdout-gemini"
-        research_b = (run_dir / "stage-outputs" / "03-research-b.md").read_text(encoding="utf-8")
-        self.assertTrue(research_b.startswith("# Executive Summary"))
-        self.assertNotIn("I will first inspect", research_b)
-
-        state = json.loads((run_dir / "workflow-state.json").read_text(encoding="utf-8"))
-        statuses = {stage["id"]: stage["status"] for stage in state["stages"]}
-        self.assertEqual(statuses["research-b"], "completed")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("completed structured output artifact", result.stderr.lower())
+        state = json.loads((self.job_dir / "runs" / "run-missing-structured-json" / "workflow-state.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["status"], "failed")
 
     def test_fails_fast_when_research_sidecar_contains_uncited_inference(self) -> None:
         self._write_stdout_only_executor(
@@ -966,6 +1256,23 @@ class ExecuteWorkflowTests(unittest.TestCase):
                     "- Sources are limited but relevant. [SRC-006]",
                 ]
             ),
+            json_payload="""{
+  "stage": "research-b",
+  "summary": [{"text": "Research B summary.", "evidence_sources": ["SRC-002"]}],
+  "facts": [{"id": "F-001", "text": "Option B has evidence behind it.", "evidence_sources": ["SRC-002"]}],
+  "inferences": [{"id": "I-001", "text": "Option B may be viable.", "evidence_sources": [], "confidence": "medium"}],
+  "uncertainties": [{"text": "Coverage is incomplete.", "evidence_sources": ["SRC-003"]}],
+  "evidence_gaps": [{"text": "Benchmarking is incomplete.", "evidence_sources": ["SRC-004"]}],
+  "preliminary_disagreements": [{"text": "The other option may be stronger on another axis.", "evidence_sources": ["SRC-005"]}],
+  "source_evaluation": [{"notes": "Sources are limited but relevant.", "source_id": "SRC-006"}],
+  "sources": [
+    {"id": "SRC-002", "title": "Canonical source SRC-002", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-002"},
+    {"id": "SRC-003", "title": "Canonical source SRC-003", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-003"},
+    {"id": "SRC-004", "title": "Canonical source SRC-004", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-004"},
+    {"id": "SRC-005", "title": "Canonical source SRC-005", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-005"},
+    {"id": "SRC-006", "title": "Canonical source SRC-006", "type": "report", "authority": "test fixture", "locator": "https://example.com/src-006"}
+  ]
+}""",
         )
 
         result = subprocess.run(
@@ -995,6 +1302,7 @@ class ExecuteWorkflowTests(unittest.TestCase):
         self.assertEqual(state["stages"][2]["status"], "failed")
         self.assertEqual(state["post_processing"]["stage_claims"]["research-b"]["status"], "failed")
         self.assertNotEqual(state["stages"][1]["status"], "running")
+        self.assertEqual(state["status"], "failed")
         judge_sidecar = json.loads((run_dir / "stage-claims" / "06-judge.claims.json").read_text(encoding="utf-8"))
         self.assertEqual(judge_sidecar["status"], "not_started")
 
@@ -1070,6 +1378,37 @@ class ExecuteWorkflowTests(unittest.TestCase):
                         "# Overreach And Overconfident Inference\\n\\n- One conclusion is too strong. [SRC-214]\\n\\n"
                         "# Unresolved Disagreements For Judge\\n\\n- Option A vs B remains disputed. [SRC-215]\\n\\n"
                         "# Overall Critique Summary\\n\\n- Reliability is mixed. Confidence: medium\\n",
+                        encoding="utf-8",
+                    )
+                    json_path.write_text(
+                        json.dumps(
+                            {
+                                "stage": "critique-b-on-a",
+                                "supported_claims": [{"text": "One claim survives review.", "evidence_sources": ["SRC-210"]}],
+                                "unsupported_claims": [
+                                    {
+                                        "target_claim": "Some claims need stronger support.",
+                                        "reason": "Support is incomplete.",
+                                        "needed_evidence": "Direct benchmark evidence.",
+                                        "evidence_sources": ["SRC-211"],
+                                    }
+                                ],
+                                "weak_source_issues": [{"text": "One citation is indirect.", "evidence_sources": ["SRC-212"]}],
+                                "omissions": [{"text": "Missing alternative analysis.", "evidence_sources": ["SRC-213"]}],
+                                "overreach": [{"text": "One conclusion is too strong.", "evidence_sources": ["SRC-214"]}],
+                                "unresolved_disagreements": [{"text": "Option A vs B remains disputed.", "evidence_sources": ["SRC-215"]}],
+                                "summary": {"text": "Reliability is mixed.", "confidence": "medium"},
+                                "sources": [
+                                    {"id": "SRC-210", "title": "Canonical source SRC-210", "type": "report", "authority": "fixture", "locator": "https://example.com/src-210"},
+                                    {"id": "SRC-211", "title": "Canonical source SRC-211", "type": "report", "authority": "fixture", "locator": "https://example.com/src-211"},
+                                    {"id": "SRC-212", "title": "Canonical source SRC-212", "type": "report", "authority": "fixture", "locator": "https://example.com/src-212"},
+                                    {"id": "SRC-213", "title": "Canonical source SRC-213", "type": "report", "authority": "fixture", "locator": "https://example.com/src-213"},
+                                    {"id": "SRC-214", "title": "Canonical source SRC-214", "type": "report", "authority": "fixture", "locator": "https://example.com/src-214"},
+                                    {"id": "SRC-215", "title": "Canonical source SRC-215", "type": "report", "authority": "fixture", "locator": "https://example.com/src-215"},
+                                ],
+                            },
+                            indent=2,
+                        ),
                         encoding="utf-8",
                     )
                     sys.exit(0)

@@ -25,7 +25,7 @@ from _workflow_lib import (
     write_text,
 )
 
-STAGE_CLAIM_STAGE_IDS = {"research-a", "research-b", "judge"}
+STAGE_CLAIM_STAGE_IDS = {"research-a", "research-b", "critique-a-on-b", "critique-b-on-a", "judge"}
 
 
 RUN_STAGES: list[dict[str, object]] = [

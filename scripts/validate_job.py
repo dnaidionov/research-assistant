@@ -8,6 +8,7 @@ import re
 import sys
 from pathlib import Path
 
+from _publication import claim_register_publication_errors
 from _workflow_lib import REPO_ROOT, REQUIRED_JOB_DIRS, REQUIRED_JOB_FILES, validate_job_dir
 
 
@@ -158,16 +159,10 @@ def validate_final_artifact_readiness(
         errors.append(f"Missing required claim register: {claim_path}")
     else:
         payload = json.loads(claim_path.read_text(encoding="utf-8"))
-        summary = payload.get("summary", {})
-        if summary.get("uncited_fact_ids"):
+        publication_errors = claim_register_publication_errors(payload)
+        if publication_errors:
             ready = False
-            errors.append("Claim register contains uncited facts and is not ready for final artifact generation.")
-        if summary.get("provenance_only_fact_ids"):
-            ready = False
-            errors.append("Claim register contains provenance-only supported facts and is not ready for final artifact generation.")
-        if summary.get("claims_with_unclassified_markers"):
-            ready = False
-            errors.append("Claim register contains unclassified markers and is not ready for final artifact generation.")
+            errors.extend(publication_errors)
 
     checks["final_artifact_ready"] = ready
 

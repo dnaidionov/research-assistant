@@ -10,6 +10,45 @@ EXTRACT_CLAIMS = REPO_ROOT / "scripts" / "extract_claims.py"
 
 
 class ExtractClaimsTests(unittest.TestCase):
+    def test_extracts_claims_from_structured_stage_json_without_markdown_heuristics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "judge.json"
+            output_path = Path(tmpdir) / "claims.json"
+            input_path.write_text(
+                """{
+  "stage": "judge",
+  "supported_conclusions": [
+    {"id": "C-001", "text": "Option A is feasible.", "evidence_sources": ["SRC-001"]}
+  ],
+  "synthesis_judgments": [
+    {"id": "J-001", "text": "Option A is preferred.", "evidence_sources": ["SRC-001"], "confidence": "medium"}
+  ],
+  "unresolved_disagreements": [],
+  "confidence_assessment": [],
+  "evidence_gaps": [],
+  "rationale": [],
+  "recommended_artifact_structure": [],
+  "sources": [
+    {"id": "SRC-001", "title": "Source", "type": "report", "authority": "vendor", "locator": "https://example.com/src-001"}
+  ]
+}""",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                ["python3", str(EXTRACT_CLAIMS), "--input", str(input_path), "--output", str(output_path), "--strict"],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["summary"]["fact_count"], 1)
+            self.assertEqual(payload["summary"]["inference_count"], 1)
+            self.assertEqual(payload["summary"]["uncited_fact_ids"], [])
+            self.assertEqual(payload["summary"]["uncited_inference_ids"], [])
+
     def test_classifies_provenance_evidence_and_unknown_markers_separately(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             input_path = Path(tmpdir) / "report.md"

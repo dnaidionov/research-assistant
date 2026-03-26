@@ -10,7 +10,7 @@ from pathlib import Path
 from _workflow_lib import write_json
 
 
-STRUCTURED_STAGE_IDS = {"research-a", "research-b", "judge"}
+STRUCTURED_STAGE_IDS = {"research-a", "research-b", "critique-a-on-b", "critique-b-on-a", "judge"}
 SOURCE_ID_PATTERN = re.compile(r"^(?:SRC|DOC)-[A-Z0-9._-]+$|^S[0-9]{1,6}$|^https?://\S+$", re.IGNORECASE)
 SECTION_HEADING_PATTERN = re.compile(r"^#\s+(.+)$")
 LIST_ITEM_PATTERN = re.compile(r"^\s*\d+[.)]\s+")
@@ -18,6 +18,7 @@ MARKDOWN_BULLET_PATTERN = re.compile(r"^\s*[-*+]\s+")
 CITATION_BLOCK_PATTERN = re.compile(r"\[([^\[\]]+)\]")
 CONFIDENCE_PATTERN = re.compile(r"\bconfidence\s*:\s*(low|medium|high)\b", re.IGNORECASE)
 RECOVERED_SOURCE_AUTHORITY = "recovered-from-markdown"
+SOURCE_CLASSES = {"external_evidence", "job_input", "workflow_provenance", "recovered_provisional"}
 
 STAGE_JSON_KEYS: dict[str, tuple[str, ...]] = {
     "research-a": (
@@ -53,6 +54,28 @@ STAGE_JSON_KEYS: dict[str, tuple[str, ...]] = {
         "recommended_artifact_structure",
         "sources",
     ),
+    "critique-a-on-b": (
+        "stage",
+        "supported_claims",
+        "unsupported_claims",
+        "weak_source_issues",
+        "omissions",
+        "overreach",
+        "unresolved_disagreements",
+        "summary",
+        "sources",
+    ),
+    "critique-b-on-a": (
+        "stage",
+        "supported_claims",
+        "unsupported_claims",
+        "weak_source_issues",
+        "omissions",
+        "overreach",
+        "unresolved_disagreements",
+        "summary",
+        "sources",
+    ),
 }
 
 
@@ -64,6 +87,8 @@ def stage_structured_output_path(run_dir: Path, stage_id: str) -> Path:
     filename_by_stage = {
         "research-a": "02-research-a.json",
         "research-b": "03-research-b.json",
+        "critique-a-on-b": "04-critique-a-on-b.json",
+        "critique-b-on-a": "05-critique-b-on-a.json",
         "judge": "06-judge.json",
     }
     return run_dir / "stage-outputs" / filename_by_stage[stage_id]
@@ -179,9 +204,34 @@ def default_source_record(source_id: str, stage_id: str) -> dict[str, str]:
         "title": f"Recovered source record for {source_id}",
         "type": "unknown",
         "authority": RECOVERED_SOURCE_AUTHORITY,
+        "source_class": "recovered_provisional",
         "locator": f"urn:recovered:{stage_id}:{source_id}",
         "acquisition_provenance": "recovered_from_markdown",
     }
+
+
+def normalize_source_record(source: dict[str, object]) -> dict[str, object]:
+    normalized = dict(source)
+    source_class = normalized.get("source_class")
+    if isinstance(source_class, str) and source_class in SOURCE_CLASSES:
+        return normalized
+    if isinstance(source_class, str) and source_class.strip():
+        return normalized
+
+    source_type = str(normalized.get("type") or "").strip().lower()
+    authority = str(normalized.get("authority") or "").strip()
+    acquisition = str(normalized.get("acquisition_provenance") or "").strip().lower()
+    locator = str(normalized.get("locator") or "").strip().lower()
+
+    if authority == RECOVERED_SOURCE_AUTHORITY or acquisition == "recovered_from_markdown":
+        normalized["source_class"] = "recovered_provisional"
+    elif source_type == "project_brief":
+        normalized["source_class"] = "job_input"
+    elif source_type in {"workflow_artifact", "workflow_provenance"} or locator.startswith("urn:workflow:"):
+        normalized["source_class"] = "workflow_provenance"
+    else:
+        normalized["source_class"] = "external_evidence"
+    return normalized
 
 
 def _build_claim_items(stage_id: str, prefix: str, items: list[str], *, inference: bool) -> list[dict[str, object]]:
@@ -208,6 +258,23 @@ def _build_text_entries(lines: list[str]) -> list[dict[str, object]]:
         }
         for entry in collect_section_entries(lines)
     ]
+
+
+def _build_summary_payload(lines: list[str]) -> object:
+    entries = collect_section_entries(lines)
+    if not entries:
+        return []
+    records: list[dict[str, object]] = []
+    for entry in entries:
+        confidence = extract_confidence(entry)
+        record: dict[str, object] = {
+            "text": strip_citations_and_confidence(entry),
+            "evidence_sources": extract_evidence_sources(entry),
+        }
+        if confidence is not None:
+            record["confidence"] = confidence
+        records.append(record)
+    return records[0] if len(records) == 1 else records
 
 
 def _build_source_evaluation(lines: list[str]) -> list[dict[str, object]]:
@@ -250,6 +317,20 @@ def build_stage_json_from_markdown(stage_id: str, markdown: str) -> dict[str, ob
             "evidence_gaps": _build_text_entries(sections.get("Evidence Gaps", [])),
             "preliminary_disagreements": _build_text_entries(sections.get("Preliminary Disagreements", [])),
             "source_evaluation": _build_source_evaluation(sections.get("Source Evaluation", [])),
+        }
+        payload["sources"] = _collect_source_records(stage_id, payload)
+        return payload
+
+    if stage_id in {"critique-a-on-b", "critique-b-on-a"}:
+        payload = {
+            "stage": stage_id,
+            "supported_claims": _build_text_entries(sections.get("Claims That Survive Review", [])),
+            "unsupported_claims": _build_text_entries(sections.get("Unsupported Claims", [])),
+            "weak_source_issues": _build_text_entries(sections.get("Weak Sources Or Citation Problems", [])),
+            "omissions": _build_text_entries(sections.get("Omissions And Missing Alternatives", [])),
+            "overreach": _build_text_entries(sections.get("Overreach And Overconfident Inference", [])),
+            "unresolved_disagreements": _build_text_entries(sections.get("Unresolved Disagreements For Judge", [])),
+            "summary": _build_summary_payload(sections.get("Overall Critique Summary", [])),
         }
         payload["sources"] = _collect_source_records(stage_id, payload)
         return payload
@@ -400,6 +481,35 @@ def _judge_recommended_structure_lines(items: object) -> list[str]:
     return [line if line.startswith("- ") else f"- {line}" for line in entry_lines]
 
 
+def _critique_summary_lines(items: object) -> list[str]:
+    if isinstance(items, dict):
+        text = _entry_text(items)
+        confidence = items.get("confidence")
+        suffix = f" Confidence: {confidence}" if isinstance(confidence, str) and confidence.strip() else ""
+        return [f"- {text}{suffix}".rstrip()]
+    entry_lines = _entry_lines(items)
+    return [line if line.startswith("- ") else f"- {line}" for line in entry_lines]
+
+
+def _format_unsupported_claim(item: object) -> str:
+    if isinstance(item, dict) and any(key in item for key in ("target_claim", "reason", "needed_evidence")):
+        parts: list[str] = []
+        target_claim = item.get("target_claim")
+        reason = item.get("reason")
+        needed_evidence = item.get("needed_evidence")
+        if isinstance(target_claim, str) and target_claim.strip():
+            parts.append(f"Target claim: {target_claim}")
+        if isinstance(reason, str) and reason.strip():
+            parts.append(f"Why unsupported: {reason}")
+        if isinstance(needed_evidence, str) and needed_evidence.strip():
+            parts.append(f"Needed evidence: {needed_evidence}")
+        suffix = _format_evidence_sources(_entry_sources(item))
+        return f"- {'. '.join(parts)}{suffix}".rstrip()
+    text = _entry_text(item)
+    suffix = _format_evidence_sources(_entry_sources(item))
+    return f"- {text}{suffix}".rstrip()
+
+
 def render_stage_markdown_from_json(stage_id: str, payload: dict[str, object]) -> str:
     payload = normalize_stage_citations(stage_id, payload)
     lines: list[str] = []
@@ -428,6 +538,24 @@ def render_stage_markdown_from_json(stage_id: str, payload: dict[str, object]) -
         lines.extend(_entry_lines(payload.get("preliminary_disagreements")))
         lines.extend(["", "# Source Evaluation", ""])
         lines.extend(_entry_lines(payload.get("source_evaluation")))
+        return "\n".join(lines).rstrip() + "\n"
+
+    if stage_id in {"critique-a-on-b", "critique-b-on-a"}:
+        lines.extend(["# Claims That Survive Review", ""])
+        lines.extend(_entry_lines(payload.get("supported_claims")))
+        lines.extend(["", "# Unsupported Claims", ""])
+        for item in payload.get("unsupported_claims", []):
+            lines.append(_format_unsupported_claim(item))
+        lines.extend(["", "# Weak Sources Or Citation Problems", ""])
+        lines.extend(_entry_lines(payload.get("weak_source_issues")))
+        lines.extend(["", "# Omissions And Missing Alternatives", ""])
+        lines.extend(_entry_lines(payload.get("omissions")))
+        lines.extend(["", "# Overreach And Overconfident Inference", ""])
+        lines.extend(_entry_lines(payload.get("overreach")))
+        lines.extend(["", "# Unresolved Disagreements For Judge", ""])
+        lines.extend(_entry_lines(payload.get("unresolved_disagreements")))
+        lines.extend(["", "# Overall Critique Summary", ""])
+        lines.extend(_critique_summary_lines(payload.get("summary")))
         return "\n".join(lines).rstrip() + "\n"
 
     if stage_id == "judge":
@@ -468,13 +596,17 @@ def _validate_source_records(sources: object, errors: list[str]) -> dict[str, di
         if not isinstance(source, dict):
             errors.append(f"sources[{position}] must be an object.")
             continue
-        source_id = source.get("id")
+        normalized_source = normalize_source_record(source)
+        source_id = normalized_source.get("id")
         if not isinstance(source_id, str) or not SOURCE_ID_PATTERN.match(source_id):
             errors.append(f"sources[{position}].id must be a canonical external source ID.")
             continue
         for field in ("title", "type", "authority", "locator"):
-            _require_string(source.get(field), f"sources[{position}].{field}", errors)
-        index[source_id] = {key: str(value) for key, value in source.items() if isinstance(value, str)}
+            _require_string(normalized_source.get(field), f"sources[{position}].{field}", errors)
+        source_class = normalized_source.get("source_class")
+        if not isinstance(source_class, str) or source_class not in SOURCE_CLASSES:
+            errors.append(f"sources[{position}].source_class must be one of {sorted(SOURCE_CLASSES)}.")
+        index[source_id] = {key: str(value) for key, value in normalized_source.items() if isinstance(value, str)}
     return index
 
 
@@ -595,6 +727,37 @@ def _validate_recommended_artifact_structure(items: object, errors: list[str]) -
     _validate_text_entry_list(items, "recommended_artifact_structure", errors)
 
 
+def _validate_critique_summary(items: object, errors: list[str]) -> None:
+    if isinstance(items, dict):
+        text = items.get("text", items.get("summary"))
+        _require_string(text, "summary.text", errors)
+        confidence = items.get("confidence")
+        if confidence is not None and confidence not in {"low", "medium", "high"}:
+            errors.append("summary.confidence must be low, medium, or high.")
+        return
+    _validate_text_entry_list(items, "summary", errors)
+
+
+def _validate_unsupported_claims(items: object, errors: list[str]) -> None:
+    if not isinstance(items, list):
+        errors.append("unsupported_claims must be a list.")
+        return
+    for position, item in enumerate(items, start=1):
+        if isinstance(item, str):
+            if not item.strip():
+                errors.append(f"unsupported_claims[{position}] must not be empty.")
+            continue
+        if not isinstance(item, dict):
+            errors.append(f"unsupported_claims[{position}] must be a string or object.")
+            continue
+        if any(key in item for key in ("target_claim", "reason", "needed_evidence")):
+            _require_string(item.get("target_claim"), f"unsupported_claims[{position}].target_claim", errors)
+            _require_string(item.get("reason"), f"unsupported_claims[{position}].reason", errors)
+            _require_string(item.get("needed_evidence"), f"unsupported_claims[{position}].needed_evidence", errors)
+            continue
+        _require_string(item.get("text"), f"unsupported_claims[{position}].text", errors)
+
+
 def _validate_flexible_object_list(
     items: object,
     field_name: str,
@@ -691,6 +854,16 @@ def validate_stage_json(stage_id: str, payload: dict[str, object], source_regist
         _validate_source_evaluation(payload.get("source_evaluation"), errors)
         return errors
 
+    if stage_id in {"critique-a-on-b", "critique-b-on-a"}:
+        _validate_flexible_object_list(payload.get("supported_claims"), "supported_claims", errors, accepted_text_keys=("text",))
+        _validate_unsupported_claims(payload.get("unsupported_claims"), errors)
+        _validate_flexible_object_list(payload.get("weak_source_issues"), "weak_source_issues", errors, accepted_text_keys=("text",))
+        _validate_flexible_object_list(payload.get("omissions"), "omissions", errors, accepted_text_keys=("text",))
+        _validate_flexible_object_list(payload.get("overreach"), "overreach", errors, accepted_text_keys=("text",))
+        _validate_flexible_object_list(payload.get("unresolved_disagreements"), "unresolved_disagreements", errors, accepted_text_keys=("text",))
+        _validate_critique_summary(payload.get("summary"), errors)
+        return errors
+
     _validate_claim_list(
         payload.get("supported_conclusions"),
         "supported_conclusions",
@@ -718,18 +891,18 @@ def validate_stage_json(stage_id: str, payload: dict[str, object], source_regist
 def merge_source_registry(existing: dict[str, object], stage_sources: list[dict[str, object]]) -> dict[str, object]:
     merged = {"run_id": existing.get("run_id"), "notes": existing.get("notes", ""), "sources": []}
     existing_index = {
-        source["id"]: dict(source)
+        normalize_source_record(source)["id"]: dict(normalize_source_record(source))
         for source in existing.get("sources", [])
-        if isinstance(source, dict) and isinstance(source.get("id"), str)
+        if isinstance(source, dict) and isinstance(normalize_source_record(source).get("id"), str)
     }
     for source in stage_sources:
         if not isinstance(source, dict):
             continue
-        source_id = source.get("id")
+        candidate = normalize_source_record(source)
+        source_id = candidate.get("id")
         if not isinstance(source_id, str):
             continue
         current = existing_index.get(source_id)
-        candidate = dict(source)
         if current is None:
             existing_index[source_id] = candidate
             continue
@@ -742,7 +915,7 @@ def merge_source_registry(existing: dict[str, object], stage_sources: list[dict[
             continue
         if current.get("authority") == RECOVERED_SOURCE_AUTHORITY and candidate.get("authority") == RECOVERED_SOURCE_AUTHORITY:
             continue
-        for field in ("title", "type", "authority", "locator"):
+        for field in ("title", "type", "authority", "locator", "source_class"):
             left = current.get(field)
             right = candidate.get(field)
             if left and right and left != right:
@@ -790,8 +963,10 @@ def _entry_text(item: object) -> str:
     if isinstance(item, dict):
         for key in (
             "text",
-            "point",
+            "target_claim",
+            "needed_evidence",
             "summary",
+            "point",
             "topic",
             "issue",
             "reason",
@@ -799,8 +974,10 @@ def _entry_text(item: object) -> str:
             "reduction_strategy",
             "what_would_reduce_it",
             "notes",
+            "assessment",
             "limitation",
             "quality",
+            "title",
             "source_name",
             "biases_or_freshness",
         ):
@@ -854,6 +1031,47 @@ def build_claim_map_from_stage_json(stage_id: str, payload: dict[str, object]) -
                 claim_type="evidence_gap",
                 evidence_sources=_entry_sources(item),
                 section="Evidence Gaps",
+            )
+    elif stage_id in {"critique-a-on-b", "critique-b-on-a"}:
+        section_map = (
+            ("supported_claims", "Claims That Survive Review"),
+            ("unsupported_claims", "Unsupported Claims"),
+            ("weak_source_issues", "Weak Sources Or Citation Problems"),
+            ("omissions", "Omissions And Missing Alternatives"),
+            ("overreach", "Overreach And Overconfident Inference"),
+            ("unresolved_disagreements", "Unresolved Disagreements For Judge"),
+        )
+        for field_name, section_name in section_map:
+            for index, item in enumerate(payload.get(field_name, []), start=1):
+                _append_claim(
+                    claims,
+                    claim_id=f"{stage_id}-{field_name}-{index:03d}",
+                    text=_entry_text(item),
+                    claim_type="evaluation",
+                    evidence_sources=_entry_sources(item),
+                    section=section_name,
+                )
+        summary = payload.get("summary")
+        if isinstance(summary, list):
+            for index, item in enumerate(summary, start=1):
+                _append_claim(
+                    claims,
+                    claim_id=f"{stage_id}-summary-{index:03d}",
+                    text=_entry_text(item),
+                    claim_type="evaluation",
+                    evidence_sources=_entry_sources(item),
+                    confidence=item.get("confidence") if isinstance(item, dict) else None,
+                    section="Overall Critique Summary",
+                )
+        elif summary:
+            _append_claim(
+                claims,
+                claim_id=f"{stage_id}-summary-001",
+                text=_entry_text(summary),
+                claim_type="evaluation",
+                evidence_sources=_entry_sources(summary),
+                confidence=summary.get("confidence") if isinstance(summary, dict) else None,
+                section="Overall Critique Summary",
             )
     elif stage_id == "judge":
         for item in payload.get("supported_conclusions", []):

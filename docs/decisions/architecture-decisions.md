@@ -114,10 +114,10 @@ Decision:
 
 Status:
 - partially implemented
-- `run_workflow.py` now scaffolds authoritative JSON outputs for research and judge stages, plus a run-level `sources.json`
-- `execute_workflow.py` validates those structured artifacts and uses them as the canonical gate for research and judge stages
+- `run_workflow.py` now scaffolds authoritative JSON outputs for research, critique, and judge stages, plus a run-level `sources.json`
+- `execute_workflow.py` validates those structured artifacts through a shared stage-validation path and uses them as the canonical gate for research, critique, and judge stages
 - when structured JSON is valid but the paired markdown artifact is weaker than the markdown contract, the runner now regenerates markdown from the structured artifact so downstream markdown-only stages consume a normalized bridge representation
-- critique stages are still markdown-only, and markdown-to-JSON synthesis still exists as a migration fallback when adapters fail to write structured outputs directly
+- markdown-to-JSON synthesis has been removed for structured stages, but stdout-recovery compatibility paths still exist for some adapters, so the design is still not at the target structure-first end state
 
 ---
 
@@ -133,8 +133,10 @@ Decision:
 
 Status:
 - partially implemented
-- `execute_workflow.py` now applies source-aware structured gates for research and judge stages
-- the system is still not a trustworthy evidence adjudication engine because critique stages remain markdown-only, source governance is still shallow, and migration fallbacks still synthesize structure from prose when adapters do not comply
+- `execute_workflow.py` now applies source-aware structured gates for research, critique, and judge stages through one shared stage-validation module
+- repo-level final-artifact readiness and the final artifact generator now share one publication-validation path for uncited facts, uncited inferences, provenance-only support, and unclassified markers
+- intake now has an explicit runtime contract validator, and source records now normalize into explicit source classes for publication policy
+- the system is still not a trustworthy evidence adjudication engine because source governance is still shallow beyond source classes, stdout adapter compatibility paths still exist, and provenance-versus-evidence handling still relies on marker parsing
 
 ---
 
