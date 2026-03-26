@@ -97,7 +97,7 @@ Implemented today:
 - lexical claim classification, including evaluation handling for disagreement and confidence sections
 - strict failure on uncited extracted facts
 - section-aware markdown validation retained as a migration backstop for required fact and inference sections
-- separate downstream final artifact generation with readiness gating
+- separate downstream final artifact generation with readiness gating, now preferring structured judge JSON over markdown scraping and rendering followable reference entries rather than bare source IDs
 - prompt contracts that explicitly forbid replacing evidence citations with workflow-stage references
 
 Known limitations in the current repo:

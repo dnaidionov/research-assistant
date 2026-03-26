@@ -10,6 +10,7 @@ Implementation status:
 - Critique stages and some compatibility paths are still prose-first.
 - Structured research and judge stages now regenerate canonical markdown from authoritative JSON when the markdown bridge artifact is weaker than contract, but that is still a migration bridge rather than the target design.
 - Judge-side non-core synthesis sections now accept richer object forms in code, which reduces false failures but also reinforces the need for explicit schema-governed stage contracts across every stage.
+- Final artifact generation now prefers structured judge JSON when available and renders followable references from structured source records, which is closer to the target architecture than the earlier markdown-only renderer.
 - This document remains the forward plan for completing the migration.
 
 ## Problem Statement

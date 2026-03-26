@@ -854,6 +854,8 @@ def run_final_artifact(
         str(Path(__file__).resolve().parents[1] / "scripts" / "generate_final_artifact.py"),
         "--judge-input",
         str(judge_output),
+        "--judge-structured-input",
+        str(stage_structured_output_path(run_dir, "judge")),
         "--claim-register",
         str(claim_output),
         "--output",

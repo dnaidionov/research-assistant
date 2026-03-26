@@ -9,6 +9,185 @@ GENERATE_FINAL_ARTIFACT = REPO_ROOT / "scripts" / "generate_final_artifact.py"
 
 
 class GenerateFinalArtifactTests(unittest.TestCase):
+    def test_prefers_structured_judge_input_and_renders_followable_references(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            job_dir = root / "jobs" / "example-job"
+            run_dir = job_dir / "runs" / "run-017"
+            stage_outputs = run_dir / "stage-outputs"
+            stage_outputs.mkdir(parents=True)
+            (job_dir / "brief.md").write_text("# Brief\n\nProject brief contents.\n", encoding="utf-8")
+
+            judge_path = stage_outputs / "06-judge.md"
+            judge_json_path = stage_outputs / "06-judge.json"
+            claims_path = job_dir / "evidence" / "claims-run-017.json"
+            claims_path.parent.mkdir(parents=True)
+            output_path = job_dir / "outputs" / "final-run-017.md"
+            output_path.parent.mkdir(parents=True)
+
+            judge_path.write_text(
+                "\n".join(
+                    [
+                        "# Supported Conclusions",
+                        "1. Placeholder markdown shape. [DOC-001, SRC-001]",
+                        "",
+                        "# Inferences And Synthesis Judgments",
+                        "1. Placeholder inference. [SRC-001] Confidence: medium",
+                        "",
+                        "# Unresolved Disagreements",
+                        "1. Placeholder disagreement",
+                        "",
+                        "# Confidence Assessment",
+                        "- Placeholder confidence.",
+                        "",
+                        "# Evidence Gaps",
+                        "- Placeholder gap.",
+                        "",
+                        "# Rationale And Traceability",
+                        "- Placeholder rationale.",
+                        "",
+                        "# Recommended Final Artifact Structure",
+                        "- Placeholder structure.",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            judge_json_path.write_text(
+                """{
+  "stage": "judge",
+  "supported_conclusions": [
+    {
+      "id": "CONC-001",
+      "text": "Upgrading to an on-device architecture is technically feasible.",
+      "evidence_sources": ["DOC-001", "SRC-001"]
+    }
+  ],
+  "synthesis_judgments": [
+    {
+      "id": "JUDG-001",
+      "text": "A split FPGA plus embedded compute architecture is the lowest-risk path.",
+      "evidence_sources": ["SRC-001", "SRC-002"],
+      "confidence": "high"
+    }
+  ],
+  "unresolved_disagreements": [
+    {
+      "point": "Hardware platform selection",
+      "case_a": "Integrated SoC is simpler.",
+      "case_b": "Modular accelerator is cooler.",
+      "reason_unresolved": "Thermal measurements are missing."
+    }
+  ],
+  "confidence_assessment": {
+    "summary": "High confidence in feasibility, medium confidence in hardware selection.",
+    "topics": [
+      {
+        "topic": "Feasibility",
+        "confidence": "high",
+        "rationale": "Supported by cited hardware capabilities."
+      }
+    ]
+  },
+  "evidence_gaps": [
+    "Measured thermal envelope under sustained load."
+  ],
+  "rationale": "Judge preserved the hardware dispute because the thermal record is incomplete.",
+  "recommended_artifact_structure": {
+    "sections": [
+      "Executive Summary",
+      "Architecture",
+      "Thermal Risks"
+    ]
+  },
+  "sources": [
+    {
+      "id": "DOC-001",
+      "title": "Research Stage Prompt brief.md excerpt for run-017 stage research-a",
+      "type": "project_brief",
+      "authority": "Project run artifact",
+      "locator": "__PROMPT_PACKET__"
+    },
+    {
+      "id": "SRC-001",
+      "title": "Primary hardware source",
+      "type": "official documentation",
+      "authority": "Vendor",
+      "locator": "https://example.com/hardware"
+    },
+    {
+      "id": "SRC-002",
+      "title": "Thermal source",
+      "type": "technical note",
+      "authority": "Vendor",
+      "locator": "https://example.com/thermal"
+    }
+  ]
+}""".replace("__PROMPT_PACKET__", str(stage_outputs.parent / "prompt-packets" / "02-research-a.md")),
+                encoding="utf-8",
+            )
+
+            claims_path.write_text(
+                """{
+  "claims": [
+    {
+      "id": "CONC-001",
+      "text": "Upgrading to an on-device architecture is technically feasible.",
+      "type": "fact",
+      "provenance": [],
+      "evidence_sources": ["DOC-001", "SRC-001"],
+      "unclassified_markers": []
+    },
+    {
+      "id": "JUDG-001",
+      "text": "A split FPGA plus embedded compute architecture is the lowest-risk path.",
+      "type": "inference",
+      "provenance": [],
+      "evidence_sources": ["SRC-001", "SRC-002"],
+      "unclassified_markers": [],
+      "confidence": "high"
+    }
+  ],
+  "summary": {
+    "claim_type_counts": {"fact": 1, "inference": 1},
+    "claims_with_unclassified_markers": [],
+    "fact_count": 1,
+    "inference_count": 1,
+    "provenance_only_fact_ids": [],
+    "uncited_fact_ids": [],
+    "uncited_inference_ids": []
+  }
+}""",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(GENERATE_FINAL_ARTIFACT),
+                    "--judge-input",
+                    str(judge_path),
+                    "--judge-structured-input",
+                    str(judge_json_path),
+                    "--claim-register",
+                    str(claims_path),
+                    "--output",
+                    str(output_path),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            artifact = output_path.read_text(encoding="utf-8")
+            self.assertNotIn("- 1.", artifact)
+            self.assertNotIn("- -", artifact)
+            self.assertIn("DOC-001: Job brief", artifact)
+            self.assertIn(str(job_dir / "brief.md"), artifact)
+            self.assertIn("SRC-001: Primary hardware source", artifact)
+            self.assertIn("https://example.com/hardware", artifact)
+
     def test_generates_structured_artifact_with_external_references_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

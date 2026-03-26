@@ -32,6 +32,7 @@ def parse_args() -> argparse.Namespace:
         description="Generate a structured operator-reviewed final artifact from judge output and a claim register."
     )
     parser.add_argument("--judge-input", required=True, help="Path to the judge markdown artifact.")
+    parser.add_argument("--judge-structured-input", help="Optional path to the structured judge JSON artifact.")
     parser.add_argument("--claim-register", required=True, help="Path to the JSON claim register.")
     parser.add_argument("--output", required=True, help="Path to write the final markdown artifact.")
     parser.add_argument("--config", help="Optional job config path.")
@@ -57,7 +58,15 @@ def parse_markdown_sections(markdown: str) -> dict[str, list[str]]:
 
 
 def normalize_lines(lines: list[str]) -> list[str]:
-    return [line.strip() for line in lines if line.strip()]
+    normalized: list[str] = []
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+        line = re.sub(r"^(?:[-*+]\s+)+", "", line)
+        line = re.sub(r"^\d+\.\s+", "", line)
+        normalized.append(line.strip())
+    return normalized
 
 
 def extract_reference_ids(claims: list[dict[str, object]]) -> list[str]:
@@ -72,10 +81,142 @@ def extract_reference_ids(claims: list[dict[str, object]]) -> list[str]:
     return refs
 
 
+def format_citation_suffix(reference_ids: list[str]) -> str:
+    if not reference_ids:
+        return ""
+    return f" [{', '.join(reference_ids)}]"
+
+
+def text_from_entry(item: object) -> str:
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, dict):
+        for key in ("text", "summary", "topic", "point"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return str(item).strip()
+
+
+def infer_job_dir_from_judge_path(judge_path: Path) -> Path | None:
+    try:
+        runs_dir = judge_path.parents[2]
+        if runs_dir.name != "runs":
+            return None
+        return judge_path.parents[3]
+    except IndexError:
+        return None
+
+
+def normalize_reference_record(reference_id: str, record: dict[str, object], judge_path: Path) -> dict[str, str]:
+    title = str(record.get("title") or reference_id)
+    source_type = str(record.get("type") or "").strip()
+    authority = str(record.get("authority") or "").strip()
+    locator = str(record.get("locator") or "").strip()
+
+    if source_type == "project_brief":
+        job_dir = infer_job_dir_from_judge_path(judge_path)
+        brief_path = job_dir / "brief.md" if job_dir is not None else None
+        if brief_path is not None and brief_path.is_file():
+            title = "Job brief"
+            authority = "Job input"
+            locator = str(brief_path)
+
+    return {
+        "id": reference_id,
+        "title": title,
+        "type": source_type,
+        "authority": authority,
+        "locator": locator,
+    }
+
+
+def build_source_index(judge_structured_payload: dict[str, object] | None, judge_path: Path) -> dict[str, dict[str, str]]:
+    if not judge_structured_payload:
+        return {}
+    index: dict[str, dict[str, str]] = {}
+    for source in judge_structured_payload.get("sources", []):
+        if not isinstance(source, dict):
+            continue
+        source_id = source.get("id")
+        if not isinstance(source_id, str) or not source_id.strip():
+            continue
+        index[source_id] = normalize_reference_record(source_id, source, judge_path)
+    return index
+
+
+def render_reference_lines(reference_ids: list[str], source_index: dict[str, dict[str, str]]) -> list[str]:
+    lines: list[str] = []
+    for reference_id in reference_ids:
+        record = source_index.get(reference_id)
+        if record is None:
+            lines.append(f"- {reference_id}")
+            continue
+        parts = [f"{reference_id}: {record['title']}"]
+        authority = record.get("authority")
+        locator = record.get("locator")
+        if authority:
+            parts.append(authority)
+        if locator:
+            parts.append(locator)
+        lines.append(f"- {' | '.join(parts)}")
+    return lines
+
+
+def render_structured_disagreement(item: dict[str, object]) -> str:
+    def clean_sentence(value: str) -> str:
+        return value.strip().rstrip(".")
+
+    point = str(item.get("point", "")).strip()
+    case_a = clean_sentence(str(item.get("case_a", "")))
+    case_b = clean_sentence(str(item.get("case_b", "")))
+    reason = clean_sentence(str(item.get("reason_unresolved", "")))
+    parts = [clean_sentence(point)] if point else []
+    if case_a:
+        parts.append(f"Case A: {case_a}")
+    if case_b:
+        parts.append(f"Case B: {case_b}")
+    if reason:
+        parts.append(f"Unresolved because {reason}")
+    return ". ".join(parts).strip()
+
+
+def render_structured_confidence_lines(confidence_assessment: object) -> list[str]:
+    if isinstance(confidence_assessment, dict):
+        lines: list[str] = []
+        summary = confidence_assessment.get("summary")
+        if isinstance(summary, str) and summary.strip():
+            lines.append(summary.strip())
+        topics = confidence_assessment.get("topics")
+        if isinstance(topics, list):
+            for topic in topics:
+                if isinstance(topic, dict):
+                    topic_name = str(topic.get("topic", "")).strip()
+                    confidence = str(topic.get("confidence", "")).strip()
+                    rationale = str(topic.get("rationale", "")).strip()
+                    parts = [topic_name] if topic_name else []
+                    if confidence:
+                        parts.append(f"Confidence: {confidence}")
+                    if rationale:
+                        parts.append(rationale)
+                    if parts:
+                        lines.append(". ".join(parts))
+                elif isinstance(topic, str) and topic.strip():
+                    lines.append(topic.strip())
+        return lines
+    if isinstance(confidence_assessment, str):
+        return [confidence_assessment.strip()] if confidence_assessment.strip() else []
+    if isinstance(confidence_assessment, list):
+        return normalize_lines([text_from_entry(item) for item in confidence_assessment if text_from_entry(item)])
+    return []
+
+
 def validate_inputs(judge_text: str, payload: dict[str, object]) -> None:
     summary = payload["summary"]
     if summary.get("uncited_fact_ids"):
         raise ValueError("Cannot generate final artifact: uncited facts remain in the claim register.")
+    if summary.get("uncited_inference_ids"):
+        raise ValueError("Cannot generate final artifact: uncited inferences remain in the claim register.")
     if summary.get("provenance_only_fact_ids"):
         raise ValueError("Cannot generate final artifact: provenance-only fact support remains in the claim register.")
     if summary.get("claims_with_unclassified_markers"):
@@ -98,32 +239,76 @@ def choose_recommendation(claims: list[dict[str, object]], sections: dict[str, l
     raise ValueError("Cannot generate final artifact: recommendation content is missing from judge synthesis.")
 
 
-def render_artifact(judge_text: str, payload: dict[str, object]) -> str:
+def render_artifact(
+    judge_text: str,
+    payload: dict[str, object],
+    *,
+    judge_path: Path,
+    judge_structured_payload: dict[str, object] | None = None,
+) -> str:
     claims = payload["claims"]
     sections = parse_markdown_sections(judge_text)
+    source_index = build_source_index(judge_structured_payload, judge_path)
+    used_reference_ids: list[str] = []
+    seen_reference_ids: set[str] = set()
 
-    executive_summary = normalize_lines(sections.get("Supported Conclusions", []))
-    if not executive_summary:
-        executive_summary = [
-            claim["text"]
-            for claim in claims
-            if claim.get("type") == "fact" and claim.get("evidence_sources")
-        ][:3]
+    def remember_references(reference_ids: list[str]) -> None:
+        for reference_id in reference_ids:
+            if reference_id not in seen_reference_ids:
+                seen_reference_ids.add(reference_id)
+                used_reference_ids.append(reference_id)
 
-    options_comparison = normalize_lines(sections.get("Unresolved Disagreements", []))
-    if not options_comparison:
-        options_comparison = [
-            claim["text"]
-            for claim in claims
-            if claim.get("type") in {"inference", "evaluation"}
-        ][:4]
+    if judge_structured_payload:
+        executive_summary = []
+        for item in judge_structured_payload.get("supported_conclusions", []):
+            if not isinstance(item, dict):
+                continue
+            evidence_sources = [str(source) for source in item.get("evidence_sources", []) if isinstance(source, str)]
+            executive_summary.append(f"{item['text']}{format_citation_suffix(evidence_sources)}")
+            remember_references(evidence_sources)
 
-    recommendation = choose_recommendation(claims, sections)
-    confidence = normalize_lines(sections.get("Confidence Assessment", []))
+        options_comparison = []
+        for item in judge_structured_payload.get("unresolved_disagreements", []):
+            if isinstance(item, dict):
+                options_comparison.append(render_structured_disagreement(item))
+            elif isinstance(item, str) and item.strip():
+                options_comparison.append(item.strip())
+
+        recommendation = []
+        for item in judge_structured_payload.get("synthesis_judgments", []):
+            if not isinstance(item, dict):
+                continue
+            evidence_sources = [str(source) for source in item.get("evidence_sources", []) if isinstance(source, str)]
+            remember_references(evidence_sources)
+            confidence_label = str(item.get("confidence", "")).strip()
+            confidence_suffix = f" Confidence: {confidence_label}." if confidence_label else ""
+            recommendation.append(f"{item['text']}{format_citation_suffix(evidence_sources)}{confidence_suffix}")
+
+        confidence = render_structured_confidence_lines(judge_structured_payload.get("confidence_assessment"))
+        open_questions = normalize_lines([text_from_entry(item) for item in judge_structured_payload.get("evidence_gaps", []) if text_from_entry(item)])
+    else:
+        executive_summary = normalize_lines(sections.get("Supported Conclusions", []))
+        if not executive_summary:
+            executive_summary = [
+                claim["text"]
+                for claim in claims
+                if claim.get("type") == "fact" and claim.get("evidence_sources")
+            ][:3]
+
+        options_comparison = normalize_lines(sections.get("Unresolved Disagreements", []))
+        if not options_comparison:
+            options_comparison = [
+                claim["text"]
+                for claim in claims
+                if claim.get("type") in {"inference", "evaluation"}
+            ][:4]
+
+        recommendation = choose_recommendation(claims, sections)
+        confidence = normalize_lines(sections.get("Confidence Assessment", []))
+        open_questions = normalize_lines(sections.get("Evidence Gaps", []))
+
     if not confidence:
         confidence = ["Confidence remains limited where source coverage is incomplete or evidence is mixed."]
-
-    open_questions = normalize_lines(sections.get("Evidence Gaps", []))
     if not open_questions:
         open_questions = [
             claim["text"]
@@ -131,9 +316,10 @@ def render_artifact(judge_text: str, payload: dict[str, object]) -> str:
             if claim.get("type") in {"open_question", "evidence_gap"}
         ][:5]
 
-    references = extract_reference_ids(claims)
+    references = used_reference_ids or extract_reference_ids(claims)
     if not references:
         raise ValueError("Cannot generate final artifact: no external references are available.")
+    reference_lines = render_reference_lines(references, source_index)
 
     parts = [
         "# Executive Summary",
@@ -154,7 +340,7 @@ def render_artifact(judge_text: str, payload: dict[str, object]) -> str:
         "",
         "# References",
         "",
-        *[f"- {reference}" for reference in references],
+        *reference_lines,
         "",
         "# Open Questions",
         "",
@@ -174,14 +360,25 @@ def render_artifact(judge_text: str, payload: dict[str, object]) -> str:
 def main() -> int:
     args = parse_args()
     judge_path = Path(args.judge_input).expanduser()
+    judge_structured_path = (
+        Path(args.judge_structured_input).expanduser()
+        if args.judge_structured_input
+        else judge_path.with_suffix(".json")
+    )
     claims_path = Path(args.claim_register).expanduser()
     output_path = Path(args.output).expanduser()
 
     try:
         judge_text = judge_path.read_text(encoding="utf-8")
+        judge_structured_payload = load_json(judge_structured_path) if judge_structured_path.is_file() else None
         payload = load_json(claims_path)
         validate_inputs(judge_text, payload)
-        artifact = render_artifact(judge_text, payload)
+        artifact = render_artifact(
+            judge_text,
+            payload,
+            judge_path=judge_path,
+            judge_structured_payload=judge_structured_payload,
+        )
         write_text(output_path, artifact)
     except FileNotFoundError as exc:
         print(f"Missing required input file: {exc.filename}", file=sys.stderr)
