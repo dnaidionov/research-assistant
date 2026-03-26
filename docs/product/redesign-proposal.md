@@ -198,3 +198,82 @@ Stdout recovery should remain only as a temporary compatibility layer during mig
 - replacing the local filesystem as the system of record
 - collapsing the multi-stage workflow into one pass
 - binding the orchestration layer to one provider or model
+
+## Alternatives Considered
+
+### Plan 1: Contract-First Hardening
+
+This alternative prioritizes architectural closure before changing the execution model.
+
+Core idea:
+
+- make structured stage JSON the only authoritative machine-readable contract
+- extend structure-first execution to critique stages
+- unify validation, claim mapping, publication, and source handling around normalized structured payloads
+- reduce and then remove migration bridges such as stdout recovery, markdown-to-JSON synthesis, and markdown regeneration from structured JSON
+- strengthen workflow state transitions, source governance, and publication rules before introducing more autonomy
+
+Why it was considered:
+
+- most recent failures have been contract failures, not lack-of-agent failures
+- the current system still has overlapping truth layers: prompt, markdown, structured JSON, claim map, publication, and workflow state
+- architectural soundness requires those layers to converge before adding more concurrent decision-making components
+
+Main upside:
+
+- directly addresses the actual causes of `run-016`, `run-018`, and the earlier citation and bridge failures
+- reduces non-local bugs by collapsing fragmented validation semantics
+- creates a safer base for later evolution into stronger orchestration or agentic execution
+
+Main downside:
+
+- less visually ambitious than a broader agentic redesign
+- requires more plumbing and contract cleanup before higher-level workflow changes become visible
+
+### Plan 2: Hub-and-Spoke Agentic Workflow
+
+This alternative introduces a central orchestrator with bounded worker agents for workflow stages.
+
+Core idea:
+
+- orchestrator as the hub, owning dependency scheduling, validation, policy, state, retries, source registry merging, and publication
+- stage agents as spokes: intake, research-a, research-b, critique-a-on-b, critique-b-on-a, judge
+- parallel execution preserved where the current workflow already benefits from it, especially the research and critique pairs
+- evidence extraction and final artifact generation remain deterministic runner-owned steps initially rather than autonomous agents
+
+Why it was considered:
+
+- the workflow is already evolving toward orchestrated stage execution with parallel role assignment
+- a hub-and-spoke model would improve separation of reasoning work from control-plane responsibilities
+- it is a plausible long-term architecture once contracts are stable
+
+Main upside:
+
+- clearer execution ownership and better long-term extensibility
+- cleaner provider diversification and benchmarking by role
+- better fit for future API-driven orchestration and specialized worker roles
+
+Main downside:
+
+- does not solve the current contract failures by itself
+- if introduced too early, it would multiply failure surfaces across mixed markdown, JSON, and bridge contracts
+- would likely produce more non-local bugs until critique structure, validation unification, and source governance are already hardened
+
+## Recommendation
+
+Do not implement Plan 2 immediately.
+
+Recommended sequence:
+
+1. execute the high-priority parts of Plan 1
+2. finish structure-first rollout across critiques
+3. unify validation, source governance, and publication rules
+4. then transition toward the Plan 2 hub-and-spoke orchestrator model
+
+Reasoning:
+
+- current failures are primarily contract and policy failures, not orchestration-shape failures
+- critique stages are still markdown-only, so the system still depends on bridge logic for correctness
+- validation, extraction, publication, and state transitions are still fragmented across multiple scripts
+- introducing more autonomous agents now would increase concurrency and control complexity on top of unstable contracts
+- Plan 2 becomes a strong next move only after the core structure-first contract is authoritative across the whole workflow

@@ -135,3 +135,24 @@ Status:
 - partially implemented
 - `execute_workflow.py` now applies source-aware structured gates for research and judge stages
 - the system is still not a trustworthy evidence adjudication engine because critique stages remain markdown-only, source governance is still shallow, and migration fallbacks still synthesize structure from prose when adapters do not comply
+
+---
+
+## Decision 12: Do not transition to a full agentic workflow before contract hardening
+
+Reason:
+- the current system's primary failures are contract mismatches, bridge failures, and fragmented validation semantics
+- adding a hub-and-spoke agent runtime before critique structure, validation unification, and source-governance hardening would multiply failure surfaces rather than simplify them
+- the right role for agentic orchestration is after the system has one authoritative machine-readable contract and a clearer control-plane boundary
+
+Alternatives considered:
+- Plan 1: contract-first hardening of stage schemas, validation, source handling, publication, and workflow state
+- Plan 2: staged transition to a hub-and-spoke orchestrator with bounded worker agents for intake, research, critique, and judge
+
+Decision:
+- Plan 1 is the recommended immediate direction
+- Plan 2 remains a credible future architecture, but it should follow the high-priority Plan 1 prerequisites rather than replace them
+
+Status:
+- accepted as current roadmap guidance
+- not yet implemented
