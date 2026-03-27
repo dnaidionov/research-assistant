@@ -6,6 +6,7 @@ import json
 import re
 from copy import deepcopy
 from pathlib import Path
+from urllib.parse import urlparse
 
 from _workflow_lib import write_json
 
@@ -19,6 +20,11 @@ CITATION_BLOCK_PATTERN = re.compile(r"\[([^\[\]]+)\]")
 CONFIDENCE_PATTERN = re.compile(r"\bconfidence\s*:\s*(low|medium|high)\b", re.IGNORECASE)
 RECOVERED_SOURCE_AUTHORITY = "recovered-from-markdown"
 SOURCE_CLASSES = {"external_evidence", "job_input", "workflow_provenance", "recovered_provisional"}
+SUPPORT_LINK_ROLES = {"evidence", "context", "challenge", "provenance"}
+AUDITABLE_LOCATOR_PATTERN = re.compile(
+    r"^(?:https?://\S+|file://\S+|app://\S+|urn:[^\s]+|(?:\.{0,2}/|/)\S+|[A-Za-z0-9._-]+\.[A-Za-z]{2,}(?:/\S*)?)$"
+)
+BARE_DOMAIN_PATTERN = re.compile(r"^[A-Za-z0-9._-]+\.[A-Za-z]{2,}$")
 
 STAGE_JSON_KEYS: dict[str, tuple[str, ...]] = {
     "research-a": (
@@ -234,6 +240,189 @@ def normalize_source_record(source: dict[str, object]) -> dict[str, object]:
     return normalized
 
 
+def source_supports_world_claims(source_record: dict[str, str]) -> bool:
+    return source_record.get("source_class") in {"external_evidence", "job_input"}
+
+
+def auditable_locator(locator: object, source_class: str) -> bool:
+    if not isinstance(locator, str) or not locator.strip():
+        return False
+    if source_class in {"job_input", "workflow_provenance", "recovered_provisional"}:
+        return True
+    return bool(AUDITABLE_LOCATOR_PATTERN.match(locator.strip()))
+
+
+def source_quality_warnings(payload: dict[str, object]) -> list[str]:
+    warnings: list[str] = []
+    sources = payload.get("sources", [])
+    if not isinstance(sources, list):
+        return warnings
+    for position, source in enumerate(sources, start=1):
+        if not isinstance(source, dict):
+            continue
+        normalized_source = normalize_source_record(source)
+        source_class = str(normalized_source.get("source_class") or "")
+        locator = str(normalized_source.get("locator") or "").strip()
+        if source_class == "external_evidence" and BARE_DOMAIN_PATTERN.match(locator):
+            warnings.append(f"sources[{position}].locator uses a bare domain; prefer a specific page URL when available.")
+        if source_class == "external_evidence" and external_locator_lacks_exact_location(locator):
+            warnings.append(
+                f"sources[{position}].locator does not retain the exact location used; prefer the specific page or file locator instead of a root or degraded locator."
+            )
+        if source_class == "job_input" and ("/prompt-packets/" in locator or locator == "__PROMPT_PACKET__"):
+            warnings.append(
+                f"sources[{position}].locator points to a prompt packet; prefer the canonical job artifact such as brief.md or config.yaml."
+            )
+    return warnings
+
+
+def external_locator_lacks_exact_location(locator: str) -> bool:
+    stripped = locator.strip()
+    if not stripped:
+        return False
+    if BARE_DOMAIN_PATTERN.match(stripped):
+        return True
+    if not stripped.lower().startswith(("http://", "https://")):
+        return False
+    parsed = urlparse(stripped)
+    if not parsed.netloc:
+        return False
+    path = parsed.path or ""
+    if path in {"", "/"} and not parsed.query and not parsed.fragment:
+        return True
+    return False
+
+
+def _locator_specificity(locator: str) -> tuple[int, int]:
+    stripped = locator.strip()
+    if not stripped:
+        return (0, 0)
+    if BARE_DOMAIN_PATTERN.match(stripped):
+        return (1, len(stripped))
+    lowered = stripped.lower()
+    if lowered.startswith(("http://", "https://")):
+        parsed = urlparse(stripped)
+        if parsed.netloc and (parsed.path in {"", "/"} and not parsed.query and not parsed.fragment):
+            return (2, len(stripped))
+        return (5, len(stripped))
+    if lowered.startswith(("file://", "app://", "urn:")) or stripped.startswith(("/", "./", "../")):
+        return (5, len(stripped))
+    return (3, len(stripped))
+
+
+def _prefer_more_specific_locator(current: str, candidate: str) -> str | None:
+    if not current or not candidate or current == candidate:
+        return None
+    current_rank = _locator_specificity(current)
+    candidate_rank = _locator_specificity(candidate)
+    if candidate_rank > current_rank:
+        return candidate
+    if current_rank > candidate_rank:
+        return current
+    return None
+
+
+def normalize_support_links(
+    item: dict[str, object],
+    source_index: dict[str, dict[str, str]],
+    local_reference_map: dict[str, list[str]] | None = None,
+) -> list[dict[str, str]]:
+    links = item.get("support_links")
+    normalized_links: list[dict[str, str]] = []
+    if isinstance(links, list):
+        for link in links:
+            if not isinstance(link, dict):
+                continue
+            source_id = link.get("source_id")
+            role = link.get("role")
+            if not isinstance(source_id, str):
+                continue
+            if not isinstance(role, str) or role not in SUPPORT_LINK_ROLES:
+                continue
+            if local_reference_map and source_id in local_reference_map:
+                for resolved_source_id in local_reference_map[source_id]:
+                    normalized_link = {"source_id": resolved_source_id, "role": role}
+                    if normalized_link not in normalized_links:
+                        normalized_links.append(normalized_link)
+                continue
+            if not SOURCE_ID_PATTERN.match(source_id):
+                continue
+            normalized_links.append({"source_id": source_id, "role": role})
+        if normalized_links:
+            return normalized_links
+
+    evidence_sources = item.get("evidence_sources")
+    if isinstance(evidence_sources, list):
+        for source_id in evidence_sources:
+            if not isinstance(source_id, str):
+                continue
+            source_record = source_index.get(source_id, {})
+            role = "evidence" if source_supports_world_claims(source_record) else "provenance"
+            normalized_links.append({"source_id": source_id, "role": role})
+    return normalized_links
+
+
+def semantic_evidence_sources(
+    item: dict[str, object],
+    source_index: dict[str, dict[str, str]],
+    local_reference_map: dict[str, list[str]] | None = None,
+) -> list[str]:
+    sources: list[str] = []
+    for link in normalize_support_links(item, source_index, local_reference_map):
+        source_record = source_index.get(link["source_id"], {})
+        if link["role"] in {"evidence", "context"} and source_supports_world_claims(source_record):
+            if link["source_id"] not in sources:
+                sources.append(link["source_id"])
+    return sources
+
+
+def semantic_provenance_sources(
+    item: dict[str, object],
+    source_index: dict[str, dict[str, str]],
+    local_reference_map: dict[str, list[str]] | None = None,
+) -> list[str]:
+    provenance: list[str] = []
+    for link in normalize_support_links(item, source_index, local_reference_map):
+        source_record = source_index.get(link["source_id"], {})
+        is_provenance = link["role"] == "provenance" or source_record.get("source_class") == "workflow_provenance"
+        if is_provenance and link["source_id"] not in provenance:
+            provenance.append(link["source_id"])
+    return provenance
+
+
+def semantic_world_support_sources(
+    item: dict[str, object],
+    source_index: dict[str, dict[str, str]],
+    local_reference_map: dict[str, list[str]] | None = None,
+) -> list[str]:
+    sources: list[str] = []
+    for link in normalize_support_links(item, source_index, local_reference_map):
+        source_record = source_index.get(link["source_id"], {})
+        if link["role"] == "evidence" and source_supports_world_claims(source_record):
+            if link["source_id"] not in sources:
+                sources.append(link["source_id"])
+    return sources
+
+
+def claim_dependencies(item: dict[str, object], local_reference_map: dict[str, list[str]] | None = None) -> list[str]:
+    dependencies: list[str] = []
+    for dependency in item.get("claim_dependencies", []):
+        if isinstance(dependency, str) and dependency not in dependencies:
+            dependencies.append(dependency)
+    if not local_reference_map:
+        return dependencies
+    for source_id in item.get("evidence_sources", []):
+        if isinstance(source_id, str) and source_id in local_reference_map and source_id not in dependencies:
+            dependencies.append(source_id)
+    for link in item.get("support_links", []) if isinstance(item.get("support_links"), list) else []:
+        if not isinstance(link, dict):
+            continue
+        source_id = link.get("source_id")
+        if isinstance(source_id, str) and source_id in local_reference_map and source_id not in dependencies:
+            dependencies.append(source_id)
+    return dependencies
+
+
 def _build_claim_items(stage_id: str, prefix: str, items: list[str], *, inference: bool) -> list[dict[str, object]]:
     payload: list[dict[str, object]] = []
     for index, item in enumerate(items, start=1):
@@ -368,6 +557,16 @@ def normalize_stage_citations(stage_id: str, payload: dict[str, object]) -> dict
     elif stage_id == "judge":
         supporting_sections = ["supported_conclusions"]
         target_sections = ["synthesis_judgments"]
+    elif stage_id in {"critique-a-on-b", "critique-b-on-a"}:
+        supporting_sections = []
+        target_sections = [
+            "supported_claims",
+            "unsupported_claims",
+            "weak_source_issues",
+            "omissions",
+            "overreach",
+            "unresolved_disagreements",
+        ]
     else:
         return normalized
 
@@ -380,11 +579,21 @@ def normalize_stage_citations(stage_id: str, payload: dict[str, object]) -> dict
             evidence_sources = item.get("evidence_sources")
             if isinstance(item_id, str) and isinstance(evidence_sources, list):
                 local_reference_map[item_id] = [source for source in evidence_sources if isinstance(source, str)]
+    target_claim_catalog = normalized.get("target_claim_catalog")
+    if isinstance(target_claim_catalog, list):
+        for item in target_claim_catalog:
+            if not isinstance(item, dict):
+                continue
+            item_id = item.get("id")
+            evidence_sources = item.get("evidence_sources")
+            if isinstance(item_id, str) and isinstance(evidence_sources, list):
+                local_reference_map[item_id] = [source for source in evidence_sources if isinstance(source, str)]
 
     for section in target_sections:
         for item in normalized.get(section, []):
             if not isinstance(item, dict):
                 continue
+            original_support_links = item.get("support_links")
             evidence_sources = item.get("evidence_sources")
             if not isinstance(evidence_sources, list):
                 continue
@@ -398,6 +607,26 @@ def normalize_stage_citations(stage_id: str, payload: dict[str, object]) -> dict
                 if isinstance(source_id, str) and source_id not in expanded:
                     expanded.append(source_id)
             item["evidence_sources"] = expanded
+            dependencies = claim_dependencies(item, local_reference_map)
+            if dependencies:
+                item["claim_dependencies"] = dependencies
+            if isinstance(original_support_links, list):
+                normalized_links = normalize_support_links({"support_links": original_support_links}, {}, local_reference_map)
+                if normalized_links:
+                    item["support_links"] = normalized_links
+                else:
+                    item.pop("support_links", None)
+            elif "support_links" in item:
+                item.pop("support_links", None)
+            if not isinstance(original_support_links, list) and dependencies:
+                normalized_links = []
+                for dependency in dependencies:
+                    for resolved_source_id in local_reference_map.get(dependency, []):
+                        candidate = {"source_id": resolved_source_id, "role": "evidence"}
+                        if candidate not in normalized_links:
+                            normalized_links.append(candidate)
+                if normalized_links:
+                    item["support_links"] = normalized_links
     return normalized
 
 
@@ -606,6 +835,8 @@ def _validate_source_records(sources: object, errors: list[str]) -> dict[str, di
         source_class = normalized_source.get("source_class")
         if not isinstance(source_class, str) or source_class not in SOURCE_CLASSES:
             errors.append(f"sources[{position}].source_class must be one of {sorted(SOURCE_CLASSES)}.")
+        elif not auditable_locator(normalized_source.get("locator"), source_class):
+            errors.append(f"sources[{position}].locator must be an auditable locator for source_class {source_class}.")
         index[source_id] = {key: str(value) for key, value in normalized_source.items() if isinstance(value, str)}
     return index
 
@@ -629,6 +860,10 @@ def _validate_claim_list(
         if require_id:
             _require_string(item.get("id"), f"{field_name}[{position}].id", errors)
         _require_string(item.get("text"), f"{field_name}[{position}].text", errors)
+        claim_deps = item.get("claim_dependencies")
+        if claim_deps is not None:
+            if not isinstance(claim_deps, list) or not all(isinstance(dep, str) and dep.strip() for dep in claim_deps):
+                errors.append(f"{field_name}[{position}].claim_dependencies must be a list of non-empty claim IDs when present.")
         evidence_sources = item.get("evidence_sources")
         if not isinstance(evidence_sources, list) or not evidence_sources:
             errors.append(f"{field_name}[{position}] must include at least one evidence source.")
@@ -639,6 +874,14 @@ def _validate_claim_list(
                     continue
                 if source_id not in source_index:
                     errors.append(f"{field_name}[{position}] references unresolved source ID {source_id}.")
+        _validate_semantic_links(
+            item,
+            field_name=field_name,
+            position=position,
+            source_index=source_index,
+            errors=errors,
+            allowed_support_roles={"evidence"},
+        )
         if require_confidence:
             confidence = item.get("confidence")
             if confidence not in {"low", "medium", "high"}:
@@ -758,10 +1001,51 @@ def _validate_unsupported_claims(items: object, errors: list[str]) -> None:
         _require_string(item.get("text"), f"unsupported_claims[{position}].text", errors)
 
 
+def _validate_semantic_links(
+    item: dict[str, object],
+    *,
+    field_name: str,
+    position: int,
+    source_index: dict[str, dict[str, str]],
+    errors: list[str],
+    allowed_support_roles: set[str] | None = None,
+) -> None:
+    support_links = item.get("support_links")
+    if support_links is None:
+        return
+    if not isinstance(support_links, list) or not support_links:
+        errors.append(f"{field_name}[{position}].support_links must be a non-empty list when present.")
+        return
+    for link_position, link in enumerate(support_links, start=1):
+        if not isinstance(link, dict):
+            errors.append(f"{field_name}[{position}].support_links[{link_position}] must be an object.")
+            continue
+        source_id = link.get("source_id")
+        role = link.get("role")
+        if not isinstance(source_id, str) or not SOURCE_ID_PATTERN.match(source_id):
+            errors.append(f"{field_name}[{position}].support_links[{link_position}].source_id must be a canonical source ID.")
+            continue
+        if source_id not in source_index:
+            errors.append(f"{field_name}[{position}].support_links[{link_position}] references unresolved source ID {source_id}.")
+        if not isinstance(role, str) or role not in SUPPORT_LINK_ROLES:
+            errors.append(f"{field_name}[{position}].support_links[{link_position}].role must be one of {sorted(SUPPORT_LINK_ROLES)}.")
+    allowed_sources = semantic_evidence_sources(item, source_index)
+    if allowed_support_roles is not None:
+        allowed_sources = []
+        for link in normalize_support_links(item, source_index):
+            source_record = source_index.get(link["source_id"], {})
+            if link["role"] in allowed_support_roles and source_supports_world_claims(source_record):
+                if link["source_id"] not in allowed_sources:
+                    allowed_sources.append(link["source_id"])
+    if not allowed_sources:
+        errors.append(f"{field_name}[{position}] must include at least one semantic evidence link that supports world claims.")
+
+
 def _validate_flexible_object_list(
     items: object,
     field_name: str,
     errors: list[str],
+    source_index: dict[str, dict[str, str]] | None = None,
     *,
     accepted_text_keys: tuple[str, ...],
     accepted_source_keys: tuple[str, ...] = (),
@@ -784,10 +1068,34 @@ def _validate_flexible_object_list(
         if not any(isinstance(item.get(key), str) and item.get(key).strip() for key in accepted_text_keys):
             accepted = ", ".join(accepted_text_keys)
             errors.append(f"{field_name}[{position}] must include one of: {accepted}.")
+        claim_deps = item.get("claim_dependencies")
+        if claim_deps is not None:
+            if not isinstance(claim_deps, list) or not all(isinstance(dep, str) and dep.strip() for dep in claim_deps):
+                errors.append(f"{field_name}[{position}].claim_dependencies must be a list of non-empty claim IDs when present.")
         for key in accepted_source_keys:
             source_id = item.get(key)
             if source_id is not None and (not isinstance(source_id, str) or not SOURCE_ID_PATTERN.match(source_id)):
                 errors.append(f"{field_name}[{position}].{key} must be a canonical external source ID.")
+        if source_index is not None:
+            evidence_sources = item.get("evidence_sources")
+            if evidence_sources is not None:
+                if not isinstance(evidence_sources, list) or not evidence_sources:
+                    errors.append(f"{field_name}[{position}].evidence_sources must be a non-empty list when present.")
+                else:
+                    for source_id in evidence_sources:
+                        if not isinstance(source_id, str) or not SOURCE_ID_PATTERN.match(source_id):
+                            errors.append(f"{field_name}[{position}] contains a non-canonical source ID.")
+                            continue
+                        if source_id not in source_index:
+                            errors.append(f"{field_name}[{position}] references unresolved source ID {source_id}.")
+            _validate_semantic_links(
+                item,
+                field_name=field_name,
+                position=position,
+                source_index=source_index,
+                errors=errors,
+                allowed_support_roles={"evidence", "challenge"},
+            )
 
 
 def _validate_source_evaluation(items: object, errors: list[str]) -> None:
@@ -842,25 +1150,27 @@ def validate_stage_json(stage_id: str, payload: dict[str, object], source_regist
             payload.get("uncertainties"),
             "uncertainties",
             errors,
+            source_index,
             accepted_text_keys=("text", "issue", "reason", "impact", "reduction_strategy", "what_would_reduce_it"),
         )
-        _validate_flexible_object_list(payload.get("evidence_gaps"), "evidence_gaps", errors, accepted_text_keys=("text",))
+        _validate_flexible_object_list(payload.get("evidence_gaps"), "evidence_gaps", errors, source_index, accepted_text_keys=("text",))
         _validate_flexible_object_list(
             payload.get("preliminary_disagreements"),
             "preliminary_disagreements",
             errors,
+            source_index,
             accepted_text_keys=("text",),
         )
         _validate_source_evaluation(payload.get("source_evaluation"), errors)
         return errors
 
     if stage_id in {"critique-a-on-b", "critique-b-on-a"}:
-        _validate_flexible_object_list(payload.get("supported_claims"), "supported_claims", errors, accepted_text_keys=("text",))
+        _validate_flexible_object_list(payload.get("supported_claims"), "supported_claims", errors, source_index, accepted_text_keys=("text",))
         _validate_unsupported_claims(payload.get("unsupported_claims"), errors)
-        _validate_flexible_object_list(payload.get("weak_source_issues"), "weak_source_issues", errors, accepted_text_keys=("text",))
-        _validate_flexible_object_list(payload.get("omissions"), "omissions", errors, accepted_text_keys=("text",))
-        _validate_flexible_object_list(payload.get("overreach"), "overreach", errors, accepted_text_keys=("text",))
-        _validate_flexible_object_list(payload.get("unresolved_disagreements"), "unresolved_disagreements", errors, accepted_text_keys=("text",))
+        _validate_flexible_object_list(payload.get("weak_source_issues"), "weak_source_issues", errors, source_index, accepted_text_keys=("text",))
+        _validate_flexible_object_list(payload.get("omissions"), "omissions", errors, source_index, accepted_text_keys=("text",))
+        _validate_flexible_object_list(payload.get("overreach"), "overreach", errors, source_index, accepted_text_keys=("text",))
+        _validate_flexible_object_list(payload.get("unresolved_disagreements"), "unresolved_disagreements", errors, source_index, accepted_text_keys=("text",))
         _validate_critique_summary(payload.get("summary"), errors)
         return errors
 
@@ -919,6 +1229,13 @@ def merge_source_registry(existing: dict[str, object], stage_sources: list[dict[
             left = current.get(field)
             right = candidate.get(field)
             if left and right and left != right:
+                if field == "locator":
+                    preferred = _prefer_more_specific_locator(str(left), str(right))
+                    if preferred == right:
+                        current[field] = right
+                        continue
+                    if preferred == left:
+                        continue
                 raise ValueError(f"Conflicting source registry definition for {source_id} field {field}.")
             if not left and right:
                 current[field] = right
@@ -939,6 +1256,9 @@ def _append_claim(
     text: str,
     claim_type: str,
     evidence_sources: list[str],
+    provenance: list[str] | None = None,
+    support_links: list[dict[str, str]] | None = None,
+    claim_dependencies: list[str] | None = None,
     confidence: str | None = None,
     section: str | None = None,
 ) -> None:
@@ -946,10 +1266,14 @@ def _append_claim(
         "id": claim_id,
         "text": text,
         "type": claim_type,
-        "provenance": [],
+        "provenance": provenance or [],
         "evidence_sources": evidence_sources,
         "unclassified_markers": [],
     }
+    if support_links:
+        record["support_links"] = support_links
+    if claim_dependencies:
+        record["claim_dependencies"] = claim_dependencies
     if confidence is not None:
         record["confidence"] = confidence
     if section is not None:
@@ -1000,26 +1324,74 @@ def _entry_sources(item: object) -> list[str]:
     return []
 
 
+def _append_semantic_claim(
+    claims: list[dict[str, object]],
+    *,
+    claim_id: str,
+    text: str,
+    claim_type: str,
+    item: dict[str, object],
+    source_index: dict[str, dict[str, str]],
+    local_reference_map: dict[str, list[str]] | None = None,
+    confidence: str | None = None,
+    section: str | None = None,
+) -> None:
+    _append_claim(
+        claims,
+        claim_id=claim_id,
+        text=text,
+        claim_type=claim_type,
+        evidence_sources=semantic_evidence_sources(item, source_index, local_reference_map),
+        provenance=semantic_provenance_sources(item, source_index, local_reference_map),
+        support_links=normalize_support_links(item, source_index, local_reference_map),
+        claim_dependencies=claim_dependencies(item, local_reference_map),
+        confidence=confidence,
+        section=section,
+    )
+
+
 def build_claim_map_from_stage_json(stage_id: str, payload: dict[str, object]) -> dict[str, object]:
     payload = normalize_stage_citations(stage_id, payload)
+    source_index = {
+        source["id"]: normalize_source_record(source)
+        for source in payload.get("sources", [])
+        if isinstance(source, dict) and isinstance(source.get("id"), str)
+    }
+    local_reference_map: dict[str, list[str]] = {}
+    if stage_id in {"research-a", "research-b"}:
+        for item in payload.get("facts", []):
+            if isinstance(item, dict) and isinstance(item.get("id"), str) and isinstance(item.get("evidence_sources"), list):
+                local_reference_map[item["id"]] = [source for source in item["evidence_sources"] if isinstance(source, str)]
+    if stage_id in {"critique-a-on-b", "critique-b-on-a"}:
+        for item in payload.get("target_claim_catalog", []):
+            if isinstance(item, dict) and isinstance(item.get("id"), str) and isinstance(item.get("evidence_sources"), list):
+                local_reference_map[item["id"]] = [source for source in item["evidence_sources"] if isinstance(source, str)]
+    elif stage_id == "judge":
+        for item in payload.get("supported_conclusions", []):
+            if isinstance(item, dict) and isinstance(item.get("id"), str) and isinstance(item.get("evidence_sources"), list):
+                local_reference_map[item["id"]] = [source for source in item["evidence_sources"] if isinstance(source, str)]
     claims: list[dict[str, object]] = []
     if stage_id in {"research-a", "research-b"}:
         for item in payload.get("facts", []):
-            _append_claim(
+            _append_semantic_claim(
                 claims,
                 claim_id=item["id"],
                 text=item["text"],
                 claim_type="fact",
-                evidence_sources=list(item.get("evidence_sources", [])),
+                item=item,
+                source_index=source_index,
+                local_reference_map=local_reference_map,
                 section="Facts",
             )
         for item in payload.get("inferences", []):
-            _append_claim(
+            _append_semantic_claim(
                 claims,
                 claim_id=item["id"],
                 text=item["text"],
                 claim_type="inference",
-                evidence_sources=list(item.get("evidence_sources", [])),
+                item=item,
+                source_index=source_index,
+                local_reference_map=local_reference_map,
                 confidence=item.get("confidence"),
                 section="Inferences",
             )
@@ -1043,63 +1415,79 @@ def build_claim_map_from_stage_json(stage_id: str, payload: dict[str, object]) -
         )
         for field_name, section_name in section_map:
             for index, item in enumerate(payload.get(field_name, []), start=1):
-                _append_claim(
+                normalized_item = item if isinstance(item, dict) else {"text": _entry_text(item), "evidence_sources": _entry_sources(item)}
+                _append_semantic_claim(
                     claims,
                     claim_id=f"{stage_id}-{field_name}-{index:03d}",
-                    text=_entry_text(item),
-                    claim_type="evaluation",
-                    evidence_sources=_entry_sources(item),
-                    section=section_name,
-                )
+                text=_entry_text(item),
+                claim_type="evaluation",
+                item=normalized_item,
+                source_index=source_index,
+                local_reference_map=local_reference_map,
+                section=section_name,
+            )
         summary = payload.get("summary")
         if isinstance(summary, list):
             for index, item in enumerate(summary, start=1):
-                _append_claim(
+                normalized_item = item if isinstance(item, dict) else {"text": _entry_text(item), "evidence_sources": _entry_sources(item)}
+                _append_semantic_claim(
                     claims,
                     claim_id=f"{stage_id}-summary-{index:03d}",
                     text=_entry_text(item),
                     claim_type="evaluation",
-                    evidence_sources=_entry_sources(item),
+                    item=normalized_item,
+                    source_index=source_index,
+                    local_reference_map=local_reference_map,
                     confidence=item.get("confidence") if isinstance(item, dict) else None,
                     section="Overall Critique Summary",
                 )
         elif summary:
-            _append_claim(
+            normalized_item = summary if isinstance(summary, dict) else {"text": _entry_text(summary), "evidence_sources": _entry_sources(summary)}
+            _append_semantic_claim(
                 claims,
                 claim_id=f"{stage_id}-summary-001",
                 text=_entry_text(summary),
                 claim_type="evaluation",
-                evidence_sources=_entry_sources(summary),
+                item=normalized_item,
+                source_index=source_index,
+                local_reference_map=local_reference_map,
                 confidence=summary.get("confidence") if isinstance(summary, dict) else None,
                 section="Overall Critique Summary",
             )
     elif stage_id == "judge":
         for item in payload.get("supported_conclusions", []):
-            _append_claim(
+            _append_semantic_claim(
                 claims,
                 claim_id=item["id"],
                 text=item["text"],
                 claim_type="fact",
-                evidence_sources=list(item.get("evidence_sources", [])),
+                item=item,
+                source_index=source_index,
+                local_reference_map=local_reference_map,
                 section="Supported Conclusions",
             )
         for item in payload.get("synthesis_judgments", []):
-            _append_claim(
+            _append_semantic_claim(
                 claims,
                 claim_id=item["id"],
                 text=item["text"],
                 claim_type="inference",
-                evidence_sources=list(item.get("evidence_sources", [])),
+                item=item,
+                source_index=source_index,
+                local_reference_map=local_reference_map,
                 confidence=item.get("confidence"),
                 section="Inferences And Synthesis Judgments",
             )
         for index, item in enumerate(payload.get("unresolved_disagreements", []), start=1):
-            _append_claim(
+            normalized_item = item if isinstance(item, dict) else {"text": _entry_text(item), "evidence_sources": _entry_sources(item)}
+            _append_semantic_claim(
                 claims,
                 claim_id=f"judge-disagreement-{index:03d}",
                 text=_entry_text(item),
                 claim_type="evaluation",
-                evidence_sources=_entry_sources(item),
+                item=normalized_item,
+                source_index=source_index,
+                local_reference_map=local_reference_map,
                 section="Unresolved Disagreements",
             )
         confidence_assessment = payload.get("confidence_assessment", [])
@@ -1117,32 +1505,41 @@ def build_claim_map_from_stage_json(stage_id: str, payload: dict[str, object]) -
             topics = confidence_assessment.get("topics")
             if isinstance(topics, list):
                 for index, item in enumerate(topics, start=1):
-                    _append_claim(
+                    normalized_item = item if isinstance(item, dict) else {"text": _entry_text(item), "evidence_sources": _entry_sources(item)}
+                    _append_semantic_claim(
                         claims,
                         claim_id=f"judge-confidence-topic-{index:03d}",
                         text=_entry_text(item),
                         claim_type="evaluation",
-                        evidence_sources=_entry_sources(item),
+                        item=normalized_item,
+                        source_index=source_index,
+                        local_reference_map=local_reference_map,
                         section="Confidence Assessment",
                     )
         else:
             confidence_items = [confidence_assessment] if isinstance(confidence_assessment, str) else confidence_assessment
             for index, item in enumerate(confidence_items, start=1):
-                _append_claim(
+                normalized_item = item if isinstance(item, dict) else {"text": _entry_text(item), "evidence_sources": _entry_sources(item)}
+                _append_semantic_claim(
                     claims,
                     claim_id=f"judge-confidence-{index:03d}",
                     text=_entry_text(item),
                     claim_type="evaluation",
-                    evidence_sources=_entry_sources(item),
+                    item=normalized_item,
+                    source_index=source_index,
+                    local_reference_map=local_reference_map,
                     section="Confidence Assessment",
                 )
         for index, item in enumerate(payload.get("evidence_gaps", []), start=1):
-            _append_claim(
+            normalized_item = item if isinstance(item, dict) else {"text": _entry_text(item), "evidence_sources": _entry_sources(item)}
+            _append_semantic_claim(
                 claims,
                 claim_id=f"judge-gap-{index:03d}",
                 text=_entry_text(item),
                 claim_type="evidence_gap",
-                evidence_sources=_entry_sources(item),
+                item=normalized_item,
+                source_index=source_index,
+                local_reference_map=local_reference_map,
                 section="Evidence Gaps",
             )
         recommended_structure = payload.get("recommended_artifact_structure", [])

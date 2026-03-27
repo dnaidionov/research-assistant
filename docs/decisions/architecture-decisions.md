@@ -75,7 +75,12 @@ Status:
 - architectural decision accepted
 - partially implemented in `scripts/extract_claims.py` and the structured-stage runner path
 - the workflow now enforces source-ID resolution through a run-level registry for structured research and judge outputs
-- the deeper provenance-versus-evidence distinction still relies on marker parsing rather than source-aware semantic adjudication
+- structured research, critique, and judge artifacts may now declare typed `support_links`, and the claim-map builder derives evidence versus provenance from those typed links plus source classes
+- local reasoning dependencies are now modeled separately as `claim_dependencies` so local claim IDs are not misused as source identifiers
+- `job_input` sources remain admissible evidence when they directly state current-system facts, requirements, or constraints under analysis; they are not limited to provenance-only use
+- `context` links are no longer treated as sufficient semantic support for world claims in structured fact and inference validation; those claims now require at least one world-supporting `evidence` link
+- prompt contracts and source-registry merging now both prefer exact source locators over degraded site-root or bare-domain references, so locator fidelity is treated as part of the evidence contract rather than a stylistic preference
+- markdown-only extraction and compatibility paths still rely on marker parsing, so the decision is implemented end to end only on the structured path, not yet across every fallback path
 
 ---
 
@@ -116,6 +121,7 @@ Status:
 - partially implemented
 - `run_workflow.py` now scaffolds authoritative JSON outputs for research, critique, and judge stages, plus a run-level `sources.json`
 - `execute_workflow.py` validates those structured artifacts through a shared stage-validation path and uses them as the canonical gate for research, critique, and judge stages
+- intake now validates source-backed `known_facts` with short supporting excerpts and stable source anchors and contributes its declared `job_input` sources into the run-level source registry before research begins
 - when structured JSON is valid but the paired markdown artifact is weaker than the markdown contract, the runner now regenerates markdown from the structured artifact so downstream markdown-only stages consume a normalized bridge representation
 - markdown-to-JSON synthesis has been removed for structured stages, but stdout-recovery compatibility paths still exist for some adapters, so the design is still not at the target structure-first end state
 

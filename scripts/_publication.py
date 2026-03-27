@@ -8,6 +8,7 @@ def referenced_source_publication_errors(reference_ids: list[str], source_index:
     for reference_id in reference_ids:
         record = source_index.get(reference_id)
         if record is None:
+            errors.append(f"Cannot generate final artifact: referenced source {reference_id} is unresolved.")
             continue
         source_class = record.get("source_class", "")
         if source_class == "recovered_provisional":

@@ -316,11 +316,34 @@ def stage_claim_output_path(run_dir: Path, stage_id: str) -> Path:
     return run_dir / "stage-claims" / f"{output_name_by_stage[stage_id]}.claims.json"
 
 
+def dependency_structured_payloads(stage_id: str, run_dir: Path) -> list[dict[str, object]]:
+    payloads: list[dict[str, object]] = []
+    stage_map = {str(stage["id"]): stage for stage in RUN_STAGES}
+    stage = stage_map.get(stage_id)
+    if stage is None:
+        return payloads
+    for dependency_stage_id in stage.get("depends_on", []):
+        if not is_structured_stage(str(dependency_stage_id)):
+            continue
+        structured_path = stage_structured_output_path(run_dir, str(dependency_stage_id))
+        if structured_path.is_file():
+            payloads.append(load_contract_json(structured_path))
+    return payloads
+
+
 def merge_stage_sources_into_registry(stage_id: str, run_dir: Path) -> None:
     source_path = source_registry_path(run_dir)
     source_registry = load_contract_json(source_path)
     payload = load_contract_json(stage_structured_output_path(run_dir, stage_id))
     merged = merge_source_registry(source_registry, list(payload.get("sources", [])))
+    persist_source_registry(source_path, merged)
+
+
+def merge_intake_sources_into_registry(run_dir: Path) -> None:
+    source_path = source_registry_path(run_dir)
+    source_registry = load_contract_json(source_path)
+    intake_payload = load_contract_json(stage_output_path(run_dir, "01-intake.json"))
+    merged = merge_source_registry(source_registry, list(intake_payload.get("sources", [])))
     persist_source_registry(source_path, merged)
 
 
@@ -441,6 +464,7 @@ def run_agent_stage(
     structured_output_exists = structured_output_path.is_file() if structured_output_path is not None else False
     structured_output_complete = is_json_artifact_complete(structured_output_path) if structured_output_path is not None else False
     structured_validation_errors: list[str] = []
+    structured_validation_warnings: list[str] = []
     intake_validation_errors: list[str] = []
     markdown_validation_errors: list[str] = []
     if completed.returncode == 0 and not is_stage_output_complete(output_path):
@@ -474,8 +498,10 @@ def run_agent_stage(
                     load_contract_json(structured_output_path),
                     json.loads(source_registry_snapshot) if source_registry_snapshot is not None else {"sources": []},
                     output_path.read_text(encoding="utf-8"),
+                    dependency_structured_payloads(stage.stage_id, run_dir),
                 )
                 structured_validation_errors = validation.structured_errors
+                structured_validation_warnings = validation.structured_warnings
                 markdown_validation_errors = validation.markdown_errors
                 if validation.should_rewrite_markdown:
                     output_path.write_text(validation.canonical_markdown, encoding="utf-8")
@@ -523,6 +549,9 @@ def run_agent_stage(
                 "",
                 "STRUCTURED_VALIDATION_ERRORS:",
                 "\n".join(structured_validation_errors) if structured_validation_errors else "<none>",
+                "",
+                "STRUCTURED_VALIDATION_WARNINGS:",
+                "\n".join(structured_validation_warnings) if structured_validation_warnings else "<none>",
                 "",
                 "INTAKE_VALIDATION_ERRORS:",
                 "\n".join(intake_validation_errors) if intake_validation_errors else "<none>",
@@ -620,6 +649,7 @@ def run_stage_claim_extraction(
                 payload,
                 source_registry,
                 stage_output.read_text(encoding="utf-8"),
+                dependency_structured_payloads(stage_id, run_dir),
             )
             validation_errors = validation.structured_errors + validation.markdown_errors
             if not validation_errors:
@@ -697,7 +727,9 @@ def run_stage_group(
             adapter_name = role_assignments[stage.agent_role]
             reporter.complete(adapter_name, stage.stage_id)
             save_state(state_path, state)
-            if is_structured_stage(stage.stage_id):
+            if stage.stage_id == "intake":
+                merge_intake_sources_into_registry(run_dir)
+            elif is_structured_stage(stage.stage_id):
                 merge_stage_sources_into_registry(stage.stage_id, run_dir)
             run_stage_claim_extraction(stage.stage_id, run_dir, job_dir, state, state_path, reporter)
         else:
@@ -721,7 +753,9 @@ def run_stage_group(
                 stage_id, status = future.result()
                 set_stage_status(state, stage_id, status)
                 save_state(state_path, state)
-                if is_structured_stage(stage_id):
+                if stage_id == "intake":
+                    merge_intake_sources_into_registry(run_dir)
+                elif is_structured_stage(stage_id):
                     merge_stage_sources_into_registry(stage_id, run_dir)
                 run_stage_claim_extraction(stage_id, run_dir, job_dir, state, state_path, reporter)
             except Exception as exc:

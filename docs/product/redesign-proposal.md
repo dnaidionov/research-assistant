@@ -34,6 +34,7 @@ This is the root architectural problem. The redesign should address that directl
 - Make structured outputs authoritative for workflow gating.
 - Make source identity explicit and reusable across stages.
 - Keep provenance and evidence separate in first-class data structures.
+- Model claim support semantically through typed links instead of treating bracket markers as if they were enough.
 - Fail early when contracts are broken.
 - Preserve provider-agnostic orchestration, but require stronger adapter contracts.
 
@@ -85,6 +86,8 @@ Each fact and inference item should carry:
 - `id`
 - `text`
 - `evidence_sources`
+- optional `support_links` with typed roles such as `evidence`, `context`, `challenge`, and `provenance`
+- optional `claim_dependencies` when a later claim depends on earlier local facts or conclusions
 - `confidence` where relevant
 
 #### Critique stage
@@ -131,6 +134,8 @@ Validation should be unified into three layers:
 - no unresolved template residue remains
 
 The runner should block progression on any contract or citation validation failure.
+
+Where structured stages provide typed `support_links`, citation validation should derive evidence versus provenance semantics from those links and from source classes rather than from marker shape alone.
 
 ### 5. Adapter Contract Redesign
 
@@ -187,6 +192,20 @@ Stdout recovery should remain only as a temporary compatibility layer during mig
 - adapter implementations become more opinionated
 - schema evolution must be managed carefully
 - migration will temporarily require supporting old and new contracts together
+- semantic support typing creates policy questions around what counts as `context` versus `evidence`, so the contract has to stay explicit and narrow
+
+## Intake Fact Lineage Review
+
+The intake contract no longer relies on freeform `source_basis` text alone; it now carries source-backed `known_facts`, an intake-declared `sources` list, and a short supporting `source_excerpt` and stable `source_anchor` per fact. The remaining gap is that intake still does not preserve richer machine-readable provenance such as precise spans.
+
+That should be reviewed before intake becomes a stronger evidence-producing stage.
+
+Planned review scope:
+
+1. inspect how the intake prompt and validator produce `known_facts`, `constraints`, `assumptions`, and `missing_information`
+2. trace which intake outputs are direct brief facts versus intake-stage paraphrases or abstractions
+3. decide whether intake should emit richer provenance such as precise machine-readable spans for brief-derived facts
+4. keep current-system brief facts admissible as evidence, but only after the system can distinguish them cleanly from assumptions and workflow paraphrase
 
 ## Recommended Next Implementation Order
 

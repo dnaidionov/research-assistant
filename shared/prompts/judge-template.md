@@ -101,6 +101,15 @@ Rules:
 - `stage` must equal `{stage_id}`.
 - Every `supported_conclusions` item must contain `id`, `text`, and `evidence_sources`.
 - Every `synthesis_judgments` item must contain `id`, `text`, `evidence_sources`, and `confidence`.
+- When possible, add `support_links` to supported conclusions and synthesis judgments as a typed list of `{{ "source_id", "role" }}` objects.
+- If a synthesis judgment depends on earlier local conclusion IDs, record those under `claim_dependencies` instead of placing them in `support_links.source_id`.
+- Do not use local claim IDs such as `F-001`, `I-001`, or `C-001` inside `support_links.source_id`.
+- `support_links.role` must be one of: `evidence`, `context`, `challenge`, `provenance`.
+- Use `evidence` for external support that justifies the conclusion.
+- Use `evidence` for `job_input` too when the brief or provided input directly states a current-system fact, requirement, or constraint that the conclusion is about.
+- Use `context` for background inputs that materially shape interpretation but are not the main proof.
+- Use `challenge` when a source keeps the judgment narrower or less certain than the strongest narrative suggests.
+- Use `provenance` for workflow-stage traceability only. Provenance is not evidence.
 - `confidence` must be `low`, `medium`, or `high`.
 - `unresolved_disagreements` may be either:
   - a list of strings or `{{ "text": ... }}` entries, or
@@ -114,8 +123,18 @@ Rules:
   - a list of strings or `{{ "text": ... }}` entries
   - an object with `sections`, where `sections` is a list of section titles
 - Every cited external source id must be declared in `sources`.
-- Every `sources` item must include `id`, `title`, `type`, `authority`, and `locator`.
+- Every `sources` item must include `id`, `title`, `type`, `authority`, and `locator`, and should include `source_class` when known.
+- Prefer explicit source classes:
+  - `external_evidence`
+  - `job_input`
+  - `workflow_provenance`
+  - `recovered_provisional`
 - Workflow-stage references may appear in `rationale` for provenance, but never as evidence.
+- Supported conclusions and synthesis judgments must still carry canonical external evidence in `evidence_sources`; `support_links` adds typed semantics and provenance, it does not replace evidence.
+- `claim_dependencies` is for local reasoning traceability only; it does not replace external evidence citations.
+- Use resolvable locators for sources. Prefer full URLs, concrete file paths, `file://` locators for attached files, or other stable followable URIs. Avoid vague locators such as `Various industry benchmarks`.
+- Retain the exact locator you actually used. Do not collapse a specific page URL, file path, or attachment URI to a bare domain or site root unless no more precise locator is available.
+- If only a degraded locator is known, keep it only as a last resort and state that precise source location was not retained.
 - Treat `{source_registry_path}` as read-only reference material. Do not modify it directly; declare sources in this stage JSON and let the runner merge them.
 
 ## Source Materials
