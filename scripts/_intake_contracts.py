@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from _stage_contracts import SOURCE_CLASSES, SOURCE_ID_PATTERN, auditable_locator, normalize_source_record
+
 
 INTAKE_KEYS = (
     "question",
@@ -14,6 +16,7 @@ INTAKE_KEYS = (
     "known_facts",
     "working_inferences",
     "uncertainty_notes",
+    "sources",
 )
 
 
@@ -49,6 +52,32 @@ def validate_intake_payload(payload: dict[str, object]) -> list[str]:
     ):
         _require_string_list(payload.get(key), key, errors)
 
+    source_index: dict[str, dict[str, str]] = {}
+    sources = payload.get("sources")
+    if not isinstance(sources, list):
+        errors.append("sources must be a list.")
+    else:
+        for index, item in enumerate(sources, start=1):
+            if not isinstance(item, dict):
+                errors.append(f"sources[{index}] must be an object.")
+                continue
+            normalized = normalize_source_record(item)
+            _require_string(normalized.get("id"), f"sources[{index}].id", errors)
+            _require_string(normalized.get("title"), f"sources[{index}].title", errors)
+            _require_string(normalized.get("type"), f"sources[{index}].type", errors)
+            _require_string(normalized.get("authority"), f"sources[{index}].authority", errors)
+            _require_string(normalized.get("locator"), f"sources[{index}].locator", errors)
+            source_id = normalized.get("id")
+            if isinstance(source_id, str) and not SOURCE_ID_PATTERN.match(source_id):
+                errors.append(f"sources[{index}].id must be a canonical source ID.")
+            source_class = normalized.get("source_class")
+            if not isinstance(source_class, str) or source_class not in SOURCE_CLASSES:
+                errors.append(f"sources[{index}].source_class must be one of {sorted(SOURCE_CLASSES)}.")
+            elif not auditable_locator(normalized.get("locator"), source_class):
+                errors.append(f"sources[{index}].locator must be an auditable locator for source_class {source_class}.")
+            if isinstance(source_id, str):
+                source_index[source_id] = {key: str(value) for key, value in normalized.items() if isinstance(value, str)}
+
     known_facts = payload.get("known_facts")
     if not isinstance(known_facts, list):
         errors.append("known_facts must be a list.")
@@ -57,8 +86,20 @@ def validate_intake_payload(payload: dict[str, object]) -> list[str]:
             if not isinstance(item, dict):
                 errors.append(f"known_facts[{index}] must be an object.")
                 continue
+            _require_string(item.get("id"), f"known_facts[{index}].id", errors)
             _require_string(item.get("statement"), f"known_facts[{index}].statement", errors)
-            _require_string(item.get("source_basis"), f"known_facts[{index}].source_basis", errors)
+            _require_string(item.get("source_excerpt"), f"known_facts[{index}].source_excerpt", errors)
+            _require_string(item.get("source_anchor"), f"known_facts[{index}].source_anchor", errors)
+            source_ids = item.get("source_ids")
+            if not isinstance(source_ids, list) or not source_ids:
+                errors.append(f"known_facts[{index}].source_ids must be a non-empty list.")
+            else:
+                for source_id in source_ids:
+                    if not isinstance(source_id, str) or not SOURCE_ID_PATTERN.match(source_id):
+                        errors.append(f"known_facts[{index}].source_ids contains a non-canonical source ID.")
+                        continue
+                    if source_id not in source_index:
+                        errors.append(f"known_facts[{index}] references undefined source ID {source_id}.")
 
     working_inferences = payload.get("working_inferences")
     if not isinstance(working_inferences, list):

@@ -82,12 +82,22 @@ Implemented today:
 - placeholder stage outputs, workflow state, and run audit artifacts
 - scaffolded run-level source registries
 - scaffolded structured JSON stage outputs for research A, research B, both critique stages, and judge
-- explicit intake-contract validation for the intake JSON stage
+- explicit intake-contract validation for the intake JSON stage, now with source-backed `known_facts`, intake-declared sources, short supporting excerpts for each fact, and stable source anchors
 - unified structured-stage validation for research, critique, and judge outputs, including source-ID resolution against the run registry
 - flexible validation for non-truth-critical narrative sections such as summaries, uncertainties, and source-evaluation notes
 - runner-owned source-registry merging; stage agents may declare sources in stage JSON but the runner treats `sources.json` as read-only during execution
 - stdout-oriented adapters can now recover fenced stage JSON artifacts directly from stdout before falling back to markdown-to-JSON synthesis
 - source records now normalize into explicit source classes such as `external_evidence`, `job_input`, `workflow_provenance`, and `recovered_provisional`
+- external-evidence locators now follow a resolvable-locator policy rather than a URL-only policy; accepted forms include web URLs, concrete local file paths, and stable attachment-style URIs such as `file://`
+- bare-domain locators such as `example.com` are currently tolerated as warnings rather than hard failures, but the preferred locator remains the most specific followable page or file available
+- prompt contracts now explicitly require agents to retain the exact locator they actually used rather than collapsing it to a site root or bare domain, and the source registry upgrades degraded locators when a later stage provides a more specific one
+- structured research, critique, and judge claims may now carry typed `support_links` so support can be classified semantically as `evidence`, `context`, `challenge`, or `provenance`
+- structured claims may now also carry `claim_dependencies` so local fact or claim references are modeled separately from source support instead of being smuggled into `support_links`
+- structured claim-map generation now derives `evidence_sources` and `provenance` from typed support links when present instead of relying only on flat marker classification, and preserves `claim_dependencies` for local reasoning traceability
+- `job_input` remains admissible evidence for claims about the current system, stated requirements, and explicit constraints when the provided brief directly contains those facts
+- `context` links no longer satisfy the semantic evidence requirement for facts or inferences that assert world claims; those claims now require at least one world-supporting `evidence` link
+- final publication now fails when any referenced evidence source is unresolved instead of rendering a bare source ID into the user-facing report
+- source-quality warnings now flag `job_input` locators that point at prompt packets so the workflow can prefer the underlying canonical artifact such as `brief.md` or `config.yaml`
 - structured inferences may reference local fact IDs for convenience, but the runner now resolves those references back to canonical external source IDs before validation
 - scaffolded claim-sidecar targets for research, critique, and judge stages
 - shared structured-stage validation now centralizes source-aware JSON validation, markdown-contract backstops, canonical markdown regeneration, and claim-map generation for structured stages
@@ -97,7 +107,7 @@ Implemented today:
 - per-stage driver logs that capture command execution plus output-artifact status for debugging
 - markdown claim extraction with stable IDs
 - structured claim-register generation from judge JSON in the automated workflow path
-- provenance vs external evidence separation inside the claim register
+- provenance vs external evidence separation inside the claim register, now partly semantic on the structured stage path
 - lexical claim classification, including evaluation handling for disagreement and confidence sections
 - strict failure on uncited extracted facts
 - section-aware markdown validation retained as a migration backstop for required fact, inference, and critique-summary sections
@@ -113,16 +123,17 @@ Known limitations in the current repo:
 
 - the claim model is too coarse for adjudication; `fact` and `inference` are not enough
 - downstream trust is still limited because stdout recovery remains in place for some adapters and markdown is still used as a bridge artifact even though structured stages are authoritative
-- provenance vs evidence separation is still marker-based, not semantic
+- provenance vs evidence separation is now semantic on the structured stage path, but markdown-only extraction and some compatibility paths still rely on marker classification
 - the workflow still depends on prompt compliance for structured JSON writes from some adapters; markdown stdout recovery remains a compatibility path rather than a strong adapter contract
 - long-running parallel stages can still delay surfaced failure because the runner waits for sibling futures to settle before exiting the stage group
+- intake now carries source-backed `known_facts` plus an intake-declared `sources` list and per-fact `source_excerpt` and `source_anchor`, which removes the old freeform `source_basis` weakness for direct brief/config facts and gives each intake fact basic auditability
 
 ## Ranked Shortcomings
 
 The current shortcomings, in priority order, are:
 
 1. Structured execution is only partially rolled out.
-   Research, critique, and judge now have authoritative JSON contracts, and intake is now contract-validated, but publication and adapter compatibility paths still sit outside one canonical normalized execution model.
+   Research, critique, and judge now have authoritative JSON contracts, and intake is now source-backed and contract-validated, but publication and adapter compatibility paths still sit outside one canonical normalized execution model.
 
 2. Validation semantics are still fragmented across the workflow.
    Structured-stage validation is better than before, but lexical extraction, stage validation, final-artifact gating, and repo validation are still separate mechanisms with different failure semantics.
@@ -133,8 +144,8 @@ The current shortcomings, in priority order, are:
 4. Source identity is now modeled, but source governance is still shallow.
    A run-level `sources.json` exists, source IDs must resolve, and source classes now exist, but the system still does not enforce richer freshness, authority scoring, or stronger provenance policies.
 
-5. Provenance-versus-evidence separation is still marker-based.
-   The architecture is correct, but the implementation still infers the distinction from token shapes rather than source-aware semantics.
+5. Provenance-versus-evidence separation is only partially semantic.
+   Structured stages now support typed support links, explicit claim dependencies, and source-class-aware derivation, but markdown-only extraction and some downstream compatibility paths still infer meaning from token shapes.
 
 6. Workflow state is file-based and non-transactional.
    `workflow-state.json`, stage outputs, sidecars, and logs can still drift during crashes or partial parallel failures. The design is recoverable, but not atomic.
@@ -184,6 +195,12 @@ Target structured shape:
   "type": "fact",
   "provenance": ["PASS-A", "CRIT-B-A"],
   "evidence_sources": ["S001", "S004"],
+  "claim_dependencies": ["F-002"],
+  "support_links": [
+    {"source_id": "S001", "role": "evidence"},
+    {"source_id": "DOC-001", "role": "context"},
+    {"source_id": "CRIT-B-A", "role": "provenance"}
+  ],
   "unclassified_markers": []
 }
 ```
@@ -196,7 +213,8 @@ Priority order for the next iteration:
 2. strengthen source-registry governance beyond source classes and ID resolution
 3. unify publication around the same normalized contract model as the core execution stages
 4. tighten intake and stage schemas further where live runs expose underconstrained fields
-5. upgrade from marker-based provenance/evidence separation to stronger semantic classification only if real workflow failures justify the added complexity
+5. extend the new semantic support-link model beyond the structured path so markdown compatibility layers and publication logic no longer fall back to marker-only provenance/evidence classification
+6. decide whether intake should eventually emit richer fact-level provenance such as precise machine-readable spans now that source-backed facts, excerpts, and anchors exist
 
 The concrete redesign path that operationalizes those priorities is documented in [redesign-proposal.md](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/redesign-proposal.md).
 

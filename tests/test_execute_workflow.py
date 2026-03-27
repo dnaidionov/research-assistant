@@ -119,9 +119,27 @@ class ExecuteWorkflowTests(unittest.TestCase):
                             "missing_information": [],
                             "required_artifacts": ["judge report"],
                             "notes_for_researchers": ["Use cited evidence only"],
-                            "known_facts": [{{"statement": "The brief asks for an option comparison.", "source_basis": "brief.md"}}],
+                            "known_facts": [{{"id": "KF-001", "statement": "The brief asks for an option comparison.", "source_ids": ["DOC-BRIEF"], "source_excerpt": "Which option is better?", "source_anchor": "brief.md#Question"}}],
                             "working_inferences": [],
-                            "uncertainty_notes": []
+                            "uncertainty_notes": [],
+                            "sources": [
+                                {{
+                                    "id": "DOC-BRIEF",
+                                    "title": "Job brief",
+                                    "type": "project_brief",
+                                    "authority": "job input",
+                                    "locator": "brief.md",
+                                    "source_class": "job_input"
+                                }},
+                                {{
+                                    "id": "DOC-CONFIG",
+                                    "title": "Job config",
+                                    "type": "job_config",
+                                    "authority": "job input",
+                                    "locator": "config.yaml",
+                                    "source_class": "job_input"
+                                }}
+                            ]
                         }}, indent=2),
                         encoding="utf-8",
                     )
@@ -451,6 +469,11 @@ class ExecuteWorkflowTests(unittest.TestCase):
         self.assertIn("# Recommendation", artifact)
         self.assertIn("# References", artifact)
         self.assertIn("SRC-001", artifact)
+
+        source_registry = json.loads((run_dir / "sources.json").read_text(encoding="utf-8"))
+        source_ids = {source["id"] for source in source_registry["sources"]}
+        self.assertIn("DOC-BRIEF", source_ids)
+        self.assertIn("DOC-CONFIG", source_ids)
 
         state = json.loads((run_dir / "workflow-state.json").read_text(encoding="utf-8"))
         statuses = {stage["id"]: stage["status"] for stage in state["stages"]}

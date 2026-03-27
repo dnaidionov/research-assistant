@@ -99,10 +99,29 @@ Rules:
 - `stage` must equal `{stage_id}`.
 - Every `facts` item must contain `id`, `text`, and `evidence_sources`.
 - Every `inferences` item must contain `id`, `text`, `evidence_sources`, and `confidence`.
+- When possible, add `support_links` to each fact and inference item as a typed list of `{{ "source_id", "role" }}` objects.
+- If an inference depends on earlier fact IDs such as `F-001`, record those under `claim_dependencies` instead of putting them inside `support_links.source_id`.
+- Do not use local claim IDs such as `F-001`, `I-001`, or `C-001` inside `support_links.source_id`.
+- `support_links.role` must be one of: `evidence`, `context`, `challenge`, `provenance`.
+- Use `evidence` for external support that directly justifies the claim.
+- Use `evidence` for `job_input` too when the brief or provided input directly states a current-system fact, requirement, or constraint that the claim is about.
+- Use `context` for background inputs that inform scope or constraints but are not the main proof.
+- Use `challenge` only when a cited source materially pushes against the claim.
+- Use `provenance` for workflow artifacts or traceability records. Provenance is not evidence.
 - `confidence` must be `low`, `medium`, or `high`.
 - Every cited source id must be declared in `sources`.
-- Every `sources` item must include `id`, `title`, `type`, `authority`, and `locator`.
+- Every `sources` item must include `id`, `title`, `type`, `authority`, and `locator`, and should include `source_class` when known.
+- Prefer explicit source classes:
+  - `external_evidence`
+  - `job_input`
+  - `workflow_provenance`
+  - `recovered_provisional`
 - Preserve canonical external source IDs. Do not use workflow-stage references as evidence.
+- Facts and inferences must still carry canonical external evidence in `evidence_sources`; `support_links` adds semantics and provenance, it does not replace evidence.
+- `claim_dependencies` is for local reasoning traceability only; it does not replace external evidence citations.
+- Use resolvable locators for sources. Prefer full URLs, concrete file paths, `file://` locators for attached files, or other stable followable URIs. Avoid vague locators such as `Various industry benchmarks`.
+- Retain the exact locator you actually used. Do not collapse a specific page URL, file path, or attachment URI to a bare domain or site root unless no more precise locator is available.
+- If only a degraded locator is known, keep it only as a last resort and state that precise source location was not retained.
 - Treat `{source_registry_path}` as read-only reference material. Do not modify it directly; declare sources in this stage JSON and let the runner merge them.
 
 ## Source Materials

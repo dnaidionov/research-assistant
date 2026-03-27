@@ -99,6 +99,100 @@ class StageValidationTests(unittest.TestCase):
         self.assertFalse(result.should_rewrite_markdown)
         self.assertIsNone(result.claim_map)
 
+    def test_validate_structured_stage_artifact_reports_markdown_errors_even_when_structured_invalid(self) -> None:
+        payload = {
+            "stage": "research-b",
+            "summary": [{"text": "Summary.", "evidence_sources": ["SRC-001"]}],
+            "facts": [{"id": "F-001", "text": "Fact.", "evidence_sources": ["SRC-001"]}],
+            "inferences": [
+                {"id": "I-001", "text": "Inference.", "evidence_sources": [], "confidence": "high"}
+            ],
+            "uncertainties": [],
+            "evidence_gaps": [],
+            "preliminary_disagreements": [],
+            "source_evaluation": [],
+            "sources": [
+                {
+                    "id": "SRC-001",
+                    "title": "Canonical stage source",
+                    "type": "report",
+                    "authority": "fixture",
+                    "locator": "https://example.com/src-001",
+                }
+            ],
+        }
+        registry = source_registry_placeholder("run-xyz")
+        markdown = "\n".join(
+            [
+                "# Executive Summary",
+                "",
+                "Summary.",
+                "",
+                "# Facts",
+                "",
+                "1. Fact. [SRC-001]",
+                "",
+                "# Inferences",
+                "",
+                "1. Inference without citation. Confidence: high",
+                "",
+                "# Uncertainty Register",
+                "",
+                "- Gap.",
+                "",
+                "# Evidence Gaps",
+                "",
+                "- More data.",
+                "",
+                "# Preliminary Disagreements",
+                "",
+                "- Trade-off remains.",
+                "",
+                "# Source Evaluation",
+                "",
+                "- Source quality note.",
+            ]
+        )
+
+        result = validate_structured_stage_artifact("research-b", payload, registry, markdown)
+
+        self.assertTrue(result.structured_errors)
+        self.assertTrue(result.markdown_errors)
+        self.assertTrue(any("lacks an external evidence citation" in error for error in result.markdown_errors))
+        self.assertFalse(result.should_rewrite_markdown)
+        self.assertIsNone(result.claim_map)
+
+    def test_validate_structured_stage_artifact_surfaces_source_warnings(self) -> None:
+        payload = {
+            "stage": "research-b",
+            "summary": [{"text": "Summary.", "evidence_sources": ["SRC-001"]}],
+            "facts": [{"id": "F-001", "text": "Fact.", "evidence_sources": ["SRC-001"]}],
+            "inferences": [
+                {"id": "I-001", "text": "Inference.", "evidence_sources": ["SRC-001"], "confidence": "high"}
+            ],
+            "uncertainties": [],
+            "evidence_gaps": [],
+            "preliminary_disagreements": [],
+            "source_evaluation": [],
+            "sources": [
+                {
+                    "id": "SRC-001",
+                    "title": "Vendor page",
+                    "type": "report",
+                    "authority": "fixture",
+                    "locator": "example.com",
+                    "source_class": "external_evidence",
+                }
+            ],
+        }
+        registry = source_registry_placeholder("run-xyz")
+        markdown = "# Executive Summary\n\nSummary. [SRC-001]\n\n# Facts\n\n1. Fact. [SRC-001]\n\n# Inferences\n\n1. Inference. [SRC-001] Confidence: high\n\n# Uncertainty Register\n\n- Gap.\n\n# Evidence Gaps\n\n- More data.\n\n# Preliminary Disagreements\n\n- Trade-off.\n\n# Source Evaluation\n\n- Note."
+
+        result = validate_structured_stage_artifact("research-b", payload, registry, markdown)
+
+        self.assertEqual(result.structured_errors, [])
+        self.assertTrue(any("bare domain" in warning.lower() for warning in result.structured_warnings))
+
     def test_markdown_contract_validator_handles_critique_summary_confidence(self) -> None:
         markdown = "\n".join(
             [

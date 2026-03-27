@@ -13,6 +13,7 @@ from _stage_contracts import (
     normalize_stage_citations,
     parse_markdown_sections,
     render_stage_markdown_from_json,
+    source_quality_warnings,
     validate_stage_json,
 )
 
@@ -25,6 +26,7 @@ class StageValidationResult:
     stage_id: str
     normalized_payload: dict[str, object]
     structured_errors: list[str]
+    structured_warnings: list[str]
     markdown_errors: list[str]
     original_markdown_errors: list[str]
     canonical_markdown: str
@@ -96,22 +98,44 @@ def validate_structured_stage_artifact(
     payload: dict[str, object],
     source_registry: dict[str, object],
     markdown: str,
+    dependency_payloads: list[dict[str, object]] | None = None,
 ) -> StageValidationResult:
+    if dependency_payloads and stage_id in {"critique-a-on-b", "critique-b-on-a"}:
+        target_claim_catalog: list[dict[str, object]] = []
+        for dependency_payload in dependency_payloads:
+            if not isinstance(dependency_payload, dict):
+                continue
+            for field_name in ("facts", "supported_conclusions"):
+                for item in dependency_payload.get(field_name, []):
+                    if not isinstance(item, dict):
+                        continue
+                    if isinstance(item.get("id"), str) and isinstance(item.get("evidence_sources"), list):
+                        target_claim_catalog.append(
+                            {
+                                "id": item["id"],
+                                "evidence_sources": [source for source in item["evidence_sources"] if isinstance(source, str)],
+                            }
+                        )
+        if target_claim_catalog:
+            payload = dict(payload)
+            payload["target_claim_catalog"] = target_claim_catalog
     normalized_payload = normalize_stage_citations(stage_id, payload)
     structured_errors = validate_stage_json(stage_id, normalized_payload, source_registry)
+    structured_warnings = source_quality_warnings(normalized_payload)
+    original_markdown_errors = validate_stage_markdown_contract(stage_id, markdown)
     if structured_errors:
         return StageValidationResult(
             stage_id=stage_id,
             normalized_payload=normalized_payload,
             structured_errors=structured_errors,
-            markdown_errors=[],
-            original_markdown_errors=[],
+            structured_warnings=structured_warnings,
+            markdown_errors=original_markdown_errors,
+            original_markdown_errors=original_markdown_errors,
             canonical_markdown=markdown,
             should_rewrite_markdown=False,
             claim_map=None,
         )
 
-    original_markdown_errors = validate_stage_markdown_contract(stage_id, markdown)
     canonical_markdown = markdown
     should_rewrite_markdown = False
     markdown_errors = original_markdown_errors
@@ -125,6 +149,7 @@ def validate_structured_stage_artifact(
         stage_id=stage_id,
         normalized_payload=normalized_payload,
         structured_errors=[],
+        structured_warnings=structured_warnings,
         markdown_errors=markdown_errors,
         original_markdown_errors=original_markdown_errors,
         canonical_markdown=canonical_markdown,

@@ -21,7 +21,19 @@
         "properties": {
           "id": {"type": "string"},
           "text": {"type": "string"},
-          "evidence_sources": {"type": "array", "items": {"type": "string"}}
+          "evidence_sources": {"type": "array", "items": {"type": "string"}},
+          "support_links": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["source_id", "role"],
+              "properties": {
+                "source_id": {"type": "string"},
+                "role": {"type": "string", "enum": ["evidence", "context", "challenge", "provenance"]}
+              }
+            }
+          },
+          "claim_dependencies": {"type": "array", "items": {"type": "string"}}
         }
       }
     },
@@ -34,6 +46,18 @@
           "id": {"type": "string"},
           "text": {"type": "string"},
           "evidence_sources": {"type": "array", "items": {"type": "string"}},
+          "support_links": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["source_id", "role"],
+              "properties": {
+                "source_id": {"type": "string"},
+                "role": {"type": "string", "enum": ["evidence", "context", "challenge", "provenance"]}
+              }
+            }
+          },
+          "claim_dependencies": {"type": "array", "items": {"type": "string"}},
           "confidence": {"type": "string", "enum": ["low", "medium", "high"]}
         }
       }
@@ -121,6 +145,24 @@
         }
       ]
     },
-    "sources": {"type": "array"}
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "type", "authority", "locator"],
+        "properties": {
+          "id": {"type": "string"},
+          "title": {"type": "string"},
+          "type": {"type": "string"},
+          "authority": {"type": "string"},
+          "locator": {"type": "string"},
+          "source_class": {
+            "type": "string",
+            "enum": ["external_evidence", "job_input", "workflow_provenance", "recovered_provisional"]
+          },
+          "acquisition_provenance": {"type": "string"}
+        }
+      }
+    }
   }
 }

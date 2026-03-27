@@ -13,12 +13,176 @@
   ],
   "properties": {
     "stage": {"type": "string", "enum": ["critique-a-on-b", "critique-b-on-a"]},
-    "supported_claims": {"type": "array"},
-    "unsupported_claims": {"type": "array"},
-    "weak_source_issues": {"type": "array"},
-    "omissions": {"type": "array"},
-    "overreach": {"type": "array"},
-    "unresolved_disagreements": {"type": "array"},
+    "supported_claims": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {"type": "string"},
+          {
+            "type": "object",
+            "required": ["text"],
+            "properties": {
+              "text": {"type": "string"},
+              "evidence_sources": {"type": "array", "items": {"type": "string"}},
+              "claim_dependencies": {"type": "array", "items": {"type": "string"}},
+              "support_links": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["source_id", "role"],
+                  "properties": {
+                    "source_id": {"type": "string"},
+                    "role": {"type": "string", "enum": ["evidence", "context", "challenge", "provenance"]}
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "unsupported_claims": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {"type": "string"},
+          {
+            "type": "object",
+            "properties": {
+              "text": {"type": "string"},
+              "target_claim": {"type": "string"},
+              "reason": {"type": "string"},
+              "needed_evidence": {"type": "string"},
+              "evidence_sources": {"type": "array", "items": {"type": "string"}},
+              "claim_dependencies": {"type": "array", "items": {"type": "string"}},
+              "support_links": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["source_id", "role"],
+                  "properties": {
+                    "source_id": {"type": "string"},
+                    "role": {"type": "string", "enum": ["evidence", "context", "challenge", "provenance"]}
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "weak_source_issues": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {"type": "string"},
+          {
+            "type": "object",
+            "required": ["text"],
+            "properties": {
+              "text": {"type": "string"},
+              "evidence_sources": {"type": "array", "items": {"type": "string"}},
+              "claim_dependencies": {"type": "array", "items": {"type": "string"}},
+              "support_links": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["source_id", "role"],
+                  "properties": {
+                    "source_id": {"type": "string"},
+                    "role": {"type": "string", "enum": ["evidence", "context", "challenge", "provenance"]}
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "omissions": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {"type": "string"},
+          {
+            "type": "object",
+            "required": ["text"],
+            "properties": {
+              "text": {"type": "string"},
+              "evidence_sources": {"type": "array", "items": {"type": "string"}},
+              "claim_dependencies": {"type": "array", "items": {"type": "string"}},
+              "support_links": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["source_id", "role"],
+                  "properties": {
+                    "source_id": {"type": "string"},
+                    "role": {"type": "string", "enum": ["evidence", "context", "challenge", "provenance"]}
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "overreach": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {"type": "string"},
+          {
+            "type": "object",
+            "required": ["text"],
+            "properties": {
+              "text": {"type": "string"},
+              "evidence_sources": {"type": "array", "items": {"type": "string"}},
+              "claim_dependencies": {"type": "array", "items": {"type": "string"}},
+              "support_links": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["source_id", "role"],
+                  "properties": {
+                    "source_id": {"type": "string"},
+                    "role": {"type": "string", "enum": ["evidence", "context", "challenge", "provenance"]}
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "unresolved_disagreements": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {"type": "string"},
+          {
+            "type": "object",
+            "required": ["text"],
+            "properties": {
+              "text": {"type": "string"},
+              "evidence_sources": {"type": "array", "items": {"type": "string"}},
+              "claim_dependencies": {"type": "array", "items": {"type": "string"}},
+              "support_links": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["source_id", "role"],
+                  "properties": {
+                    "source_id": {"type": "string"},
+                    "role": {"type": "string", "enum": ["evidence", "context", "challenge", "provenance"]}
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
     "summary": {
       "oneOf": [
         {"type": "string"},
@@ -33,6 +197,24 @@
         }
       ]
     },
-    "sources": {"type": "array"}
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "type", "authority", "locator"],
+        "properties": {
+          "id": {"type": "string"},
+          "title": {"type": "string"},
+          "type": {"type": "string"},
+          "authority": {"type": "string"},
+          "locator": {"type": "string"},
+          "source_class": {
+            "type": "string",
+            "enum": ["external_evidence", "job_input", "workflow_provenance", "recovered_provisional"]
+          },
+          "acquisition_provenance": {"type": "string"}
+        }
+      }
+    }
   }
 }

@@ -175,6 +175,8 @@ The run-level source registry lives at:
 
 That registry now normalizes source records into explicit source classes such as `external_evidence`, `job_input`, and `recovered_provisional`.
 
+Structured research, critique, and judge JSON may also carry typed `support_links` on claim-like items. These links distinguish semantic roles such as `evidence`, `context`, `challenge`, and `provenance` instead of relying only on flat citation lists. When a later claim depends on an earlier local claim or fact, that dependency should be recorded separately in `claim_dependencies` rather than mixed into source support. `job_input` sources remain admissible evidence when they directly state current-system facts, requirements, or constraints under analysis.
+
 Validated claim sidecars for `research-a`, `research-b`, both critiques, and `judge` are written into:
 
 `~/Projects/research-hub/jobs/my-project-1/runs/run-001/stage-claims/`

@@ -35,7 +35,7 @@ PROVENANCE_TOKEN_PATTERN = re.compile(
     re.IGNORECASE,
 )
 EVIDENCE_TOKEN_PATTERN = re.compile(
-    r"^(?:SRC|DOC)-[A-Z0-9._-]+$|^S[0-9]{1,6}$|^https?://\S+$",
+    r"^(?:SRC|DOC)-[A-Z0-9._-]+$|^S[0-9]{1,6}$|^https?://\S+$|^file://\S+$|^app://\S+$|^(?:~?/|/|\./|\.\./)\S+$",
     re.IGNORECASE,
 )
 PATH_ONLY_PATTERN = re.compile(

@@ -49,6 +49,52 @@ class ExtractClaimsTests(unittest.TestCase):
             self.assertEqual(payload["summary"]["uncited_fact_ids"], [])
             self.assertEqual(payload["summary"]["uncited_inference_ids"], [])
 
+    def test_structured_stage_json_preserves_semantic_support_links(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "judge.json"
+            output_path = Path(tmpdir) / "claims.json"
+            input_path.write_text(
+                """{
+  "stage": "judge",
+  "supported_conclusions": [
+    {
+      "id": "C-001",
+      "text": "Option A is feasible.",
+      "evidence_sources": ["SRC-001"],
+      "support_links": [
+        {"source_id": "SRC-001", "role": "evidence"},
+        {"source_id": "SRC-WF", "role": "provenance"}
+      ]
+    }
+  ],
+  "synthesis_judgments": [],
+  "unresolved_disagreements": [],
+  "confidence_assessment": [],
+  "evidence_gaps": [],
+  "rationale": [],
+  "recommended_artifact_structure": [],
+  "sources": [
+    {"id": "SRC-001", "title": "Source", "type": "report", "authority": "vendor", "locator": "https://example.com/src-001", "source_class": "external_evidence"},
+    {"id": "SRC-WF", "title": "Workflow artifact", "type": "workflow_artifact", "authority": "runner", "locator": "urn:workflow:judge", "source_class": "workflow_provenance"}
+  ]
+}""",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                ["python3", str(EXTRACT_CLAIMS), "--input", str(input_path), "--output", str(output_path)],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            claim = payload["claims"][0]
+            self.assertEqual(claim["evidence_sources"], ["SRC-001"])
+            self.assertEqual(claim["provenance"], ["SRC-WF"])
+            self.assertEqual(claim["support_links"][1]["role"], "provenance")
+
     def test_classifies_provenance_evidence_and_unknown_markers_separately(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             input_path = Path(tmpdir) / "report.md"
@@ -77,6 +123,35 @@ class ExtractClaimsTests(unittest.TestCase):
             self.assertEqual(claim["evidence_sources"], ["SRC-100"])
             self.assertEqual(claim["unclassified_markers"], ["NOTE-1"])
             self.assertEqual(payload["summary"]["claims_with_unclassified_markers"], ["C001"])
+
+    def test_recognizes_file_uri_and_local_path_citations_as_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "report.md"
+            output_path = Path(tmpdir) / "claims.json"
+            input_path.write_text(
+                "\n".join(
+                    [
+                        "## Facts",
+                        "- Attached benchmark PDF supports this claim. [file:///tmp/benchmark.pdf, /tmp/local-note.md]",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                ["python3", str(EXTRACT_CLAIMS), "--input", str(input_path), "--output", str(output_path)],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            claim = payload["claims"][0]
+            self.assertEqual(
+                claim["evidence_sources"],
+                ["file:///tmp/benchmark.pdf", "/tmp/local-note.md"],
+            )
 
     def test_extracts_atomic_claims_with_provenance_evidence_and_confidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

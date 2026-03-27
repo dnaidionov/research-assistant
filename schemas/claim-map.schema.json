@@ -38,6 +38,21 @@
             "type": "array",
             "items": {"type": "string"}
           },
+          "support_links": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["source_id", "role"],
+              "properties": {
+                "source_id": {"type": "string"},
+                "role": {"type": "string", "enum": ["evidence", "context", "challenge", "provenance"]}
+              }
+            }
+          },
+          "claim_dependencies": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
           "confidence": {
             "type": "string",
             "enum": ["low", "medium", "high"]

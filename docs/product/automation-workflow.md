@@ -63,6 +63,9 @@ Antigravity remains available as an adapter option but is no longer the default 
 - separate facts and inference
 - include inline citations
 - use canonical external citation IDs for evidence, not ad hoc labels or stage references
+- when structured JSON is available, attach typed `support_links` so evidence, context, challenge, and provenance are explicit rather than inferred later
+- if a later claim depends on earlier local facts or conclusions, record those under `claim_dependencies` instead of misusing `support_links.source_id`
+- if a fact or inference asserts a claim about the world, at least one supporting link must be role `evidence`; `context` alone is not enough to satisfy the semantic evidence requirement
 
 ### 3. Research pass B
 - produce a second independent research report
@@ -84,6 +87,7 @@ Antigravity remains available as an adapter option but is no longer the default 
 - keep unresolved disagreements visible
 - distinguish supported conclusions from open questions
 - preserve external evidence citations from the research record instead of replacing them with stage references
+- when structured JSON is available, carry typed support roles forward so the judge can separate world support from provenance semantically
 
 ### 7. Claim extraction
 - convert markdown into a v1 claim register with stable `C001`-style IDs
@@ -159,6 +163,8 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - merges stage-declared sources into the run-level `sources.json` registry and rejects unresolved source IDs
 - treats `sources.json` as runner-owned state; stage agents may read it but should not modify it directly, and direct edits are discarded before merge
 - normalizes source records into explicit source classes for downstream publication policy
+- emits source-quality warnings when external evidence uses only a bare domain locator or when `job_input` points to prompt-packet packaging instead of the underlying canonical artifact
+- expects agents to retain the exact source locator they actually used; degrading a page URL to a site root or bare domain is treated as a source-quality defect, not acceptable normalization
 - extracts claim sidecars for `research-a`, `research-b`, `critique-a-on-b`, `critique-b-on-a`, and `judge`
 - uses structured judge JSON for automated claim-register generation when available
 - keeps section-aware markdown validation as a migration backstop for research, critique, and judge contracts, but now through one shared stage-validation path
@@ -176,20 +182,34 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - can consume structured stage JSON directly and build claim maps without markdown heuristics when the input is an authoritative stage artifact
 - assigns stable `C001`-style IDs
 - separates bracketed markers into provenance, external evidence, and unclassified buckets
+- preserves typed `support_links` from structured stage artifacts and derives semantic evidence versus provenance from those links plus source classes when they are present
+- preserves `claim_dependencies` from structured stage artifacts so local reasoning traceability is kept distinct from source support
 - captures explicit confidence labels when present
 - classifies disagreements and confidence summaries as evaluation-oriented claims instead of defaulting them to facts
 - can fail on uncited facts and uncited inferences in strict mode when used as a hard validator
 - flags provenance-only supported facts for downstream gating
 - rejects workflow-stage references as evidence citations
-- still relies on lexical and markdown-structure heuristics rather than semantic parsing
+- still relies on lexical and markdown-structure heuristics for markdown-only inputs and compatibility paths
 
 ### `scripts/generate_final_artifact.py`
 - reads the judge artifact and claim register
 - applies the shared publication-validation rules before rendering
 - rejects uncited facts, uncited inferences, provenance-only facts, and unclassified markers
 - rejects referenced provisional or workflow-provenance sources when structured source records are available
+- rejects unresolved referenced source IDs instead of emitting bare IDs into the final report
 - writes a structured final artifact with external references only
 - keeps workflow provenance out of the user-facing references section
+
+## Planned Intake-Fact Review
+
+The intake contract now emits source-backed `known_facts` plus an intake-declared `sources` list and a short `source_excerpt` and stable `source_anchor` for each fact. That is materially stronger than the earlier `source_basis` text, but it is still not the final intake evidence model.
+
+The next intake-focused review should:
+
+1. trace how intake derives `known_facts`, `constraints`, `assumptions`, and `missing_information` from `brief.md`
+2. identify which intake outputs still blur direct brief facts with intake-stage paraphrase
+3. decide whether intake should emit richer fact-level provenance such as precise machine-readable spans in addition to canonical source IDs, excerpts, and anchors
+4. tighten downstream policy only after that lineage is explicit, so the system does not confuse brief facts, assumptions, and workflow paraphrases
 
 ### `scripts/validate_job.py`
 - validates that a job repo has the required files and directories
@@ -219,4 +239,4 @@ The intended next hardening steps are:
 2. strengthen source-registry governance beyond source classes and simple ID resolution
 3. unify publication around the same normalized contract model as the core execution stages
 4. tighten intake and stage schemas further where live runs expose underconstrained fields
-5. replace marker-based provenance/evidence classification with stronger semantic handling only if the simpler approach proves insufficient
+5. extend the new structured semantic support model into remaining markdown compatibility and publication edges until marker-only classification is no longer on the critical path

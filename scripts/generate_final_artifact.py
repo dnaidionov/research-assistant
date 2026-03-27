@@ -117,14 +117,25 @@ def normalize_reference_record(reference_id: str, record: dict[str, object], jud
     authority = str(normalized_source.get("authority") or "").strip()
     locator = str(normalized_source.get("locator") or "").strip()
     source_class = str(normalized_source.get("source_class") or "").strip()
+    job_dir = infer_job_dir_from_judge_path(judge_path)
 
-    if source_type == "project_brief":
-        job_dir = infer_job_dir_from_judge_path(judge_path)
-        brief_path = job_dir / "brief.md" if job_dir is not None else None
-        if brief_path is not None and brief_path.is_file():
+    if source_class == "job_input" and job_dir is not None:
+        lower_title = title.lower()
+        lower_locator = locator.lower()
+        candidate_path: Path | None = None
+        if source_type == "project_brief" or "brief" in lower_title or lower_locator.endswith("brief.md") or "/prompt-packets/" in lower_locator:
+            candidate_path = job_dir / "brief.md"
             title = "Job brief"
             authority = "Job input"
-            locator = str(brief_path)
+        elif "config" in lower_title or lower_locator.endswith("config.yaml"):
+            candidate_path = job_dir / "config.yaml"
+            title = "Job config"
+            authority = "Job input"
+        if candidate_path is not None and candidate_path.is_file():
+            title = "Job brief"
+            locator = str(candidate_path)
+            if candidate_path.name == "config.yaml":
+                title = "Job config"
 
     return {
         "id": reference_id,
