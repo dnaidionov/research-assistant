@@ -36,7 +36,7 @@ Claim extraction and artifact writing remain separate downstream steps. That spl
 
 `scripts/execute_workflow.py` automates the current 2-pass workflow through configurable CLI adapters.
 
-The current default adapter assignment is:
+The current fallback default adapter assignment is:
 
 1. intake in Codex
 2. research A in Codex and research B in Gemini in parallel
@@ -47,9 +47,19 @@ The current default adapter assignment is:
 7. final artifact generation
 
 The runner is file-driven. It waits on required stage output artifacts, updates `workflow-state.json`, and writes per-step logs into the run directory.
-It assumes the external CLIs can complete a stage from a single prompt and write the requested output artifact without manual intervention.
+For structured research, critique, and judge stages, it no longer relies on one monolithic model call. It now decomposes those stages into a source pass, a claim pass, and deterministic markdown rendering from the validated structured payload.
 It also emits live stage progress. In interactive terminals it redraws status in place; in captured output it emits ordered start and completion events.
 Antigravity remains available as an adapter option but is no longer the default secondary adapter.
+Claude is now available as an additional stdout-oriented adapter option.
+
+Job-level execution config may now override the fallback primary-secondary split. `config.yaml` may define:
+
+- `workflow.execution.providers`
+- `workflow.execution.stage_providers`
+
+Each named provider declares an `adapter` and may declare a `model` when that adapter supports explicit model selection. `stage_providers` then maps each execution stage to one of those named providers. This is now the preferred way to pin stage-provider and stage-model selection for a job.
+
+`execute_workflow.py` still accepts `--run-id`, but it is no longer required. When omitted, the runner now chooses the next incremental run id under the job's `runs/` directory, ignoring non-incremental names such as `run-manual`. When an explicit `--run-id` already exists, the runner now asks for confirmation before continuing that run.
 
 ## Stage Intent
 
@@ -66,6 +76,7 @@ Antigravity remains available as an adapter option but is no longer the default 
 - when structured JSON is available, attach typed `support_links` so evidence, context, challenge, and provenance are explicit rather than inferred later
 - if a later claim depends on earlier local facts or conclusions, record those under `claim_dependencies` instead of misusing `support_links.source_id`
 - if a fact or inference asserts a claim about the world, at least one supporting link must be role `evidence`; `context` alone is not enough to satisfy the semantic evidence requirement
+- evidence is never implicit; a fact or inference cannot rely on nearby citations or earlier citations as support for a new item
 
 ### 3. Research pass B
 - produce a second independent research report
@@ -88,6 +99,7 @@ Antigravity remains available as an adapter option but is no longer the default 
 - distinguish supported conclusions from open questions
 - preserve external evidence citations from the research record instead of replacing them with stage references
 - when structured JSON is available, carry typed support roles forward so the judge can separate world support from provenance semantically
+- supported conclusions and synthesis judgments must each carry their own explicit evidence support; nearby citations do not count
 
 ### 7. Claim extraction
 - convert markdown into a v1 claim register with stable `C001`-style IDs
@@ -147,17 +159,31 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 ### `scripts/execute_workflow.py`
 - ensures the target run exists
 - accepts a job name, a job id from `jobs-index` metadata, or an explicit job path
+- chooses the next incremental `run-###` identifier automatically when `--run-id` is omitted, while still honoring an explicit `--run-id` when provided
+- prompts for confirmation before continuing an explicitly targeted run that already exists
 - resolves primary and secondary execution roles through named CLI adapters
-- defaults to Codex as the primary adapter and Gemini as the secondary adapter
-- keeps Antigravity available as an alternate adapter
+- defaults to Codex as the primary adapter and Gemini as the secondary adapter when no job-level execution config is present
+- now also supports Claude as an alternate adapter
+- prefers job-level named-provider execution config over the CLI primary-secondary fallback when `workflow.execution` is defined
 - passes each tool explicit stage metadata including stage id, prompt-packet path, markdown output path, structured-output path where required, and source-registry path
-- wraps stdout-oriented chat adapters by recovering markdown artifacts from stdout when they do not write the requested stage file directly
+- executes structured research, critique, and judge stages as:
+  - source-pass JSON generation
+  - claim-pass JSON generation
+  - bounded validator-driven repair when either JSON pass is close but contract-invalid
+  - deterministic markdown rendering from the validated structured payload
+- enforces strict substep boundaries:
+  - source-pass may emit only `stage` and `sources`
+  - claim-pass must not emit `sources`
+- gives structured substeps scratch markdown paths under `audit/substeps/` instead of letting them write directly into final `stage-outputs/*.md`
+- wraps stdout-oriented chat adapters by recovering markdown or structured JSON artifacts from stdout when they fail to write the requested file directly
 - recovers fenced structured JSON artifacts from stdout when adapters emit them there
 - no longer synthesizes authoritative structured JSON from markdown for structured stages; missing JSON is now a contract failure unless recoverable structured JSON is present in stdout
 - reports stage start, completion, and failure status while the workflow runs
 - executes the two research stages in parallel
 - executes the two critique stages in parallel
 - validates structured research, critique, and judge outputs against source-aware contracts before downstream execution continues
+- gives each structured stage at most one bounded repair pass when the first adapter output is structurally close but contract-invalid
+- does not spend a repair pass when a structured substep produced no usable JSON artifact at all; missing or unreadable structured output is treated as a hard substep failure
 - applies a shared structured-stage validator that also repairs weak markdown bridge artifacts from authoritative JSON when possible
 - validates the intake JSON stage against its own explicit contract before research can proceed
 - merges stage-declared sources into the run-level `sources.json` registry and rejects unresolved source IDs
@@ -171,11 +197,14 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - keeps non-truth-critical narrative sections flexible in structured validation so usable research is not rejected over presentation-shape variance
 - resolves local fact or conclusion IDs inside structured inference evidence lists back to canonical external source IDs before validation
 - waits for judge completion before downstream processing
+- cancels sibling subprocesses in the research and critique parallel groups after the first fatal stage failure and marks those interrupted siblings as `cancelled`
 - runs claim extraction and final artifact generation automatically
 - supports idempotent resume by skipping completed stage artifacts and downstream outputs
+- resumes decomposed structured stages at substep granularity when a prior source-pass or claim-pass artifact is still valid
 - updates workflow state and marks failed stages explicitly when an adapter exits non-zero or leaves placeholder output behind
 - recomputes terminal run-level workflow status so completed runs do not remain marked as `scaffolded`
 - writes per-stage driver logs with command, return code, stdout, stderr, output-path status, and output preview for troubleshooting
+- rejects job-level provider configs that request explicit model selection for adapters that do not support it
 
 ### `scripts/extract_claims.py`
 - parses markdown into atomic claims

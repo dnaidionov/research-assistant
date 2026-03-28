@@ -15,6 +15,7 @@ Produce an independent research pass. This pass must stand on its own and must n
 ## Non-Negotiable Rules
 
 - Every factual claim must include citations inline.
+- Evidence is never obvious. Nearby or earlier citations do not count for a new item.
 - Use auditable external source IDs such as `[SRC-001]` or `[DOC-001]` for factual support.
 - Do not invent citation labels such as `[Brief]` or `[SRC-HW]` unless the packet already defines them explicitly.
 - Separate facts from inferences in distinct sections.
@@ -60,6 +61,7 @@ Return markdown using exactly these top-level sections in this order:
 - Use numbered items.
 - Each item must express one inference, interpretation, forecast, or synthesis step.
 - Each item must cite the supporting evidence it relies on.
+- The supporting evidence must be explicit on that exact item, even if similar evidence was already cited nearby.
 - Confidence labels are not citations and do not replace them.
 - Each item must end with an explicit confidence label: `Confidence: low|medium|high`.
 
@@ -99,6 +101,7 @@ Rules:
 - `stage` must equal `{stage_id}`.
 - Every `facts` item must contain `id`, `text`, and `evidence_sources`.
 - Every `inferences` item must contain `id`, `text`, `evidence_sources`, and `confidence`.
+- Every fact and every world-claim inference must carry explicit evidence on that exact item. Nearby or previous citations do not satisfy the requirement.
 - When possible, add `support_links` to each fact and inference item as a typed list of `{{ "source_id", "role" }}` objects.
 - If an inference depends on earlier fact IDs such as `F-001`, record those under `claim_dependencies` instead of putting them inside `support_links.source_id`.
 - Do not use local claim IDs such as `F-001`, `I-001`, or `C-001` inside `support_links.source_id`.

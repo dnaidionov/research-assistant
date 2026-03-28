@@ -19,6 +19,7 @@ Synthesize research pass A, research pass B, and both critiques into a judge rep
 - Preserve the original external evidence IDs from the research record, such as `[SRC-001]` or `[DOC-001]`.
 - Do not replace external citations with workflow-stage references such as `[02-research-a]` or `[05-critique-b-on-a]`.
 - Label inferences and confidence explicitly.
+- Evidence is never obvious. Nearby or earlier citations do not count for a new conclusion or synthesis judgment.
 - Keep a traceable path from synthesis back to the research passes and critiques.
 - Where evidence is mixed, preserve the disagreement instead of pretending the stronger narrative won by default.
 - If neither side is adequately supported, say so directly.
@@ -53,6 +54,7 @@ Return markdown using exactly these top-level sections in this order:
 - Use numbered items.
 - Mark each item clearly as inference.
 - Each item must cite the supporting external evidence and end with `Confidence: low|medium|high`.
+- The supporting evidence must be explicit on that exact item, even if similar evidence was already cited nearby.
 
 #### `# Unresolved Disagreements`
 
@@ -101,6 +103,7 @@ Rules:
 - `stage` must equal `{stage_id}`.
 - Every `supported_conclusions` item must contain `id`, `text`, and `evidence_sources`.
 - Every `synthesis_judgments` item must contain `id`, `text`, `evidence_sources`, and `confidence`.
+- Every supported conclusion and every synthesis judgment that asserts a world claim must carry explicit evidence on that exact item. Nearby or previous citations do not satisfy the requirement.
 - When possible, add `support_links` to supported conclusions and synthesis judgments as a typed list of `{{ "source_id", "role" }}` objects.
 - If a synthesis judgment depends on earlier local conclusion IDs, record those under `claim_dependencies` instead of placing them in `support_links.source_id`.
 - Do not use local claim IDs such as `F-001`, `I-001`, or `C-001` inside `support_links.source_id`.

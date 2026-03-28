@@ -190,6 +190,12 @@ Example:
 - `judge` should consume the critique outputs from `stage-outputs/`
 - `research-a`, `research-b`, both critiques, and `judge` must produce valid structured JSON and pass source-aware citation validation before downstream workflow stages continue
 - structured stages are no longer allowed to backfill authoritative JSON from markdown; they must write JSON directly or emit recoverable structured JSON in stdout
+- every fact and world-claim inference must carry explicit evidence on that exact item; nearby citations do not satisfy the requirement
+- structured stages are now executed internally as source-pass JSON, claim-pass JSON, and deterministic markdown rendering from the validated structured payload
+- source-pass and claim-pass are now strict contracts rather than soft hints: source-pass may emit only `stage` and `sources`, while claim-pass must omit `sources` and emit only the stage claim payload
+- structured substeps now write any adapter-facing scratch markdown under `runs/<run-id>/audit/substeps/`; the final `stage-outputs/*.md` artifact is runner-owned and written only after the structured stage passes validation
+- bounded repair now applies only to structurally close but invalid structured JSON; missing or unreadable structured output is treated as a hard failure rather than spending another repair call
+- decomposed structured stages now resume at substep granularity: a valid prior source-pass can be reused while only claim-pass and final rendering are rerun
 
 The rendered prompt packets and `WORK_ORDER.md` now state these upstream artifact paths explicitly.
 
@@ -285,7 +291,7 @@ Important:
 
 ### 7. Automate the CLI split
 
-The runner is adapter-based. Today the default configuration is:
+The runner is adapter-based. Today the fallback default configuration is:
 
 - `intake` in Codex
 - `research-a` in Codex
@@ -304,23 +310,22 @@ Use:
 
 ```bash
 python3 scripts/execute_workflow.py \
-  --job-path ~/Projects/research-hub/jobs/my-project-1 \
-  --run-id run-001
+  --job-path ~/Projects/research-hub/jobs/my-project-1
 ```
 
 If the job is registered in `jobs-index/`, you can use either of these instead:
 
 ```bash
 python3 scripts/execute_workflow.py \
-  --job-name my-project-1 \
-  --run-id run-001
+  --job-name my-project-1
 ```
 
 ```bash
 python3 scripts/execute_workflow.py \
-  --job-id my-project-1 \
-  --run-id run-001
+  --job-id my-project-1
 ```
+
+If `--run-id` is omitted, the executor now chooses the next incremental run id in the job repo, such as `run-001`, `run-002`, and so on. Explicit `--run-id` is still supported when you want a fixed identifier. If you explicitly target a run id that already exists, the executor now asks for confirmation before continuing that run instead of silently resuming it.
 
 This runner will:
 
@@ -354,7 +359,8 @@ It also updates:
 Current adapter assumptions:
 
 - Codex is invoked via the `codex` CLI
-- Gemini is invoked via `gemini -p <prompt> -y`
+- Gemini is invoked via `gemini --model <model> -p <prompt> -y`
+- Claude is available as an alternate adapter via `claude -p --output-format text --permission-mode bypassPermissions`
 - Antigravity remains available as an optional adapter via `antigravity chat --mode agent --yes`
 - adapters must be able to read an instruction prompt and write the requested stage artifact without interactive editing
 
@@ -366,7 +372,8 @@ python3 scripts/execute_workflow.py \
   --run-id run-001 \
   --codex-bin /path/to/codex \
   --gemini-bin /path/to/gemini \
-  --antigravity-bin /path/to/antigravity
+  --antigravity-bin /path/to/antigravity \
+  --claude-bin /path/to/claude
 ```
 
 To switch the secondary execution role back to Antigravity:
@@ -377,6 +384,8 @@ python3 scripts/execute_workflow.py \
   --run-id run-001 \
   --secondary-adapter antigravity
 ```
+
+For durable provider selection, prefer job-level execution config in `config.yaml` instead of CLI role flags. The runner now supports named providers under `workflow.execution.providers` and per-stage assignment through `workflow.execution.stage_providers`, with model selection configured on the provider entry when the adapter supports it.
 
 The automated runner uses this fixed stage order:
 

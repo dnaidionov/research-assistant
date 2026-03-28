@@ -81,6 +81,7 @@ Status:
 - `context` links are no longer treated as sufficient semantic support for world claims in structured fact and inference validation; those claims now require at least one world-supporting `evidence` link
 - prompt contracts and source-registry merging now both prefer exact source locators over degraded site-root or bare-domain references, so locator fidelity is treated as part of the evidence contract rather than a stylistic preference
 - markdown-only extraction and compatibility paths still rely on marker parsing, so the decision is implemented end to end only on the structured path, not yet across every fallback path
+- the runner now states the evidence rule explicitly in stage prompts and validation errors: evidence is never implicit, and nearby citations do not satisfy support requirements for a new item
 
 ---
 
@@ -120,10 +121,12 @@ Decision:
 Status:
 - partially implemented
 - `run_workflow.py` now scaffolds authoritative JSON outputs for research, critique, and judge stages, plus a run-level `sources.json`
-- `execute_workflow.py` validates those structured artifacts through a shared stage-validation path and uses them as the canonical gate for research, critique, and judge stages
+- `execute_workflow.py` now executes research, critique, and judge through an internal source-pass / claim-pass / deterministic-markdown pipeline, validates the combined structured artifact through a shared stage-validation path, and uses that structured result as the canonical gate
+- that decomposition is now strict rather than cosmetic: source-pass and claim-pass have separate validators, source-pass may emit only `stage` and `sources`, and claim-pass must omit `sources`
 - intake now validates source-backed `known_facts` with short supporting excerpts and stable source anchors and contributes its declared `job_input` sources into the run-level source registry before research begins
 - when structured JSON is valid but the paired markdown artifact is weaker than the markdown contract, the runner now regenerates markdown from the structured artifact so downstream markdown-only stages consume a normalized bridge representation
-- markdown-to-JSON synthesis has been removed for structured stages, but stdout-recovery compatibility paths still exist for some adapters, so the design is still not at the target structure-first end state
+- structured substeps now write only to scratch markdown paths under `audit/substeps/`; final `stage-outputs/*.md` remains runner-owned and is written only after stage validation succeeds
+- markdown-to-JSON synthesis has been removed for structured stages, but stdout-recovery compatibility paths still exist for some adapters and intake is still single-pass, so the design is still not at the final structure-first end state
 
 ---
 
@@ -143,6 +146,8 @@ Status:
 - repo-level final-artifact readiness and the final artifact generator now share one publication-validation path for uncited facts, uncited inferences, provenance-only support, and unclassified markers
 - intake now has an explicit runtime contract validator, and source records now normalize into explicit source classes for publication policy
 - the system is still not a trustworthy evidence adjudication engine because source governance is still shallow beyond source classes, stdout adapter compatibility paths still exist, and provenance-versus-evidence handling still relies on marker parsing
+- the runner now applies one bounded repair attempt for structured stages that fail validation narrowly and cancels sibling subprocesses after the first fatal failure in a parallel stage group, which reduces wasted token burn without pretending the full planned multi-step stage pipeline is already implemented
+- that bounded repair path now excludes missing-artifact and unreadable-JSON failures, and decomposed structured stages now resume at substep granularity instead of always restarting from source-pass
 
 ---
 
@@ -164,3 +169,23 @@ Decision:
 Status:
 - accepted as current roadmap guidance
 - not yet implemented
+
+---
+
+## Decision 13: Provider and model selection belong in job-level execution config
+
+Reason:
+- execution routing should be a job concern, not a runner-code edit
+- stage-level provider choice and model pinning need to be auditable in the job repo
+- the old primary-secondary CLI split was too coarse once different stages needed different providers
+
+Decision:
+- `config.yaml` may define named providers under `workflow.execution.providers`
+- each provider declares an `adapter` and may declare a `model` if that adapter supports explicit model selection
+- `workflow.execution.stage_providers` maps each execution stage to one named provider
+- CLI `--primary-adapter` and `--secondary-adapter` remain fallback compatibility settings when no job-level execution config is present
+
+Status:
+- implemented in `scripts/execute_workflow.py`
+- Claude is now a supported adapter in the execution runner
+- adapter capability remains intentionally explicit: a configured model override is rejected for adapters that cannot honor it

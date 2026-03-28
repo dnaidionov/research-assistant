@@ -10,6 +10,8 @@ Implementation status:
 - Some compatibility paths are still prose-first or prose-derived.
 - Structured research and judge stages now regenerate canonical markdown from authoritative JSON when the markdown bridge artifact is weaker than contract, but that is still a migration bridge rather than the target design.
 - Structured critique stages now follow the same pattern, which removes one major markdown-only seam but does not eliminate the bridge architecture itself.
+- Structured research, critique, and judge stages now also execute as decomposed source-pass and claim-pass substeps, with deterministic markdown rendering from the validated structured payload instead of treating prose generation as the authoritative stage contract.
+- Those decomposed substeps are now strict rather than cosmetic: source-pass may emit only `stage` plus `sources`, claim-pass must omit `sources`, missing structured output is a hard failure instead of a repair candidate, and substeps resume independently when prior validated artifacts still exist.
 - Judge-side non-core synthesis sections now accept richer object forms in code, which reduces false failures but also reinforces the need for explicit schema-governed stage contracts across every stage.
 - Final artifact generation now prefers structured judge JSON when available and renders followable references from structured source records, which is closer to the target architecture than the earlier markdown-only renderer.
 - Publication gating is now shared between repo readiness validation and final artifact generation, which removes one concrete cross-layer inconsistency but does not yet solve the broader stage-validation split.

@@ -15,6 +15,8 @@ from _stage_contracts import (
     render_stage_markdown_from_json,
     source_quality_warnings,
     source_registry_placeholder,
+    validate_claim_pass_payload,
+    validate_source_pass_payload,
     validate_stage_json,
 )
 
@@ -117,6 +119,34 @@ class StageContractTests(unittest.TestCase):
 
         self.assertTrue(any("source_class" in error for error in errors))
 
+    def test_source_pass_rejects_claim_fields(self) -> None:
+        payload = {
+            "stage": "research-a",
+            "sources": [{"id": "SRC-001", "title": "Source", "type": "document", "authority": "vendor", "locator": "https://example.com/src-001"}],
+            "facts": [{"id": "F-001", "text": "Fact.", "evidence_sources": ["SRC-001"]}],
+        }
+
+        errors = validate_source_pass_payload("research-a", payload)
+
+        self.assertTrue(any("only include" in error.lower() for error in errors))
+
+    def test_claim_pass_rejects_sources_field(self) -> None:
+        payload = {
+            "stage": "research-a",
+            "summary": [{"text": "Summary.", "evidence_sources": ["SRC-001"]}],
+            "facts": [{"id": "F-001", "text": "Fact.", "evidence_sources": ["SRC-001"]}],
+            "inferences": [{"id": "I-001", "text": "Inference.", "evidence_sources": ["SRC-001"], "confidence": "high"}],
+            "uncertainties": [],
+            "evidence_gaps": [],
+            "preliminary_disagreements": [],
+            "source_evaluation": [],
+            "sources": [{"id": "SRC-001", "title": "Source", "type": "document", "authority": "vendor", "locator": "https://example.com/src-001"}],
+        }
+
+        errors = validate_claim_pass_payload("research-a", payload)
+
+        self.assertTrue(any("must not include sources" in error.lower() for error in errors))
+
     def test_semantic_support_links_distinguish_evidence_from_provenance(self) -> None:
         payload = {
             "stage": "judge",
@@ -194,6 +224,7 @@ class StageContractTests(unittest.TestCase):
         errors = validate_stage_json("judge", payload, registry)
 
         self.assertTrue(any("semantic evidence" in error.lower() for error in errors))
+        self.assertTrue(any("nearby citations do not count" in error.lower() for error in errors))
 
     def test_critique_semantic_support_links_are_validated(self) -> None:
         payload = {

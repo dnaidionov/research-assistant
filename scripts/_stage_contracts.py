@@ -84,9 +84,18 @@ STAGE_JSON_KEYS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+SOURCE_PASS_KEYS = ("stage", "sources")
+
 
 def is_structured_stage(stage_id: str) -> bool:
     return stage_id in STRUCTURED_STAGE_IDS
+
+
+def stage_claim_keys(stage_id: str) -> tuple[str, ...]:
+    expected_keys = STAGE_JSON_KEYS.get(stage_id)
+    if expected_keys is None:
+        raise KeyError(f"Stage {stage_id} does not have a structured contract.")
+    return tuple(key for key in expected_keys if key != "sources")
 
 
 def stage_structured_output_path(run_dir: Path, stage_id: str) -> Path:
@@ -221,17 +230,35 @@ def normalize_source_record(source: dict[str, object]) -> dict[str, object]:
     source_class = normalized.get("source_class")
     if isinstance(source_class, str) and source_class in SOURCE_CLASSES:
         return normalized
-    if isinstance(source_class, str) and source_class.strip():
-        return normalized
 
     source_type = str(normalized.get("type") or "").strip().lower()
     authority = str(normalized.get("authority") or "").strip()
     acquisition = str(normalized.get("acquisition_provenance") or "").strip().lower()
     locator = str(normalized.get("locator") or "").strip().lower()
+    if isinstance(source_class, str) and source_class.strip():
+        normalized_class = source_class.strip().lower()
+        if normalized_class in {"primary", "input", "provided", "user_input"} and source_type in {
+            "job_input",
+            "project_brief",
+            "job_config",
+        }:
+            normalized["source_class"] = "job_input"
+            return normalized
+        if normalized_class in {"workflow", "trace", "traceability"} and (
+            source_type in {"workflow_artifact", "workflow_provenance"} or locator.startswith("urn:workflow:")
+        ):
+            normalized["source_class"] = "workflow_provenance"
+            return normalized
+        if normalized_class in {"recovered", "provisional"} and (
+            authority == RECOVERED_SOURCE_AUTHORITY or acquisition == "recovered_from_markdown"
+        ):
+            normalized["source_class"] = "recovered_provisional"
+            return normalized
+        return normalized
 
     if authority == RECOVERED_SOURCE_AUTHORITY or acquisition == "recovered_from_markdown":
         normalized["source_class"] = "recovered_provisional"
-    elif source_type == "project_brief":
+    elif source_type in {"project_brief", "job_input", "job_config"}:
         normalized["source_class"] = "job_input"
     elif source_type in {"workflow_artifact", "workflow_provenance"} or locator.startswith("urn:workflow:"):
         normalized["source_class"] = "workflow_provenance"
@@ -1038,7 +1065,9 @@ def _validate_semantic_links(
                 if link["source_id"] not in allowed_sources:
                     allowed_sources.append(link["source_id"])
     if not allowed_sources:
-        errors.append(f"{field_name}[{position}] must include at least one semantic evidence link that supports world claims.")
+        errors.append(
+            f"{field_name}[{position}] must include at least one semantic evidence link that supports world claims; nearby citations do not count."
+        )
 
 
 def _validate_flexible_object_list(
@@ -1196,6 +1225,53 @@ def validate_stage_json(stage_id: str, payload: dict[str, object], source_regist
     _validate_text_entry_list(payload.get("rationale"), "rationale", errors)
     _validate_recommended_artifact_structure(payload.get("recommended_artifact_structure"), errors)
     return errors
+
+
+def validate_source_pass_payload(stage_id: str, payload: dict[str, object]) -> list[str]:
+    errors: list[str] = []
+    if payload.get("stage") != stage_id:
+        errors.append(f"stage must equal {stage_id}.")
+    if "sources" not in payload:
+        errors.append("Missing required key: sources.")
+        return errors
+    extra_keys = sorted(key for key in payload.keys() if key not in SOURCE_PASS_KEYS)
+    if extra_keys:
+        errors.append(f"source-pass payload may only include {list(SOURCE_PASS_KEYS)}; found extra keys: {', '.join(extra_keys)}.")
+    _validate_source_records(payload.get("sources"), errors)
+    return errors
+
+
+def sanitize_claim_pass_payload(stage_id: str, payload: dict[str, object]) -> dict[str, object]:
+    sanitized = deepcopy(payload)
+    sanitized["stage"] = stage_id
+    sanitized.pop("sources", None)
+    return sanitized
+
+
+def validate_claim_pass_payload(stage_id: str, payload: dict[str, object]) -> list[str]:
+    errors: list[str] = []
+    if payload.get("stage") != stage_id:
+        errors.append(f"stage must equal {stage_id}.")
+    expected_keys = set(stage_claim_keys(stage_id))
+    if "sources" in payload:
+        errors.append("claim-pass payload must not include sources.")
+    extra_keys = sorted(key for key in payload.keys() if key not in expected_keys and key != "sources")
+    if extra_keys:
+        errors.append(f"claim-pass payload contains unexpected keys: {', '.join(extra_keys)}.")
+    missing_keys = sorted(key for key in expected_keys if key not in payload)
+    for key in missing_keys:
+        errors.append(f"Missing required key: {key}.")
+    return errors
+
+
+def merge_stage_substep_payloads(
+    stage_id: str,
+    source_payload: dict[str, object],
+    claim_payload: dict[str, object],
+) -> dict[str, object]:
+    merged = sanitize_claim_pass_payload(stage_id, claim_payload)
+    merged["sources"] = deepcopy(source_payload.get("sources", []))
+    return merged
 
 
 def merge_source_registry(existing: dict[str, object], stage_sources: list[dict[str, object]]) -> dict[str, object]:

@@ -22,6 +22,7 @@ Critique the target research pass adversarially. The goal is to find unsupported
 - Attack omissions, overreach, and source weakness directly.
 - If a claim is factually stated without citation support, call that out explicitly as a defect.
 - If a conclusion outruns the cited evidence, classify it as overreach rather than a simple disagreement.
+- Evidence is never obvious. Nearby or earlier citations do not count as support for a new critique item.
 
 ## Output Contract
 
@@ -105,6 +106,7 @@ Rules:
 - Use `evidence` for `job_input` too when the brief or provided input directly states a current-system fact, requirement, or constraint that the critique item is about.
 - Use `provenance` for workflow traceability only. Provenance is not evidence.
 - If you include `support_links`, include at least one world-supporting source with role `evidence`, `context`, or `challenge` rather than only workflow provenance.
+- If a critique item depends on evidence, the supporting source must be explicit on that exact item rather than assumed from nearby text.
 - `summary` may be a string, a list, or an object with `text` and optional `confidence`.
 - Every cited external source id must be declared in `sources`.
 - Every `sources` item must include `id`, `title`, `type`, `authority`, and `locator`, and should include `source_class` when known.

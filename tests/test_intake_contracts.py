@@ -166,6 +166,40 @@ class IntakeContractTests(unittest.TestCase):
 
         self.assertTrue(any("source_anchor" in error for error in errors))
 
+    def test_accepts_primary_alias_for_job_input_source_class_in_intake(self) -> None:
+        payload = {
+            "question": "Which option is better?",
+            "scope": ["Compare option A and option B"],
+            "constraints": ["Require citations"],
+            "assumptions": [],
+            "missing_information": [],
+            "required_artifacts": ["judge report"],
+            "notes_for_researchers": [],
+            "known_facts": [
+                {
+                    "id": "KF-001",
+                    "statement": "The brief asks for a comparison.",
+                    "source_ids": ["DOC-BRIEF"],
+                    "source_excerpt": "Compare option A and option B.",
+                    "source_anchor": "brief.md#Question",
+                }
+            ],
+            "working_inferences": [],
+            "uncertainty_notes": [],
+            "sources": [
+                {
+                    "id": "DOC-BRIEF",
+                    "title": "Job brief",
+                    "type": "job_input",
+                    "authority": "user-provided brief",
+                    "locator": "brief.md",
+                    "source_class": "primary",
+                }
+            ],
+        }
+
+        self.assertEqual(validate_intake_payload(payload), [])
+
 
 if __name__ == "__main__":
     unittest.main()

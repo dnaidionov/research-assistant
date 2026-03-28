@@ -57,6 +57,8 @@ Use exactly these top-level keys:
 - If an item could plausibly be challenged as not explicitly stated, treat it as inference, not fact.
 - Every `known_facts` item must cite one or more source IDs from `sources`; do not use freeform `source_basis`.
 - Define canonical `job_input` sources for the provided materials you actually used, typically `DOC-BRIEF` for `brief.md` and `DOC-CONFIG` for `config.yaml`.
+- For intake sources, `source_class` should normally be `job_input`. Do not invent new class labels such as `primary`.
+- `type` and `source_class` are different fields. A good intake default is `type: project_brief` or `type: job_config`, with `source_class: job_input`.
 - Keep `known_facts.statement` as a normalized statement of the source material, not a new conclusion.
 - Every `known_facts` item must include a short `source_excerpt` copied or closely preserved from the provided material so the fact can be audited later.
 - `source_excerpt` should be brief and specific. Do not fabricate wording that does not appear in the source.

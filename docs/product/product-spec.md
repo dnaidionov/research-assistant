@@ -77,6 +77,8 @@ Implemented today:
 
 - deterministic run scaffolding for intake, two research passes, two reciprocal critiques, and judge synthesis
 - automated execution orchestration for the current adapter-driven split, with Codex and Gemini as the default pair
+- automatic incremental run-id selection in `execute_workflow.py` when `--run-id` is omitted, while preserving explicit run-id support and requiring confirmation before continuing an existing explicitly targeted run
+- job-level execution-provider configuration through `workflow.execution.providers` and `workflow.execution.stage_providers`, so a job can assign different adapters and supported model overrides per stage without changing runner code
 - stdout-recovery wrapping for markdown-producing chat adapters that return artifact content without writing the target file
 - explicit stage dependencies and per-stage prompt packets
 - placeholder stage outputs, workflow state, and run audit artifacts
@@ -91,6 +93,11 @@ Implemented today:
 - external-evidence locators now follow a resolvable-locator policy rather than a URL-only policy; accepted forms include web URLs, concrete local file paths, and stable attachment-style URIs such as `file://`
 - bare-domain locators such as `example.com` are currently tolerated as warnings rather than hard failures, but the preferred locator remains the most specific followable page or file available
 - prompt contracts now explicitly require agents to retain the exact locator they actually used rather than collapsing it to a site root or bare domain, and the source registry upgrades degraded locators when a later stage provides a more specific one
+- stage prompts and validators now explicitly enforce that evidence is never implicit; every fact and world-claim inference or synthesis item must carry explicit evidence on that exact item, and nearby citations do not satisfy the requirement
+- structured research, critique, and judge stages now execute through an internal multi-step pipeline: source pass JSON, claim pass JSON, validator-driven bounded repair, then deterministic markdown rendering from the validated structured payload
+- source-pass and claim-pass are now strict contracts rather than soft decomposition hints: source-pass may emit only `stage` plus `sources`, and claim-pass must omit `sources`
+- Claude is now available as a first-class CLI adapter alongside Codex, Gemini, and Antigravity
+- explicit model selection is now configured on named provider entries rather than hardwired to stage roles, but only adapters that actually support explicit model selection may accept a configured model override
 - structured research, critique, and judge claims may now carry typed `support_links` so support can be classified semantically as `evidence`, `context`, `challenge`, or `provenance`
 - structured claims may now also carry `claim_dependencies` so local fact or claim references are modeled separately from source support instead of being smuggled into `support_links`
 - structured claim-map generation now derives `evidence_sources` and `provenance` from typed support links when present instead of relying only on flat marker classification, and preserves `claim_dependencies` for local reasoning traceability
@@ -105,6 +112,11 @@ Implemented today:
 - judge validation now accepts richer non-core synthesis structures such as disagreement objects, topic-based confidence summaries, and object-based recommended artifact outlines, and the bridge layers normalize those shapes for markdown and claim-map consumers
 - critique validation now accepts structured section payloads for supported claims, unsupported claims, weak-source issues, omissions, overreach, unresolved disagreements, and critique summaries with confidence
 - per-stage driver logs that capture command execution plus output-artifact status for debugging
+- structured stages now get one bounded runner-owned repair attempt when the adapter writes artifacts that are close but contract-invalid; the repair pass is fed the exact validator errors and is limited to structural correction rather than fresh research
+- missing or unreadable structured substep output is now a hard failure rather than a repair candidate; the bounded repair pass is reserved for structurally close payloads only
+- parallel stage groups now cancel sibling subprocesses after the first fatal stage failure and persist `cancelled` stage status instead of letting siblings continue burning time and tokens unnoticed
+- decomposed structured stages now use runner-owned scratch markdown paths under `audit/substeps/`; final human-facing markdown is written only after the structured artifact passes validation
+- decomposed structured stages now resume at substep granularity when a previously validated source-pass or claim-pass artifact is still usable
 - markdown claim extraction with stable IDs
 - structured claim-register generation from judge JSON in the automated workflow path
 - provenance vs external evidence separation inside the claim register, now partly semantic on the structured stage path
@@ -125,7 +137,7 @@ Known limitations in the current repo:
 - downstream trust is still limited because stdout recovery remains in place for some adapters and markdown is still used as a bridge artifact even though structured stages are authoritative
 - provenance vs evidence separation is now semantic on the structured stage path, but markdown-only extraction and some compatibility paths still rely on marker classification
 - the workflow still depends on prompt compliance for structured JSON writes from some adapters; markdown stdout recovery remains a compatibility path rather than a strong adapter contract
-- long-running parallel stages can still delay surfaced failure because the runner waits for sibling futures to settle before exiting the stage group
+- the runner now decomposes structured stages internally, but intake still remains a single-pass contract and markdown-only compatibility paths still exist at some downstream edges
 - intake now carries source-backed `known_facts` plus an intake-declared `sources` list and per-fact `source_excerpt` and `source_anchor`, which removes the old freeform `source_basis` weakness for direct brief/config facts and gives each intake fact basic auditability
 
 ## Ranked Shortcomings
@@ -155,6 +167,9 @@ The current shortcomings, in priority order, are:
 
 8. The system still depends heavily on prompt compliance.
    Prompt contracts are stricter than before, but malformed citation labels, weak source definitions, and structurally awkward outputs are still possible because prompts are guidance, not enforcement.
+
+10. Provider capability symmetry is still incomplete.
+   Stage-provider selection is now job-configurable, but adapters do not expose equivalent control surfaces. Gemini and Claude support explicit model flags; Antigravity currently does not, so model configurability remains adapter-dependent.
 
 9. Documentation status can drift behind implementation.
    This is lower impact than the structural issues above, but it still matters because architectural intent and implemented reality diverge quickly in a repo like this.

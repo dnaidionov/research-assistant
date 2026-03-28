@@ -162,6 +162,7 @@ class StageValidationTests(unittest.TestCase):
         self.assertFalse(result.should_rewrite_markdown)
         self.assertIsNone(result.claim_map)
 
+
     def test_validate_structured_stage_artifact_surfaces_source_warnings(self) -> None:
         payload = {
             "stage": "research-b",
