@@ -6,6 +6,7 @@ import threading
 import textwrap
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from _adapter_qualification import (
     trust_satisfies,
 )
 from execute_workflow import (
+    CommandResult,
     ProgressReporter,
     StageAdapterSelection,
     StageExecution,
@@ -34,6 +36,7 @@ from execute_workflow import (
     build_claude_command,
     build_gemini_command,
     next_incremental_run_id,
+    run_structured_stage,
     run_stage_group,
 )
 from _stage_validation import validate_stage_markdown_contract
@@ -3278,6 +3281,98 @@ class ExecuteWorkflowTests(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("failed structured validation", result.stderr.lower())
+
+    def test_structured_stage_repair_missing_claim_artifact_fails_hard(self) -> None:
+        run_dir = self.job_dir / "runs" / "run-repair-missing-claim"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "logs").mkdir(parents=True, exist_ok=True)
+        (run_dir / "stage-outputs").mkdir(parents=True, exist_ok=True)
+        state_path = run_dir / "workflow-state.json"
+        state = {
+            "run_dir": str(run_dir),
+            "status": "running",
+            "stages": [{"id": "research-a", "status": "running", "substeps": {}}],
+            "post_processing": {
+                "stage_claims": {"research-a": {"status": "pending", "output_path": str(run_dir / "stage-claims" / "02-research-a.claims.json")}},
+                "claim_extraction": {"status": "pending", "output_path": str(self.job_dir / "evidence" / "claims-run-x.json")},
+                "final_artifact": {"status": "pending", "output_path": str(self.job_dir / "outputs" / "final-run-x.md")},
+            },
+        }
+        reporter = ProgressReporter(io.StringIO())
+        state_lock = threading.RLock()
+        stage = StageExecution("research-a", "primary", "02-research-a.md", "02-research-a.md")
+        source_output_path = run_dir / "audit" / "substeps" / "research-a.source-pass.json"
+        claim_output_path = run_dir / "audit" / "substeps" / "research-a.claim-pass.json"
+
+        def fake_execute_json_substep(**kwargs: object) -> tuple[CommandResult, dict[str, object], bool, CommandResult | None, list[str]]:
+            substep = kwargs["substep"]
+            output_json_path = kwargs["output_json_path"]
+            if substep == "source-pass":
+                payload = {
+                    "stage": "research-a",
+                    "sources": [
+                        {
+                            "id": "SRC-200",
+                            "title": "Test Source",
+                            "type": "webpage",
+                            "authority": "example",
+                            "locator": "https://example.com/source",
+                            "source_class": "external_evidence",
+                        }
+                    ],
+                }
+            else:
+                payload = {
+                    "stage": "research-a",
+                    "facts": [],
+                    "inferences": [
+                        {
+                            "id": "I-001",
+                            "text": "Inference text",
+                            "kind": "inference",
+                            "support_links": [{"role": "evidence", "source_id": "SRC-200"}],
+                        }
+                    ],
+                }
+            output_json_path.parent.mkdir(parents=True, exist_ok=True)
+            output_json_path.write_text(json.dumps(payload), encoding="utf-8")
+            return CommandResult(0, "", ""), payload, False, None, []
+
+        def fake_repair(*_args: object, **_kwargs: object) -> CommandResult:
+            if claim_output_path.exists():
+                claim_output_path.unlink()
+            return CommandResult(0, "", "")
+
+        failing_validation = SimpleNamespace(
+            structured_errors=["repair me"],
+            structured_warnings=[],
+            markdown_errors=[],
+            normalized_payload={"stage": "research-a", "sources": [], "facts": [], "inferences": []},
+            canonical_markdown="# Research A\n",
+        )
+
+        with (
+            patch("execute_workflow.execute_json_substep", side_effect=fake_execute_json_substep),
+            patch("execute_workflow.execute_adapter_command", side_effect=fake_repair),
+            patch("execute_workflow.validate_structured_stage_artifact", return_value=failing_validation),
+            patch("execute_workflow.render_stage_markdown_from_json", return_value="# Research A\n"),
+            patch("execute_workflow.record_provider_repair_attempt", return_value=None),
+            patch("execute_workflow.dependency_structured_payloads", return_value={}),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "did not produce a completed structured output artifact"):
+                run_structured_stage(
+                    stage,
+                    run_dir,
+                    self.job_dir,
+                    state,
+                    state_path,
+                    state_lock,
+                    StageAdapterSelection(adapter_name="codex"),
+                    build_adapter_executor.__globals__["CLI_ADAPTERS"]["codex"],
+                    str(self.codex_bin),
+                    reporter,
+                    None,
+                )
 
     def test_cancels_parallel_sibling_stage_after_first_fatal_failure(self) -> None:
         self.gemini_bin = self.bin_dir / "gemini-cancel"

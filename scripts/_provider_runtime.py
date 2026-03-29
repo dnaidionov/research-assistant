@@ -125,6 +125,27 @@ def record_live_drift_result(
     return save_provider_scorecard(job_dir, provider_key, payload)
 
 
+def observed_provider_keys_for_run(job_dir: Path, run_id: str) -> list[str]:
+    observed: set[str] = set()
+    for path in list_provider_scorecard_paths(job_dir):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        provider_key = str(payload.get("provider_key") or "")
+        if not provider_key:
+            continue
+        qualification_history = payload.get("qualification_history", [])
+        if isinstance(qualification_history, list) and any(
+            isinstance(entry, dict) and entry.get("run_id") == run_id for entry in qualification_history
+        ):
+            observed.add(provider_key)
+            continue
+        stage_results = payload.get("stage_results", [])
+        if isinstance(stage_results, list) and any(
+            isinstance(entry, dict) and entry.get("run_id") == run_id for entry in stage_results
+        ):
+            observed.add(provider_key)
+    return sorted(observed)
+
+
 def record_provider_repair_attempt(
     job_dir: Path,
     provider_key: str,
@@ -174,7 +195,45 @@ def apply_provider_runtime_policy(
     return updated
 
 
-def record_live_drift_for_providers(job_dir: Path, *, status: str, family: str | None = None) -> list[str]:
+def record_live_drift_for_providers(
+    job_dir: Path,
+    *,
+    status: str,
+    family: str | None = None,
+    run_id: str | None = None,
+) -> list[str]:
+    if run_id is not None:
+        observed = observed_provider_keys_for_run(job_dir, run_id)
+        updated: list[str] = []
+        for provider_key in observed:
+            payload = load_provider_scorecard(job_dir, provider_key)
+            qualification_history = payload.get("qualification_history", [])
+            adapter_name = None
+            model = None
+            if isinstance(qualification_history, list):
+                for entry in reversed(qualification_history):
+                    if isinstance(entry, dict) and entry.get("run_id") == run_id:
+                        adapter_name = entry.get("adapter")
+                        break
+            if adapter_name is None:
+                stage_results = payload.get("stage_results", [])
+                if isinstance(stage_results, list):
+                    for entry in reversed(stage_results):
+                        if isinstance(entry, dict) and entry.get("run_id") == run_id:
+                            adapter_name = entry.get("adapter_name")
+                            model = entry.get("model")
+                            break
+            record_live_drift_result(
+                job_dir,
+                provider_key,
+                status,
+                family=family,
+                adapter_name=str(adapter_name) if isinstance(adapter_name, str) else None,
+                model=str(model) if isinstance(model, str) else None,
+            )
+            updated.append(provider_key)
+        return sorted(updated)
+
     execution = load_execution_config(job_dir)
     if not execution:
         return []

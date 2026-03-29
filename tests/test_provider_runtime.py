@@ -12,6 +12,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from _provider_runtime import (
     apply_provider_runtime_policy,
     build_provider_scorecard_report,
+    record_provider_qualification,
     record_live_drift_for_providers,
     record_live_drift_result,
     record_provider_repair_attempt,
@@ -99,7 +100,7 @@ class ProviderRuntimeTests(unittest.TestCase):
             self.assertEqual(payload["repair"]["attempted"], 1)
             self.assertEqual(payload["repair"]["history"][0]["stage_id"], "research-b")
 
-    def test_record_live_drift_for_providers_uses_execution_config_providers(self) -> None:
+    def test_record_live_drift_for_providers_uses_only_observed_run_providers(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             job_dir = Path(tmpdir)
             (job_dir / "config.yaml").write_text(
@@ -111,16 +112,29 @@ workflow:
         adapter: claude
       judge_gemini:
         adapter: gemini
+      fallback_unused:
+        adapter: codex
 """.strip()
                 + "\n",
                 encoding="utf-8",
             )
+            report = {
+                "adapter_name": "claude",
+                "trust_level": "structured_safe_smoke",
+                "classification": "structured_safe",
+                "profile": "smoke",
+                "probe_set_version": "test",
+                "adapter_version": "test",
+            }
+            record_provider_qualification(job_dir, "research_claude", report, run_id="run-001")
+            record_provider_stage_result(job_dir, "judge_gemini", "judge", "completed", run_id="run-001")
 
-            updated = record_live_drift_for_providers(job_dir, status="completed", family="neutral")
+            updated = record_live_drift_for_providers(job_dir, status="completed", family="neutral", run_id="run-001")
 
             self.assertEqual(sorted(updated), ["judge_gemini", "research_claude"])
             judge_payload = json.loads(provider_scorecard_path(job_dir, "judge_gemini").read_text(encoding="utf-8"))
             self.assertEqual(judge_payload["live_drift"]["completed"], 1)
+            self.assertFalse(provider_scorecard_path(job_dir, "fallback_unused").exists())
 
     def test_build_provider_scorecard_report_summarizes_trust_and_failures(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

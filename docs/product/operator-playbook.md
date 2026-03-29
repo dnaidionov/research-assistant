@@ -76,7 +76,7 @@ This now:
 
 - executes the real workflow on a copied reference job
 - writes `live-drift-report.json`
-- updates provider scorecards for the copied job
+- updates provider scorecards only for providers actually observed in that drift run, not every provider declared in the copied job config
 
 ## Transactional Replay
 
@@ -96,6 +96,8 @@ During replay, `stage_started`, `substep_started`, and `post_processing_started`
 During live execution, parallel stage groups now serialize snapshot mutations through one shared runner lock. The event journal is still the durable control plane, but the live `workflow-state.json` path is no longer updated concurrently by sibling stage workers.
 
 Provider scorecards also record only one adapter outcome per execution attempt. If adapter execution completes and later claim extraction fails, the run still fails, but the provider is not double-counted as both `completed` and `failed` for that same attempt.
+
+Likewise, a structured-stage repair that returns success but still leaves the required JSON artifact missing is treated as a hard failure. The runner does not reinterpret that as cancellation unless the stage was actually interrupted by sibling failure.
 
 ## Quality Benchmarks
 

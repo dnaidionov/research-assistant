@@ -1516,19 +1516,28 @@ def run_structured_stage(
                 if process_controller is not None and process_controller.is_cancelled(stage.stage_id):
                     marker = "cancelled_due_to_parallel_stage_failure"
                     cancellation_marker = marker
-                if marker not in claim_repair_result.stderr:
-                    claim_repair_result = CommandResult(
-                        claim_repair_result.returncode,
-                        claim_repair_result.stdout,
-                        claim_repair_result.stderr + ("\n" if claim_repair_result.stderr else "") + marker,
+                    if marker not in claim_repair_result.stderr:
+                        claim_repair_result = CommandResult(
+                            claim_repair_result.returncode,
+                            claim_repair_result.stdout,
+                            claim_repair_result.stderr + ("\n" if claim_repair_result.stderr else "") + marker,
+                        )
+                    apply_state_update(
+                        state_lock,
+                        state_path,
+                        state,
+                        lambda: transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "cancelled"),
                     )
+                    raise StageCancelledError(f"Stage {stage.stage_id} cancelled due to parallel stage failure.")
                 apply_state_update(
                     state_lock,
                     state_path,
                     state,
-                    lambda: transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "cancelled"),
+                    lambda: transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "failed"),
                 )
-                raise StageCancelledError(f"Stage {stage.stage_id} cancelled due to parallel stage failure.")
+                raise RuntimeError(
+                    f"claim-pass repair did not produce a completed structured output artifact: {claim_output_path}"
+                )
             if claim_repair_result.returncode != 0:
                 apply_state_update(
                     state_lock,

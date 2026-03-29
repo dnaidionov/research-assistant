@@ -110,7 +110,12 @@ def main() -> int:
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
     drift_status = "completed" if completed.returncode == 0 and state.get("status") == "completed" else "failed"
-    updated_providers = record_live_drift_for_providers(job_dir, status=drift_status, family=args.fixture_family)
+    updated_providers = record_live_drift_for_providers(
+        job_dir,
+        status=drift_status,
+        family=args.fixture_family,
+        run_id=run_dir.name,
+    )
     report["updated_provider_scorecards"] = updated_providers
     report["provider_scorecard_report"] = build_provider_scorecard_report(job_dir)
     if run_dir.is_dir():
