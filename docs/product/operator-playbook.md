@@ -93,6 +93,10 @@ python3 scripts/rebuild_workflow_state.py --run-dir ~/Projects/research-hub/jobs
 
 During replay, `stage_started`, `substep_started`, and `post_processing_started` events are restored as in-memory `running` state. That is deliberate; a rebuilt active run should not fall back to `scaffolded` only because the snapshot was missing.
 
+During live execution, parallel stage groups now serialize snapshot mutations through one shared runner lock. The event journal is still the durable control plane, but the live `workflow-state.json` path is no longer updated concurrently by sibling stage workers.
+
+Provider scorecards also record only one adapter outcome per execution attempt. If adapter execution completes and later claim extraction fails, the run still fails, but the provider is not double-counted as both `completed` and `failed` for that same attempt.
+
 ## Quality Benchmarks
 
 Quality gates are configured through `quality_policy` and benchmarked through frozen fixtures.

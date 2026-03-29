@@ -401,6 +401,17 @@ def save_state(path: Path, payload: dict[str, object]) -> None:
     append_workflow_event(path.parent, "state_checkpoint", state=payload)
 
 
+def apply_state_update(
+    state_lock: threading.RLock,
+    state_path: Path,
+    state: dict[str, object],
+    update_fn: Callable[[], None],
+) -> None:
+    with state_lock:
+        update_fn()
+        save_state(state_path, state)
+
+
 def is_placeholder_content(content: str) -> bool:
     lowered = content.lower()
     return "not_started" in lowered or "status: not started" in lowered or "stage output placeholder" in lowered
@@ -1009,6 +1020,7 @@ def run_intake_stage(
     job_dir: Path,
     state: dict[str, object],
     state_path: Path,
+    state_lock: threading.RLock,
     stage_selection: StageAdapterSelection,
     adapter: CLIAdapter,
     adapter_bin: str,
@@ -1071,11 +1083,19 @@ def run_intake_stage(
     try:
         resumed_sources, sources_payload = try_resume_sources()
         if resumed_sources:
-            transition_substep_status(run_dir, state, stage.stage_id, "source-pass", "completed")
-            save_state(state_path, state)
+            apply_state_update(
+                state_lock,
+                state_path,
+                state,
+                lambda: transition_substep_status(run_dir, state, stage.stage_id, "source-pass", "completed"),
+            )
         else:
-            transition_substep_status(run_dir, state, stage.stage_id, "source-pass", "started")
-            save_state(state_path, state)
+            apply_state_update(
+                state_lock,
+                state_path,
+                state,
+                lambda: transition_substep_status(run_dir, state, stage.stage_id, "source-pass", "started"),
+            )
             _result, sources_payload, repair_attempted, _repair_result, _errors = execute_json_substep(
                 stage=stage,
                 substep="source-pass",
@@ -1107,16 +1127,28 @@ def run_intake_stage(
             )
             if repair_attempted:
                 record_provider_repair_attempt(job_dir, provider_key, stage_id=stage.stage_id, run_id=run_dir.name)
-            transition_substep_status(run_dir, state, stage.stage_id, "source-pass", "completed")
-            save_state(state_path, state)
+            apply_state_update(
+                state_lock,
+                state_path,
+                state,
+                lambda: transition_substep_status(run_dir, state, stage.stage_id, "source-pass", "completed"),
+            )
 
         resumed_facts, fact_payload = try_resume_fact_lineage(sources_payload)
         if resumed_facts:
-            transition_substep_status(run_dir, state, stage.stage_id, "fact-lineage", "completed")
-            save_state(state_path, state)
+            apply_state_update(
+                state_lock,
+                state_path,
+                state,
+                lambda: transition_substep_status(run_dir, state, stage.stage_id, "fact-lineage", "completed"),
+            )
         else:
-            transition_substep_status(run_dir, state, stage.stage_id, "fact-lineage", "started")
-            save_state(state_path, state)
+            apply_state_update(
+                state_lock,
+                state_path,
+                state,
+                lambda: transition_substep_status(run_dir, state, stage.stage_id, "fact-lineage", "started"),
+            )
             _result, fact_payload, repair_attempted, _repair_result, _errors = execute_json_substep(
                 stage=stage,
                 substep="fact-lineage",
@@ -1149,16 +1181,28 @@ def run_intake_stage(
             )
             if repair_attempted:
                 record_provider_repair_attempt(job_dir, provider_key, stage_id=stage.stage_id, run_id=run_dir.name)
-            transition_substep_status(run_dir, state, stage.stage_id, "fact-lineage", "completed")
-            save_state(state_path, state)
+            apply_state_update(
+                state_lock,
+                state_path,
+                state,
+                lambda: transition_substep_status(run_dir, state, stage.stage_id, "fact-lineage", "completed"),
+            )
 
         resumed_normalization, normalization_payload = try_resume_normalization(fact_payload)
         if resumed_normalization:
-            transition_substep_status(run_dir, state, stage.stage_id, "normalization", "completed")
-            save_state(state_path, state)
+            apply_state_update(
+                state_lock,
+                state_path,
+                state,
+                lambda: transition_substep_status(run_dir, state, stage.stage_id, "normalization", "completed"),
+            )
         else:
-            transition_substep_status(run_dir, state, stage.stage_id, "normalization", "started")
-            save_state(state_path, state)
+            apply_state_update(
+                state_lock,
+                state_path,
+                state,
+                lambda: transition_substep_status(run_dir, state, stage.stage_id, "normalization", "started"),
+            )
             _result, normalization_payload, repair_attempted, _repair_result, _errors = execute_json_substep(
                 stage=stage,
                 substep="normalization",
@@ -1191,20 +1235,36 @@ def run_intake_stage(
             )
             if repair_attempted:
                 record_provider_repair_attempt(job_dir, provider_key, stage_id=stage.stage_id, run_id=run_dir.name)
-            transition_substep_status(run_dir, state, stage.stage_id, "normalization", "completed")
-            save_state(state_path, state)
+            apply_state_update(
+                state_lock,
+                state_path,
+                state,
+                lambda: transition_substep_status(run_dir, state, stage.stage_id, "normalization", "completed"),
+            )
 
-        transition_substep_status(run_dir, state, stage.stage_id, "merge", "started")
-        save_state(state_path, state)
+        apply_state_update(
+            state_lock,
+            state_path,
+            state,
+            lambda: transition_substep_status(run_dir, state, stage.stage_id, "merge", "started"),
+        )
         merged_payload = merge_intake_substep_payloads(sources_payload, fact_payload, normalization_payload)
         validation_errors = validate_intake_payload(merged_payload)
         if validation_errors:
-            transition_substep_status(run_dir, state, stage.stage_id, "merge", "failed")
-            save_state(state_path, state)
+            apply_state_update(
+                state_lock,
+                state_path,
+                state,
+                lambda: transition_substep_status(run_dir, state, stage.stage_id, "merge", "failed"),
+            )
             raise RuntimeError(f"intake validation failed: {'; '.join(validation_errors)}")
         write_json(output_path, merged_payload)
-        transition_substep_status(run_dir, state, stage.stage_id, "merge", "completed")
-        save_state(state_path, state)
+        apply_state_update(
+            state_lock,
+            state_path,
+            state,
+            lambda: transition_substep_status(run_dir, state, stage.stage_id, "merge", "completed"),
+        )
         reporter.complete(adapter.name, stage.stage_id)
         return stage.stage_id, "completed"
     except SubstepExecutionError as exc:
@@ -1217,6 +1277,7 @@ def run_structured_stage(
     job_dir: Path,
     state: dict[str, object],
     state_path: Path,
+    state_lock: threading.RLock,
     stage_selection: StageAdapterSelection,
     adapter: CLIAdapter,
     adapter_bin: str,
@@ -1311,11 +1372,19 @@ def run_structured_stage(
         if resumed:
             source_pass_resumed = True
             source_payload = resumed_source_payload
-            transition_substep_status(run_dir, state, stage.stage_id, "source-pass", "completed")
-            save_state(state_path, state)
+            apply_state_update(
+                state_lock,
+                state_path,
+                state,
+                lambda: transition_substep_status(run_dir, state, stage.stage_id, "source-pass", "completed"),
+            )
         else:
-            transition_substep_status(run_dir, state, stage.stage_id, "source-pass", "started")
-            save_state(state_path, state)
+            apply_state_update(
+                state_lock,
+                state_path,
+                state,
+                lambda: transition_substep_status(run_dir, state, stage.stage_id, "source-pass", "started"),
+            )
             try:
                 source_result, source_payload, source_repair_attempted, source_repair_result, _ = execute_json_substep(
                     stage=stage,
@@ -1346,23 +1415,39 @@ def run_structured_stage(
                 source_repair_result = exc.repair_result
                 if source_repair_attempted:
                     record_provider_repair_attempt(job_dir, provider_key, stage_id=stage.stage_id, run_id=run_dir.name)
-                transition_substep_status(run_dir, state, stage.stage_id, "source-pass", "failed")
-                save_state(state_path, state)
+                apply_state_update(
+                    state_lock,
+                    state_path,
+                    state,
+                    lambda: transition_substep_status(run_dir, state, stage.stage_id, "source-pass", "failed"),
+                )
                 raise RuntimeError(str(exc)) from exc
             restore_source_registry()
-            transition_substep_status(run_dir, state, stage.stage_id, "source-pass", "completed")
-            save_state(state_path, state)
+            apply_state_update(
+                state_lock,
+                state_path,
+                state,
+                lambda: transition_substep_status(run_dir, state, stage.stage_id, "source-pass", "completed"),
+            )
 
         resumed_claim, merged_payload, validation = (False, None, None)
         if source_pass_resumed:
             resumed_claim, merged_payload, validation = try_resume_claim_pass(source_payload)
         if resumed_claim:
             claim_pass_resumed = True
-            transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "completed")
-            save_state(state_path, state)
+            apply_state_update(
+                state_lock,
+                state_path,
+                state,
+                lambda: transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "completed"),
+            )
         else:
-            transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "started")
-            save_state(state_path, state)
+            apply_state_update(
+                state_lock,
+                state_path,
+                state,
+                lambda: transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "started"),
+            )
             claim_prompt = build_claim_pass_prompt(stage, run_dir, source_output_path, claim_output_path, claim_scratch_path)
             try:
                 claim_result, _claim_payload, claim_repair_attempted, claim_repair_result, _ = execute_json_substep(
@@ -1395,8 +1480,12 @@ def run_structured_stage(
                 claim_repair_result = exc.repair_result
                 if claim_repair_attempted:
                     record_provider_repair_attempt(job_dir, provider_key, stage_id=stage.stage_id, run_id=run_dir.name)
-                transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "failed")
-                save_state(state_path, state)
+                apply_state_update(
+                    state_lock,
+                    state_path,
+                    state,
+                    lambda: transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "failed"),
+                )
                 raise RuntimeError(str(exc)) from exc
             restore_source_registry()
             merged_payload, validation = validate_combined_claim_payload(source_payload)
@@ -1427,26 +1516,38 @@ def run_structured_stage(
                 if process_controller is not None and process_controller.is_cancelled(stage.stage_id):
                     marker = "cancelled_due_to_parallel_stage_failure"
                     cancellation_marker = marker
-                    if marker not in claim_repair_result.stderr:
-                        claim_repair_result = CommandResult(
-                            claim_repair_result.returncode,
+                if marker not in claim_repair_result.stderr:
+                    claim_repair_result = CommandResult(
+                        claim_repair_result.returncode,
                         claim_repair_result.stdout,
                         claim_repair_result.stderr + ("\n" if claim_repair_result.stderr else "") + marker,
                     )
-                transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "cancelled")
-                save_state(state_path, state)
+                apply_state_update(
+                    state_lock,
+                    state_path,
+                    state,
+                    lambda: transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "cancelled"),
+                )
                 raise StageCancelledError(f"Stage {stage.stage_id} cancelled due to parallel stage failure.")
             if claim_repair_result.returncode != 0:
-                transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "failed")
-                save_state(state_path, state)
+                apply_state_update(
+                    state_lock,
+                    state_path,
+                    state,
+                    lambda: transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "failed"),
+                )
                 raise RuntimeError(f"claim-pass failed via {adapter.name}: {claim_repair_result.stderr.strip()}")
             merged_payload, validation = validate_combined_claim_payload(source_payload)
             structured_validation_errors = validation.structured_errors
             structured_validation_warnings = validation.structured_warnings
             markdown_validation_errors = validation.markdown_errors
         if structured_validation_errors:
-            transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "failed")
-            save_state(state_path, state)
+            apply_state_update(
+                state_lock,
+                state_path,
+                state,
+                lambda: transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "failed"),
+            )
             details = "; ".join(structured_validation_errors)
             details = re.sub(
                 r"inferences\[\d+\] must include at least one evidence source\.",
@@ -1462,33 +1563,58 @@ def run_structured_stage(
             )
             raise RuntimeError(f"Stage {stage.stage_id} failed structured validation: {details}")
         if markdown_validation_errors:
-            transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "failed")
-            save_state(state_path, state)
+            apply_state_update(
+                state_lock,
+                state_path,
+                state,
+                lambda: transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "failed"),
+            )
             raise RuntimeError(f"Stage {stage.stage_id} failed markdown contract validation: {'; '.join(markdown_validation_errors)}")
 
-        transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "completed")
-        transition_substep_status(run_dir, state, stage.stage_id, "render", "started")
-        save_state(state_path, state)
+        apply_state_update(
+            state_lock,
+            state_path,
+            state,
+            lambda: (
+                transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "completed"),
+                transition_substep_status(run_dir, state, stage.stage_id, "render", "started"),
+            ),
+        )
         write_json(structured_output_path, validation.normalized_payload)
         output_path.write_text(validation.canonical_markdown, encoding="utf-8")
-        transition_substep_status(run_dir, state, stage.stage_id, "render", "completed")
-        save_state(state_path, state)
+        apply_state_update(
+            state_lock,
+            state_path,
+            state,
+            lambda: transition_substep_status(run_dir, state, stage.stage_id, "render", "completed"),
+        )
         reporter.complete(adapter.name, stage.stage_id)
         return stage.stage_id, "completed"
     except StageCancelledError:
         cancellation_marker = "cancelled_due_to_parallel_stage_failure"
-        transition_substep_status(run_dir, state, stage.stage_id, "render", "cancelled")
-        save_state(state_path, state)
+        apply_state_update(
+            state_lock,
+            state_path,
+            state,
+            lambda: transition_substep_status(run_dir, state, stage.stage_id, "render", "cancelled"),
+        )
         reporter.cancel(adapter.name, stage.stage_id)
         raise
     except Exception:
-        for stage_state in state["stages"]:
-            if stage_state["id"] == stage.stage_id:
-                render_entry = stage_state.get("substeps", {}).get("render", {})
-                if isinstance(render_entry, dict) and render_entry.get("status") == "running":
-                    transition_substep_status(run_dir, state, stage.stage_id, "render", "failed")
-                    save_state(state_path, state)
-                break
+        with state_lock:
+            render_running = False
+            for stage_state in state["stages"]:
+                if stage_state["id"] == stage.stage_id:
+                    render_entry = stage_state.get("substeps", {}).get("render", {})
+                    render_running = isinstance(render_entry, dict) and render_entry.get("status") == "running"
+                    break
+        if render_running:
+            apply_state_update(
+                state_lock,
+                state_path,
+                state,
+                lambda: transition_substep_status(run_dir, state, stage.stage_id, "render", "failed"),
+            )
         reporter.fail(adapter.name, stage.stage_id)
         raise
     finally:
@@ -1814,6 +1940,7 @@ def run_agent_stage(
     job_dir: Path,
     state: dict[str, object],
     state_path: Path,
+    state_lock: threading.RLock,
     stage_assignments: dict[str, StageAdapterSelection],
     adapter_bins: dict[str, str],
     reporter: ProgressReporter,
@@ -1829,6 +1956,7 @@ def run_agent_stage(
             job_dir,
             state,
             state_path,
+            state_lock,
             stage_selection,
             adapter,
             adapter_bin,
@@ -1842,6 +1970,7 @@ def run_agent_stage(
             job_dir,
             state,
             state_path,
+            state_lock,
             stage_selection,
             adapter,
             adapter_bin,
@@ -2075,18 +2204,25 @@ def run_stage_claim_extraction(
     job_dir: Path,
     state: dict[str, object],
     state_path: Path,
+    state_lock: threading.RLock,
     reporter: ProgressReporter,
 ) -> None:
     if stage_id not in STAGE_CLAIM_STAGE_IDS:
         return
     claim_output = stage_claim_output_path(run_dir, stage_id)
-    if state["post_processing"]["stage_claims"][stage_id]["status"] == "completed" and claim_output.is_file():
+    with state_lock:
+        stage_claim_status = state["post_processing"]["stage_claims"][stage_id]["status"]
+    if stage_claim_status == "completed" and claim_output.is_file():
         reporter.complete("system", f"{stage_id}-claims")
         return
 
     reporter.start("system", f"{stage_id}-claims")
-    transition_post_processing_status(run_dir, state, "stage_claims", "started", stage_id=stage_id)
-    save_state(state_path, state)
+    apply_state_update(
+        state_lock,
+        state_path,
+        state,
+        lambda: transition_post_processing_status(run_dir, state, "stage_claims", "started", stage_id=stage_id),
+    )
 
     stage_output = next(
         run_dir / "stage-outputs" / str(stage["output"])
@@ -2157,9 +2293,15 @@ def run_stage_claim_extraction(
         encoding="utf-8",
     )
     if completed_return_code != 0 or validation_errors:
-        transition_stage_status(run_dir, state, stage_id, "failed")
-        transition_post_processing_status(run_dir, state, "stage_claims", "failed", stage_id=stage_id)
-        save_state(state_path, state)
+        apply_state_update(
+            state_lock,
+            state_path,
+            state,
+            lambda: (
+                transition_stage_status(run_dir, state, stage_id, "failed"),
+                transition_post_processing_status(run_dir, state, "stage_claims", "failed", stage_id=stage_id),
+            ),
+        )
         reporter.fail("system", f"{stage_id}-claims")
         details = completed_stderr.strip() or "; ".join(validation_errors)
         if validation_errors and completed_stderr.strip():
@@ -2167,8 +2309,12 @@ def run_stage_claim_extraction(
         details = details.replace("lacks an external evidence citation", "is an uncited inference or fact")
         raise RuntimeError(f"Stage claim extraction failed for {stage_id}: {details}")
 
-    transition_post_processing_status(run_dir, state, "stage_claims", "completed", stage_id=stage_id)
-    save_state(state_path, state)
+    apply_state_update(
+        state_lock,
+        state_path,
+        state,
+        lambda: transition_post_processing_status(run_dir, state, "stage_claims", "completed", stage_id=stage_id),
+    )
     reporter.complete("system", f"{stage_id}-claims")
 
 
@@ -2182,24 +2328,33 @@ def run_stage_group(
     adapter_bins: dict[str, str],
     reporter: ProgressReporter,
 ) -> None:
+    state_lock = threading.RLock()
     runnable: list[StageExecution] = []
     for stage in stages:
         if is_stage_execution_complete(run_dir, stage):
-            transition_stage_status(run_dir, state, stage.stage_id, "completed")
+            apply_state_update(
+                state_lock,
+                state_path,
+                state,
+                lambda: transition_stage_status(run_dir, state, stage.stage_id, "completed"),
+            )
             selection = stage_assignments[stage.stage_id]
             adapter_name = selection.adapter_name
             reporter.complete(adapter_name, stage.stage_id)
-            save_state(state_path, state)
             if stage.stage_id == "intake":
                 merge_intake_sources_into_registry(run_dir)
             elif is_structured_stage(stage.stage_id):
                 merge_stage_sources_into_registry(stage.stage_id, run_dir)
-            run_stage_claim_extraction(stage.stage_id, run_dir, job_dir, state, state_path, reporter)
+            run_stage_claim_extraction(stage.stage_id, run_dir, job_dir, state, state_path, state_lock, reporter)
         else:
             runnable.append(stage)
     for stage in runnable:
-        transition_stage_status(run_dir, state, stage.stage_id, "started")
-    save_state(state_path, state)
+        apply_state_update(
+            state_lock,
+            state_path,
+            state,
+            lambda stage_id=stage.stage_id: transition_stage_status(run_dir, state, stage_id, "started"),
+        )
 
     if not runnable:
         return
@@ -2214,6 +2369,7 @@ def run_stage_group(
                 job_dir,
                 state,
                 state_path,
+                state_lock,
                 stage_assignments,
                 adapter_bins,
                 reporter,
@@ -2226,9 +2382,14 @@ def run_stage_group(
             stage = futures[future]
             try:
                 stage_id, status = future.result()
-                transition_stage_status(run_dir, state, stage_id, status)
                 selection = stage_assignments[stage_id]
                 provider_key = selection.provider_name or selection.adapter_name
+                apply_state_update(
+                    state_lock,
+                    state_path,
+                    state,
+                    lambda: transition_stage_status(run_dir, state, stage_id, status),
+                )
                 record_provider_stage_result(
                     job_dir,
                     provider_key,
@@ -2238,16 +2399,30 @@ def run_stage_group(
                     adapter_name=selection.adapter_name,
                     model=selection.model,
                 )
-                save_state(state_path, state)
                 if stage_id == "intake":
                     merge_intake_sources_into_registry(run_dir)
                 elif is_structured_stage(stage_id):
                     merge_stage_sources_into_registry(stage_id, run_dir)
-                run_stage_claim_extraction(stage_id, run_dir, job_dir, state, state_path, reporter)
+                try:
+                    run_stage_claim_extraction(stage_id, run_dir, job_dir, state, state_path, state_lock, reporter)
+                except Exception as exc:
+                    if pending_error is None:
+                        pending_error = exc
+                        process_controller.cancel_others(stage_id)
             except StageCancelledError:
-                transition_stage_status(run_dir, state, stage.stage_id, "cancelled")
                 selection = stage_assignments[stage.stage_id]
                 provider_key = selection.provider_name or selection.adapter_name
+                apply_state_update(
+                    state_lock,
+                    state_path,
+                    state,
+                    lambda: (
+                        transition_stage_status(run_dir, state, stage.stage_id, "cancelled"),
+                        transition_post_processing_status(run_dir, state, "stage_claims", "cancelled", stage_id=stage.stage_id)
+                        if stage.stage_id in STAGE_CLAIM_STAGE_IDS
+                        else None,
+                    ),
+                )
                 record_provider_stage_result(
                     job_dir,
                     provider_key,
@@ -2257,13 +2432,20 @@ def run_stage_group(
                     adapter_name=selection.adapter_name,
                     model=selection.model,
                 )
-                if stage.stage_id in STAGE_CLAIM_STAGE_IDS:
-                    transition_post_processing_status(run_dir, state, "stage_claims", "cancelled", stage_id=stage.stage_id)
-                save_state(state_path, state)
             except Exception as exc:
-                transition_stage_status(run_dir, state, stage.stage_id, "failed")
                 selection = stage_assignments[stage.stage_id]
                 provider_key = selection.provider_name or selection.adapter_name
+                apply_state_update(
+                    state_lock,
+                    state_path,
+                    state,
+                    lambda: (
+                        transition_stage_status(run_dir, state, stage.stage_id, "failed"),
+                        transition_post_processing_status(run_dir, state, "stage_claims", "failed", stage_id=stage.stage_id)
+                        if stage.stage_id in STAGE_CLAIM_STAGE_IDS
+                        else None,
+                    ),
+                )
                 record_provider_stage_result(
                     job_dir,
                     provider_key,
@@ -2273,9 +2455,6 @@ def run_stage_group(
                     adapter_name=selection.adapter_name,
                     model=selection.model,
                 )
-                if stage.stage_id in STAGE_CLAIM_STAGE_IDS:
-                    transition_post_processing_status(run_dir, state, "stage_claims", "failed", stage_id=stage.stage_id)
-                save_state(state_path, state)
                 if pending_error is None:
                     pending_error = exc
                     process_controller.cancel_others(stage.stage_id)

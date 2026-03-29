@@ -1,8 +1,12 @@
 import json
+import io
 import subprocess
 import tempfile
+import threading
 import textwrap
+import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -22,11 +26,15 @@ from _adapter_qualification import (
 )
 from execute_workflow import (
     ProgressReporter,
+    StageAdapterSelection,
+    StageExecution,
     StageProcessController,
+    apply_state_update,
     build_adapter_executor,
     build_claude_command,
     build_gemini_command,
     next_incremental_run_id,
+    run_stage_group,
 )
 from _stage_validation import validate_stage_markdown_contract
 
@@ -109,6 +117,42 @@ class ExecuteWorkflowTests(unittest.TestCase):
     def test_build_adapter_executor_rejects_unknown_artifact_kind(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unsupported artifact kind"):
             build_adapter_executor("gemini", Path("/tmp/job"), "xml")
+
+    def test_apply_state_update_serializes_concurrent_checkpoints(self) -> None:
+        state = {"run_dir": str(self.job_dir / "runs" / "run-lock"), "stages": [{"id": "research-a", "status": "pending"}]}
+        state_path = self.job_dir / "runs" / "run-lock" / "workflow-state.json"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_lock = threading.RLock()
+        overlap_detected = []
+        active = 0
+        start_gate = threading.Barrier(2)
+
+        def slow_save(_path: Path, _payload: dict[str, object]) -> None:
+            nonlocal active
+            active += 1
+            if active > 1:
+                overlap_detected.append(True)
+            time.sleep(0.02)
+            active -= 1
+
+        def worker() -> None:
+            start_gate.wait()
+            apply_state_update(
+                state_lock,
+                state_path,
+                state,
+                lambda: state["stages"][0].update({"status": "running"}),
+            )
+
+        with patch("execute_workflow.save_state", side_effect=slow_save):
+            first = threading.Thread(target=worker)
+            second = threading.Thread(target=worker)
+            first.start()
+            second.start()
+            first.join()
+            second.join()
+
+        self.assertEqual(overlap_detected, [])
 
     def test_classify_adapter_qualification_reports_structured_safe_for_fake_executor(self) -> None:
         result = classify_adapter_qualification(
@@ -2179,6 +2223,43 @@ class ExecuteWorkflowTests(unittest.TestCase):
             after = after_payloads[name]
             self.assertEqual(after["totals"], before["totals"])
             self.assertEqual(len(after["stage_results"]), len(before["stage_results"]))
+
+    def test_run_stage_group_does_not_double_record_provider_result_when_claim_extraction_fails(self) -> None:
+        run_dir = self.job_dir / "runs" / "run-claim-extraction-fails"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        state_path = run_dir / "workflow-state.json"
+        state = {
+            "run_dir": str(run_dir),
+            "status": "running",
+            "stages": [{"id": "research-a", "status": "pending", "substeps": {}}],
+            "post_processing": {
+                "stage_claims": {"research-a": {"status": "pending", "output_path": str(run_dir / "stage-claims" / "02-research-a.claims.json")}},
+                "claim_extraction": {"status": "pending", "output_path": str(self.job_dir / "evidence" / "claims-run-x.json")},
+                "final_artifact": {"status": "pending", "output_path": str(self.job_dir / "outputs" / "final-run-x.md")},
+            },
+        }
+        reporter = ProgressReporter(io.StringIO())
+        calls: list[tuple[str, str]] = []
+
+        with (
+            patch("execute_workflow.run_agent_stage", return_value=("research-a", "completed")),
+            patch("execute_workflow.run_stage_claim_extraction", side_effect=RuntimeError("claim extraction failed")),
+            patch("execute_workflow.merge_stage_sources_into_registry", return_value=None),
+            patch("execute_workflow.record_provider_stage_result", side_effect=lambda job_dir, provider_key, stage_id, status, **_: calls.append((stage_id, status))),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "claim extraction failed"):
+                run_stage_group(
+                    [StageExecution("research-a", "primary", "02-research-a.md", "02-research-a.md")],
+                    run_dir,
+                    self.job_dir,
+                    state_path,
+                    state,
+                    {"research-a": StageAdapterSelection(adapter_name="codex")},
+                    {"codex": str(self.codex_bin), "gemini": str(self.gemini_bin), "antigravity": str(self.antigravity_bin), "claude": str(self.claude_bin)},
+                    reporter,
+                )
+
+        self.assertEqual(calls, [("research-a", "completed")])
 
     def test_reports_skipped_stages_when_resuming_partial_run(self) -> None:
         partial_run = subprocess.run(
