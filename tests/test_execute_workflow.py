@@ -1532,6 +1532,36 @@ class ExecuteWorkflowTests(unittest.TestCase):
             original_state["post_processing"]["final_artifact"]["status"],
         )
 
+    def test_event_replay_restores_running_status_for_started_events(self) -> None:
+        run_dir = self.job_dir / "runs" / "run-replay-running"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        initial_state = {
+            "run_id": "run-replay-running",
+            "run_dir": str(run_dir),
+            "status": "scaffolded",
+            "stages": [
+                {"id": "intake", "status": "pending", "substeps": {"source-pass": {"status": "pending"}}},
+            ],
+            "post_processing": {
+                "claim_extraction": {"status": "pending"},
+                "final_artifact": {"status": "pending"},
+                "stage_claims": {},
+            },
+        }
+        from _workflow_state import append_workflow_event, derive_workflow_state_from_events
+
+        append_workflow_event(run_dir, "run_started", initial_state=initial_state)
+        append_workflow_event(run_dir, "stage_started", stage_id="intake")
+        append_workflow_event(run_dir, "substep_started", stage_id="intake", substep="source-pass")
+        append_workflow_event(run_dir, "post_processing_started", key="claim_extraction")
+
+        rebuilt_state = derive_workflow_state_from_events(run_dir)
+
+        self.assertEqual(rebuilt_state["status"], "running")
+        self.assertEqual(rebuilt_state["stages"][0]["status"], "running")
+        self.assertEqual(rebuilt_state["stages"][0]["substeps"]["source-pass"]["status"], "running")
+        self.assertEqual(rebuilt_state["post_processing"]["claim_extraction"]["status"], "running")
+
     def test_execute_workflow_defaults_run_id_to_next_incremental_value(self) -> None:
         result = subprocess.run(
             [
@@ -2088,6 +2118,67 @@ class ExecuteWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertIn("already complete", second.stdout.lower())
+
+    def test_resuming_completed_run_does_not_double_count_provider_stage_results(self) -> None:
+        first = subprocess.run(
+            [
+                "python3",
+                str(EXECUTE_WORKFLOW),
+                "--job-path",
+                str(self.job_dir),
+                "--run-id",
+                "run-scorecard-resume",
+                "--codex-bin",
+                str(self.codex_bin),
+                "--gemini-bin",
+                str(self.gemini_bin),
+                "--antigravity-bin",
+                str(self.antigravity_bin),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(first.returncode, 0, first.stderr)
+
+        scorecard_dir = self.job_dir / "audit" / "provider-scorecards"
+        before_payloads = {
+            path.name: json.loads(path.read_text(encoding="utf-8"))
+            for path in scorecard_dir.glob("*.json")
+        }
+        self.assertTrue(before_payloads)
+
+        second = subprocess.run(
+            [
+                "python3",
+                str(EXECUTE_WORKFLOW),
+                "--job-path",
+                str(self.job_dir),
+                "--run-id",
+                "run-scorecard-resume",
+                "--codex-bin",
+                str(self.codex_bin),
+                "--gemini-bin",
+                str(self.gemini_bin),
+                "--antigravity-bin",
+                str(self.antigravity_bin),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            input="yes\n",
+        )
+        self.assertEqual(second.returncode, 0, second.stderr)
+
+        after_payloads = {
+            path.name: json.loads(path.read_text(encoding="utf-8"))
+            for path in scorecard_dir.glob("*.json")
+        }
+        self.assertEqual(set(after_payloads), set(before_payloads))
+        for name, before in before_payloads.items():
+            after = after_payloads[name]
+            self.assertEqual(after["totals"], before["totals"])
+            self.assertEqual(len(after["stage_results"]), len(before["stage_results"]))
 
     def test_reports_skipped_stages_when_resuming_partial_run(self) -> None:
         partial_run = subprocess.run(

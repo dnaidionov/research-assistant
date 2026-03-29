@@ -2188,16 +2188,6 @@ def run_stage_group(
             transition_stage_status(run_dir, state, stage.stage_id, "completed")
             selection = stage_assignments[stage.stage_id]
             adapter_name = selection.adapter_name
-            provider_key = selection.provider_name or adapter_name
-            record_provider_stage_result(
-                job_dir,
-                provider_key,
-                stage.stage_id,
-                "completed",
-                run_id=run_dir.name,
-                adapter_name=adapter_name,
-                model=selection.model,
-            )
             reporter.complete(adapter_name, stage.stage_id)
             save_state(state_path, state)
             if stage.stage_id == "intake":

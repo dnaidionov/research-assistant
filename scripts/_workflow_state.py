@@ -135,6 +135,10 @@ def derive_workflow_state_from_events(run_dir: Path) -> dict[str, object]:
     if first.get("event_type") != "run_started" or not isinstance(first.get("initial_state"), dict):
         raise ValueError(f"Workflow events for {run_dir} do not start with a run_started initial_state event.")
     state = copy.deepcopy(first["initial_state"])
+
+    def normalize_event_status(raw_status: str) -> str:
+        return "running" if raw_status == "started" else raw_status
+
     for event in events[1:]:
         event_type = str(event.get("event_type") or "")
         if event_type == "state_checkpoint" and isinstance(event.get("state"), dict):
@@ -143,13 +147,13 @@ def derive_workflow_state_from_events(run_dir: Path) -> dict[str, object]:
         if event_type.startswith("stage_"):
             stage_id = str(event.get("stage_id") or "")
             if stage_id:
-                _set_stage_status(state, stage_id, event_type.removeprefix("stage_"))
+                _set_stage_status(state, stage_id, normalize_event_status(event_type.removeprefix("stage_")))
             continue
         if event_type.startswith("substep_"):
             stage_id = str(event.get("stage_id") or "")
             substep = str(event.get("substep") or "")
             if stage_id and substep:
-                _set_substep_status(state, stage_id, substep, event_type.removeprefix("substep_"))
+                _set_substep_status(state, stage_id, substep, normalize_event_status(event_type.removeprefix("substep_")))
             continue
         if event_type.startswith("post_processing_"):
             key = str(event.get("key") or "")
@@ -158,7 +162,7 @@ def derive_workflow_state_from_events(run_dir: Path) -> dict[str, object]:
                 _set_post_processing_status(
                     state,
                     key,
-                    event_type.removeprefix("post_processing_"),
+                    normalize_event_status(event_type.removeprefix("post_processing_")),
                     str(stage_id) if isinstance(stage_id, str) else None,
                 )
     state["status"] = _recompute_run_status(state)

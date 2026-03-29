@@ -31,6 +31,8 @@ They now record:
 - live-drift outcomes
 - quarantine state
 
+Scorecards are execution evidence, not resume bookkeeping. Re-entering a completed run does not append synthetic `completed` outcomes for skipped stages.
+
 Optional runtime policy lives under:
 
 - `workflow.execution.provider_runtime_policy`
@@ -88,6 +90,8 @@ Rebuild the snapshot with:
 ```bash
 python3 scripts/rebuild_workflow_state.py --run-dir ~/Projects/research-hub/jobs/my-project-1/runs/run-001
 ```
+
+During replay, `stage_started`, `substep_started`, and `post_processing_started` events are restored as in-memory `running` state. That is deliberate; a rebuilt active run should not fall back to `scaffolded` only because the snapshot was missing.
 
 ## Quality Benchmarks
 
