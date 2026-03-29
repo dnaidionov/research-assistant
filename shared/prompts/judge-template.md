@@ -38,8 +38,9 @@ Return markdown using exactly these top-level sections in this order:
 3. `# Unresolved Disagreements`
 4. `# Confidence Assessment`
 5. `# Evidence Gaps`
-6. `# Rationale And Traceability`
-7. `# Recommended Final Artifact Structure`
+6. `# Brief Improvement Recommendations` (optional)
+7. `# Rationale And Traceability`
+8. `# Recommended Final Artifact Structure`
 
 ### Section Rules
 
@@ -75,6 +76,16 @@ Return markdown using exactly these top-level sections in this order:
 
 - Identify the additional evidence most likely to resolve the remaining disputes.
 
+#### `# Brief Improvement Recommendations`
+
+- Include this section only when the brief or provided inputs are missing concrete requester-supplied information that would materially improve the research outcome.
+- Focus on actionable upstream inputs the requester could clarify, provide, or tighten.
+- Use numbered items in this shape:
+  - `Missing input: ...`
+  - `Why it matters: ...`
+  - `Expected impact: ...`
+  - optional `Priority: low|medium|high`
+
 #### `# Rationale And Traceability`
 
 - Briefly explain why some claims were accepted, rejected, or left unresolved.
@@ -94,6 +105,7 @@ Write JSON with these top-level keys:
 - `unresolved_disagreements`
 - `confidence_assessment`
 - `evidence_gaps`
+- `brief_improvements` (optional)
 - `rationale`
 - `recommended_artifact_structure`
 - `sources`
@@ -126,6 +138,11 @@ Rules:
   - a list of strings or `{{ "text": ... }}` entries
   - an object with `sections`, where `sections` is a list of section titles
 - Every cited external source id must be declared in `sources`.
+- `brief_improvements`, when present, must be a list of objects with:
+  - `missing_input`
+  - `why_it_matters`
+  - `expected_impact`
+  - optional `priority` of `low`, `medium`, or `high`
 - Every `sources` item must include `id`, `title`, `type`, `authority`, and `locator`, and should include `source_class` when known.
 - Prefer explicit source classes:
   - `external_evidence`

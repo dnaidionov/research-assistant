@@ -10,6 +10,66 @@ EXTRACT_CLAIMS = REPO_ROOT / "scripts" / "extract_claims.py"
 
 
 class ExtractClaimsTests(unittest.TestCase):
+    def test_markdown_and_structured_ingestion_produce_matching_summary_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            markdown_input = root / "report.md"
+            markdown_output = root / "claims-markdown.json"
+            structured_input = root / "judge.json"
+            structured_output = root / "claims-structured.json"
+
+            markdown_input.write_text(
+                "\n".join(
+                    [
+                        "# Supported Conclusions",
+                        "1. Option A is feasible. [SRC-001]",
+                        "",
+                        "# Inferences And Synthesis Judgments",
+                        "1. Option A should be preferred. [SRC-001] Confidence: medium",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            structured_input.write_text(
+                """{
+  "stage": "judge",
+  "supported_conclusions": [
+    {"id": "C-001", "text": "Option A is feasible.", "evidence_sources": ["SRC-001"]}
+  ],
+  "synthesis_judgments": [
+    {"id": "J-001", "text": "Option A should be preferred.", "evidence_sources": ["SRC-001"], "confidence": "medium"}
+  ],
+  "unresolved_disagreements": [],
+  "confidence_assessment": [],
+  "evidence_gaps": [],
+  "rationale": [],
+  "recommended_artifact_structure": [],
+  "sources": [
+    {"id": "SRC-001", "title": "Source", "type": "report", "authority": "vendor", "locator": "https://example.com/src-001"}
+  ]
+}""",
+                encoding="utf-8",
+            )
+
+            markdown_result = subprocess.run(
+                ["python3", str(EXTRACT_CLAIMS), "--input", str(markdown_input), "--output", str(markdown_output)],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+            structured_result = subprocess.run(
+                ["python3", str(EXTRACT_CLAIMS), "--input", str(structured_input), "--output", str(structured_output)],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(markdown_result.returncode, 0, markdown_result.stderr)
+            self.assertEqual(structured_result.returncode, 0, structured_result.stderr)
+            markdown_payload = json.loads(markdown_output.read_text(encoding="utf-8"))
+            structured_payload = json.loads(structured_output.read_text(encoding="utf-8"))
+            self.assertEqual(markdown_payload["summary"], structured_payload["summary"])
+
     def test_extracts_claims_from_structured_stage_json_without_markdown_heuristics(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             input_path = Path(tmpdir) / "judge.json"
@@ -58,7 +118,7 @@ class ExtractClaimsTests(unittest.TestCase):
   "stage": "judge",
   "supported_conclusions": [
     {
-      "id": "C-001",
+      "id": "C001",
       "text": "Option A is feasible.",
       "evidence_sources": ["SRC-001"],
       "support_links": [
@@ -152,6 +212,162 @@ class ExtractClaimsTests(unittest.TestCase):
                 claim["evidence_sources"],
                 ["file:///tmp/benchmark.pdf", "/tmp/local-note.md"],
             )
+
+    def test_markdown_extraction_uses_source_registry_semantics_when_available(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            input_path = root / "report.md"
+            output_path = root / "claims.json"
+            registry_path = root / "sources.json"
+            input_path.write_text(
+                "\n".join(
+                    [
+                        "## Facts",
+                        "- The workflow preserved this claim. [SRC-WF, DOC-001]",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            registry_path.write_text(
+                """{
+  "run_id": "run-001",
+  "sources": [
+    {
+      "id": "SRC-WF",
+      "title": "Workflow trace",
+      "type": "workflow_artifact",
+      "authority": "runner",
+      "locator": "urn:workflow:judge",
+      "source_class": "workflow_provenance"
+    },
+    {
+      "id": "DOC-001",
+      "title": "Job brief",
+      "type": "project_brief",
+      "authority": "job input",
+      "locator": "brief.md",
+      "source_class": "job_input"
+    }
+  ]
+}""",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(EXTRACT_CLAIMS),
+                    "--input",
+                    str(input_path),
+                    "--output",
+                    str(output_path),
+                    "--source-registry",
+                    str(registry_path),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            claim = payload["claims"][0]
+            self.assertEqual(claim["provenance"], ["SRC-WF"])
+            self.assertEqual(claim["evidence_sources"], ["DOC-001"])
+
+    def test_markdown_registry_classification_matches_structured_provenance_only_fact_detection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            markdown_input = root / "report.md"
+            markdown_output = root / "claims-markdown.json"
+            structured_input = root / "judge.json"
+            structured_output = root / "claims-structured.json"
+            registry_path = root / "sources.json"
+
+            markdown_input.write_text(
+                "\n".join(
+                    [
+                        "## Facts",
+                        "- This was preserved by the workflow. [SRC-WF]",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            registry_path.write_text(
+                """{
+  "run_id": "run-001",
+  "sources": [
+    {
+      "id": "SRC-WF",
+      "title": "Workflow trace",
+      "type": "workflow_artifact",
+      "authority": "runner",
+      "locator": "urn:workflow:judge",
+      "source_class": "workflow_provenance"
+    }
+  ]
+}""",
+                encoding="utf-8",
+            )
+            structured_input.write_text(
+                """{
+  "stage": "judge",
+  "supported_conclusions": [
+    {
+      "id": "C001",
+      "text": "This was preserved by the workflow.",
+      "support_links": [{"source_id": "SRC-WF", "role": "provenance"}],
+      "evidence_sources": []
+    }
+  ],
+  "synthesis_judgments": [],
+  "unresolved_disagreements": [],
+  "confidence_assessment": [],
+  "evidence_gaps": [],
+  "rationale": [],
+  "recommended_artifact_structure": [],
+  "sources": [
+    {
+      "id": "SRC-WF",
+      "title": "Workflow trace",
+      "type": "workflow_artifact",
+      "authority": "runner",
+      "locator": "urn:workflow:judge",
+      "source_class": "workflow_provenance"
+    }
+  ]
+}""",
+                encoding="utf-8",
+            )
+
+            markdown_result = subprocess.run(
+                [
+                    "python3",
+                    str(EXTRACT_CLAIMS),
+                    "--input",
+                    str(markdown_input),
+                    "--output",
+                    str(markdown_output),
+                    "--source-registry",
+                    str(registry_path),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+            structured_result = subprocess.run(
+                ["python3", str(EXTRACT_CLAIMS), "--input", str(structured_input), "--output", str(structured_output)],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(markdown_result.returncode, 0, markdown_result.stderr)
+            self.assertEqual(structured_result.returncode, 0, structured_result.stderr)
+            markdown_payload = json.loads(markdown_output.read_text(encoding="utf-8"))
+            structured_payload = json.loads(structured_output.read_text(encoding="utf-8"))
+            self.assertEqual(markdown_payload["summary"]["provenance_only_fact_ids"], ["C001"])
+            self.assertEqual(structured_payload["summary"]["provenance_only_fact_ids"], ["C001"])
 
     def test_extracts_atomic_claims_with_provenance_evidence_and_confidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

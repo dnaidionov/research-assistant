@@ -1,0 +1,6 @@
+{
+  "errors": [
+    "Quality gate failed: missing required comparison dimension 'cost'.",
+    "Quality gate failed: evidence-quality mismatch for inference INF-001."
+  ]
+}

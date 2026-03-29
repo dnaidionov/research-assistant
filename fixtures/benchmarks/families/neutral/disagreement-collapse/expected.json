@@ -1,0 +1,5 @@
+{
+  "errors": [
+    "Quality gate failed: disagreement collapse detected; source conflict is present but unresolved disagreement is not preserved."
+  ]
+}

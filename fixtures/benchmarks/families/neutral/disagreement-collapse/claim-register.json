@@ -1,0 +1,14 @@
+{
+  "claims": [
+    {
+      "id": "DEC-001",
+      "text": "Recommend Option A.",
+      "type": "decision",
+      "evidence_sources": ["SRC-001", "SRC-002"]
+    }
+  ],
+  "summary": {
+    "source_conflict_count": 1,
+    "disagreement_count": 0
+  }
+}

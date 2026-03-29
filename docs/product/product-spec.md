@@ -79,23 +79,44 @@ Implemented today:
 - automated execution orchestration for the current adapter-driven split, with Codex and Gemini as the default pair
 - automatic incremental run-id selection in `execute_workflow.py` when `--run-id` is omitted, while preserving explicit run-id support and requiring confirmation before continuing an existing explicitly targeted run
 - job-level execution-provider configuration through `workflow.execution.providers` and `workflow.execution.stage_providers`, so a job can assign different adapters and supported model overrides per stage without changing runner code
-- stdout-recovery wrapping for markdown-producing chat adapters that return artifact content without writing the target file
 - explicit stage dependencies and per-stage prompt packets
 - placeholder stage outputs, workflow state, and run audit artifacts
+- append-only workflow event journals at `runs/<run-id>/events.jsonl`
 - scaffolded run-level source registries
 - scaffolded structured JSON stage outputs for research A, research B, both critique stages, and judge
-- explicit intake-contract validation for the intake JSON stage, now with source-backed `known_facts`, intake-declared sources, short supporting excerpts for each fact, and stable source anchors
+- explicit intake-contract validation for the intake JSON stage, now with source-backed `known_facts`, intake-declared sources, short supporting excerpts for each fact, stable source anchors, and decomposed source / fact-lineage / normalization execution before the final intake artifact is accepted
 - unified structured-stage validation for research, critique, and judge outputs, including source-ID resolution against the run registry
 - flexible validation for non-truth-critical narrative sections such as summaries, uncertainties, and source-evaluation notes
 - runner-owned source-registry merging; stage agents may declare sources in stage JSON but the runner treats `sources.json` as read-only during execution
-- stdout-oriented adapters can now recover fenced stage JSON artifacts directly from stdout before falling back to markdown-to-JSON synthesis
 - source records now normalize into explicit source classes such as `external_evidence`, `job_input`, `workflow_provenance`, and `recovered_provisional`
+- source normalization now also emits first-pass evidence-policy metadata including `authority_tier`, `evidence_kind`, `freshness_status`, `supports_world_claims`, `supports_process_claims`, `policy_outcome`, and `policy_notes`
 - external-evidence locators now follow a resolvable-locator policy rather than a URL-only policy; accepted forms include web URLs, concrete local file paths, and stable attachment-style URIs such as `file://`
 - bare-domain locators such as `example.com` are currently tolerated as warnings rather than hard failures, but the preferred locator remains the most specific followable page or file available
 - prompt contracts now explicitly require agents to retain the exact locator they actually used rather than collapsing it to a site root or bare domain, and the source registry upgrades degraded locators when a later stage provides a more specific one
 - stage prompts and validators now explicitly enforce that evidence is never implicit; every fact and world-claim inference or synthesis item must carry explicit evidence on that exact item, and nearby citations do not satisfy the requirement
 - structured research, critique, and judge stages now execute through an internal multi-step pipeline: source pass JSON, claim pass JSON, validator-driven bounded repair, then deterministic markdown rendering from the validated structured payload
 - source-pass and claim-pass are now strict contracts rather than soft decomposition hints: source-pass may emit only `stage` plus `sources`, and claim-pass must omit `sources`
+- the runner now qualifies each configured provider before execution and persists `structured_safe` / `markdown_only` / `unsupported` reports under `runs/<run-id>/audit/adapter-qualification/`
+- qualification is now stronger than a generic smoke test: providers are probed against intake JSON, structured source-pass JSON, structured claim-pass JSON, and markdown materialization prompts before structured execution is allowed
+- the qualification system now has two layers:
+  - `smoke` for execution preflight
+  - `workflow-regression` for stage-like regression checks that also cover critique and judge claim-pass behavior
+- the qualification system now also has a frozen-fixture realistic layer:
+  - `workflow-regression-realistic` for stronger regression checks against stable sanitized prompt packets kept in the repo
+- those realistic prompt packets now live in named fixture families under `fixtures/adapter-qualification/families/`
+- `neutral` is the default family; `hardware-tradeoff` and `policy-analysis` are current extensions
+- when a research area does not fit any existing family, the system should keep using `neutral` first and add a new family instead of mutating the default baseline
+- `scripts/create_fixture_family.py` now scaffolds that new family from the neutral baseline so the extension path is standardized instead of manual
+- the stronger regression profile now uses sanitized prompt-packet-derived probes rendered from the real intake, research, critique, and judge templates rather than only toy qualification strings
+- regression reports now carry profile, probe-set version, adapter version, and a fingerprint of watched inputs so they can be rerun only when prompts, schemas, scripts, or job config changed
+- qualification now reports trust tiers, not just coarse classes:
+  - `structured_safe_smoke`
+  - `structured_safe_regression`
+  - `structured_safe_realistic`
+- job execution config may now require stronger trust globally or per stage through `workflow.execution.required_provider_trust` and `workflow.execution.stage_required_provider_trust`
+- stable sanitized reference jobs now exist under `fixtures/reference-job/families/`, and `scripts/run_live_drift_check.py` can execute the real workflow against a chosen family to catch provider drift outside ordinary job runs
+- provider runtime scorecards now persist qualification history, stage outcomes, repair attempts, live-drift history, and quarantine state under each job's `audit/provider-scorecards/`, and `workflow.execution.provider_runtime_policy` can quarantine providers and reroute specific stages through named fallbacks
+- intake and all structured stages now require a `structured_safe` provider classification before execution begins
 - Claude is now available as a first-class CLI adapter alongside Codex, Gemini, and Antigravity
 - explicit model selection is now configured on named provider entries rather than hardwired to stage roles, but only adapters that actually support explicit model selection may accept a configured model override
 - structured research, critique, and judge claims may now carry typed `support_links` so support can be classified semantically as `evidence`, `context`, `challenge`, or `provenance`
@@ -104,7 +125,14 @@ Implemented today:
 - `job_input` remains admissible evidence for claims about the current system, stated requirements, and explicit constraints when the provided brief directly contains those facts
 - `context` links no longer satisfy the semantic evidence requirement for facts or inferences that assert world claims; those claims now require at least one world-supporting `evidence` link
 - final publication now fails when any referenced evidence source is unresolved instead of rendering a bare source ID into the user-facing report
+- judge synthesis may now also carry optional structured `brief_improvements`, and final artifact generation renders them as `# Brief Improvement Recommendations` after confidence and before references when that requester-facing guidance is present
 - source-quality warnings now flag `job_input` locators that point at prompt packets so the workflow can prefer the underlying canonical artifact such as `brief.md` or `config.yaml`
+- source validation now rejects duplicate source IDs within a stage payload and warns when multiple external source IDs point at the same locator
+- markdown-only claim extraction can now consult the run-level source registry so provenance-versus-evidence classification follows source classes when a registry is available instead of relying only on marker patterns
+- final-artifact readiness checks and final-artifact generation now share the same publication-validation path and structured-reference resolution rules
+- `quality_policy` now participates in final-artifact readiness and publication validation, and `scripts/run_quality_benchmarks.py` evaluates stable benchmark fixtures under `fixtures/benchmarks/families/`
+- canonical claim-register summaries are now built through one shared substrate, so structured stage sidecars, standalone extraction, readiness checks, and final publication all reason over the same summary fields
+- that canonical claim substrate now distinguishes truth-gated claim classes from non-gating adjudication classes and separately flags unsupported recommendations that carry evidence but no explicit rationale or risk accounting
 - structured inferences may reference local fact IDs for convenience, but the runner now resolves those references back to canonical external source IDs before validation
 - scaffolded claim-sidecar targets for research, critique, and judge stages
 - shared structured-stage validation now centralizes source-aware JSON validation, markdown-contract backstops, canonical markdown regeneration, and claim-map generation for structured stages
@@ -117,6 +145,9 @@ Implemented today:
 - parallel stage groups now cancel sibling subprocesses after the first fatal stage failure and persist `cancelled` stage status instead of letting siblings continue burning time and tokens unnoticed
 - decomposed structured stages now use runner-owned scratch markdown paths under `audit/substeps/`; final human-facing markdown is written only after the structured artifact passes validation
 - decomposed structured stages now resume at substep granularity when a previously validated source-pass or claim-pass artifact is still usable
+- run lifecycle changes are now also written into append-only workflow events, and `workflow-state.json` is rebuilt from that journal rather than treated as the only source of truth
+- atomic temp-file replacement now backs `write_text` and `write_json`, so state and artifact writes are no longer direct in-place overwrites
+- `scripts/rebuild_workflow_state.py` can reconstruct `workflow-state.json` from `events.jsonl` after interruption or snapshot loss
 - markdown claim extraction with stable IDs
 - structured claim-register generation from judge JSON in the automated workflow path
 - provenance vs external evidence separation inside the claim register, now partly semantic on the structured stage path
@@ -133,11 +164,11 @@ Implemented today:
 
 Known limitations in the current repo:
 
-- the claim model is too coarse for adjudication; `fact` and `inference` are not enough
-- downstream trust is still limited because stdout recovery remains in place for some adapters and markdown is still used as a bridge artifact even though structured stages are authoritative
+- the claim model is still not rich enough for full adjudication; it now tracks recommendations and assumptions explicitly, but topic-level disagreements and recommendation-risk structures are still shallow
+- downstream trust is still limited because markdown compatibility remains a weaker ingestion path and some provider CLIs can still fail by emitting mixed chatter instead of the exact structured artifact requested
 - provenance vs evidence separation is now semantic on the structured stage path, but markdown-only extraction and some compatibility paths still rely on marker classification
-- the workflow still depends on prompt compliance for structured JSON writes from some adapters; markdown stdout recovery remains a compatibility path rather than a strong adapter contract
-- the runner now decomposes structured stages internally, but intake still remains a single-pass contract and markdown-only compatibility paths still exist at some downstream edges
+- the workflow still depends on prompt compliance for exact structured JSON writes from some adapters; runner-side artifact parsing is gone, but provider CLIs can still fail by emitting mixed chatter instead of exact JSON
+- the runner now decomposes intake and the structured stages internally, but markdown-only compatibility paths still exist at some downstream edges
 - intake now carries source-backed `known_facts` plus an intake-declared `sources` list and per-fact `source_excerpt` and `source_anchor`, which removes the old freeform `source_basis` weakness for direct brief/config facts and gives each intake fact basic auditability
 
 ## Ranked Shortcomings
@@ -148,30 +179,30 @@ The current shortcomings, in priority order, are:
    Research, critique, and judge now have authoritative JSON contracts, and intake is now source-backed and contract-validated, but publication and adapter compatibility paths still sit outside one canonical normalized execution model.
 
 2. Validation semantics are still fragmented across the workflow.
-   Structured-stage validation is better than before, but lexical extraction, stage validation, final-artifact gating, and repo validation are still separate mechanisms with different failure semantics.
+   The claim-register substrate is now shared across structured sidecars, standalone extraction, readiness checks, and final publication, but stage validation, intake validation, and publication/source policy still live in separate modules rather than one fully unified contract engine.
 
 3. Adapter contracts are still weaker than they should be.
-   The runner now passes explicit structured-output paths and a source-registry path and no longer synthesizes structured JSON from markdown, but it still carries stdout-recovery compatibility paths for some adapters.
+   The runner now passes explicit structured-output paths, uses deterministic adapter executors, pre-qualifies adapters before structured execution, and supports stronger regression profiles with stale-aware reruns, sanitized prompt-packet-derived probes, and frozen realistic fixtures. The remaining weakness is provider compliance over time: some CLIs can still drift or degrade on real prompts even after passing compact and realistic regression fixtures.
 
 4. Source identity is now modeled, but source governance is still shallow.
-   A run-level `sources.json` exists, source IDs must resolve, and source classes now exist, but the system still does not enforce richer freshness, authority scoring, or stronger provenance policies.
+   A run-level `sources.json` exists, source IDs must resolve, and source records now carry basic policy metadata and outcomes, but the system still does not enforce richer freshness thresholds, authority scoring, or topic-level conflict policy.
 
 5. Provenance-versus-evidence separation is only partially semantic.
    Structured stages now support typed support links, explicit claim dependencies, and source-class-aware derivation, but markdown-only extraction and some downstream compatibility paths still infer meaning from token shapes.
 
-6. Workflow state is file-based and non-transactional.
-   `workflow-state.json`, stage outputs, sidecars, and logs can still drift during crashes or partial parallel failures. The design is recoverable, but not atomic.
+6. Workflow state is still file-based.
+   The runner now journals lifecycle events and rebuilds `workflow-state.json` from that journal, and state writes are atomic temp-file replacements. The remaining weakness is that the system is still file-based rather than a fully transactional artifact database.
 
 7. The claim model is richer than before but still not fully integrated into downstream logic.
-   The extractor recognizes more classes now, but validation and artifact generation still reason over simplified subsets of the model.
+   The extractor and publication path now distinguish truth-gated classes from non-gating adjudication classes and explicitly flag unsupported recommendations, but downstream logic still reasons over simplified subsets of the model and does not yet treat topic-level disagreement as a first-class adjudication object.
 
 8. The system still depends heavily on prompt compliance.
    Prompt contracts are stricter than before, but malformed citation labels, weak source definitions, and structurally awkward outputs are still possible because prompts are guidance, not enforcement.
 
-10. Provider capability symmetry is still incomplete.
+9. Provider capability symmetry is still incomplete.
    Stage-provider selection is now job-configurable, but adapters do not expose equivalent control surfaces. Gemini and Claude support explicit model flags; Antigravity currently does not, so model configurability remains adapter-dependent.
 
-9. Documentation status can drift behind implementation.
+10. Documentation status can drift behind implementation.
    This is lower impact than the structural issues above, but it still matters because architectural intent and implemented reality diverge quickly in a repo like this.
 
 ## Target Claim Model
@@ -184,12 +215,14 @@ Target classes:
 - `inference`
 - `evaluation`
 - `decision`
+- `recommendation`
+- `assumption`
 - `open_question`
 - `evidence_gap`
 - `artifact_reference`
 - `report_structure`
 
-Not all classes belong in the same validation path. In particular, `artifact_reference` and `report_structure` should not be treated as first-class truth claims.
+Not all classes belong in the same validation path. In particular, `artifact_reference` and `report_structure` should not be treated as first-class truth claims, and `evaluation` remains non-gating in the current implementation because it still carries disagreement framing and confidence summaries that are not always world claims.
 
 ## Provenance And Evidence
 
@@ -224,7 +257,7 @@ Target structured shape:
 
 Priority order for the next iteration:
 
-1. remove stdout artifact-recovery compatibility paths once adapters comply with deterministic structured writes
+1. continue strengthening adapter qualification from the current realistic frozen fixtures toward larger prompt packets and stronger periodic live provider drift checks
 2. strengthen source-registry governance beyond source classes and ID resolution
 3. unify publication around the same normalized contract model as the core execution stages
 4. tighten intake and stage schemas further where live runs expose underconstrained fields

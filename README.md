@@ -67,6 +67,7 @@ For the current design assessment and forward plan, see:
 
 - [Product Spec](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/product-spec.md)
 - [Redesign Proposal](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/redesign-proposal.md)
+- [Operator Playbook](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/operator-playbook.md)
 
 ## Operator Quickstart
 
@@ -135,6 +136,7 @@ This creates:
 - `runs/run-001/stage-outputs/`
 - `runs/run-001/stage-claims/`
 - `runs/run-001/sources.json`
+- `runs/run-001/events.jsonl`
 - `runs/run-001/workflow-state.json`
 - `runs/run-001/WORK_ORDER.md`
 - `runs/run-001/audit/`
@@ -174,6 +176,7 @@ The run-level source registry lives at:
 `~/Projects/research-hub/jobs/my-project-1/runs/run-001/sources.json`
 
 That registry now normalizes source records into explicit source classes such as `external_evidence`, `job_input`, and `recovered_provisional`.
+It now also carries first-pass evidence-policy metadata such as `authority_tier`, `evidence_kind`, `freshness_status`, `supports_world_claims`, `supports_process_claims`, `policy_outcome`, and `policy_notes`.
 
 Structured research, critique, and judge JSON may also carry typed `support_links` on claim-like items. These links distinguish semantic roles such as `evidence`, `context`, `challenge`, and `provenance` instead of relying only on flat citation lists. When a later claim depends on an earlier local claim or fact, that dependency should be recorded separately in `claim_dependencies` rather than mixed into source support. `job_input` sources remain admissible evidence when they directly state current-system facts, requirements, or constraints under analysis.
 
@@ -189,13 +192,35 @@ Example:
 - critiques should consume the relevant research outputs from `stage-outputs/`
 - `judge` should consume the critique outputs from `stage-outputs/`
 - `research-a`, `research-b`, both critiques, and `judge` must produce valid structured JSON and pass source-aware citation validation before downstream workflow stages continue
-- structured stages are no longer allowed to backfill authoritative JSON from markdown; they must write JSON directly or emit recoverable structured JSON in stdout
+- structured stages are no longer allowed to backfill authoritative JSON from markdown and no longer recover authoritative JSON from stdout; they must write JSON directly to the requested structured artifact path
+- before execution, the runner now qualifies each configured provider and records the report under `runs/<run-id>/audit/adapter-qualification/`; qualification now probes intake JSON, structured source-pass JSON, structured claim-pass JSON, and markdown materialization, and intake plus all structured stages require a `structured_safe` provider classification
+- the stronger `workflow-regression` qualification profile now uses sanitized prompt-packet-derived probes for intake, research, critique, and judge instead of only toy fixture strings, so regression checks exercise real template structure as well as artifact transport
+- qualification now also exposes trust tiers rather than only coarse classes:
+  - `structured_safe_smoke`
+  - `structured_safe_regression`
+  - `structured_safe_realistic`
+- jobs may now require stronger provider trust through `workflow.execution.required_provider_trust` or `workflow.execution.stage_required_provider_trust`
+- realistic qualification packets and reference jobs now live in named fixture families under:
+  - `fixtures/adapter-qualification/families/`
+  - `fixtures/reference-job/families/`
+- `neutral` is the default family
+- domain-shaped families such as `hardware-tradeoff` and `policy-analysis` are explicit extensions rather than hidden defaults
+- if a new research area does not fit an existing family, use the neutral family first, then add a new family and customize it instead of mutating the neutral baseline
+- `scripts/create_fixture_family.py <new-family>` scaffolds a new family by copying the neutral baseline into both fixture roots
+- `scripts/run_live_drift_check.py` can execute the real workflow against one of those stable sanitized reference-job families to detect provider drift outside the normal execution path
 - every fact and world-claim inference must carry explicit evidence on that exact item; nearby citations do not satisfy the requirement
+- intake is now also executed internally as source declaration, direct fact-lineage extraction, normalization, and final merge before `01-intake.json` is accepted
 - structured stages are now executed internally as source-pass JSON, claim-pass JSON, and deterministic markdown rendering from the validated structured payload
 - source-pass and claim-pass are now strict contracts rather than soft hints: source-pass may emit only `stage` and `sources`, while claim-pass must omit `sources` and emit only the stage claim payload
 - structured substeps now write any adapter-facing scratch markdown under `runs/<run-id>/audit/substeps/`; the final `stage-outputs/*.md` artifact is runner-owned and written only after the structured stage passes validation
 - bounded repair now applies only to structurally close but invalid structured JSON; missing or unreadable structured output is treated as a hard failure rather than spending another repair call
 - decomposed structured stages now resume at substep granularity: a valid prior source-pass can be reused while only claim-pass and final rendering are rerun
+- workflow state is now journaled through append-only `events.jsonl`, and `workflow-state.json` is treated as a derived snapshot rather than the only source of truth
+- `scripts/rebuild_workflow_state.py --run-dir <run-dir>` can now reconstruct `workflow-state.json` from the event journal when the snapshot is missing or stale
+- provider runtime scorecards now live under `audit/provider-scorecards/` and persist qualification history, live-drift history, repair attempts, stage outcomes, and quarantine status
+- `workflow.execution.provider_runtime_policy` can quarantine repeated provider failures and reroute named stages through configured fallback providers
+- `scripts/provider_scorecards_report.py --job-dir <job-dir>` summarizes those scorecards
+- `quality_policy` now participates in final-artifact readiness/publication checks, and `scripts/run_quality_benchmarks.py --family neutral` runs stable benchmark fixtures under `fixtures/benchmarks/families/`
 
 The rendered prompt packets and `WORK_ORDER.md` now state these upstream artifact paths explicitly.
 
@@ -255,6 +280,8 @@ The claim register now separates:
 - `evidence_sources` = external sources that support a claim about the world
 - `unclassified_markers` = markers that could not be safely classified
 
+It also now preserves richer claim classes such as `recommendation`, `assumption`, `decision`, `open_question`, and `evidence_gap`. Final publication currently truth-gates only `fact`, `inference`, `decision`, and `recommendation`; evaluative framing remains non-gating because the current pipeline still uses it for confidence and disagreement summaries.
+
 For final outputs, provenance is useful for audit, but it is not enough evidence on its own.
 
 ### 6. Generate the final artifact
@@ -272,8 +299,12 @@ This script will fail if the claim register still contains:
 
 - uncited facts
 - uncited inferences where strict validation applies
+- uncited truth-gated claims such as unsupported decisions or recommendations
+- unsupported recommendations that carry evidence but no explicit rationale or risk accounting
 - provenance-only supported facts
 - unclassified markers
+
+It will also fail if structured source records show that a referenced source is blocked by source policy.
 
 The final artifact includes:
 
@@ -386,6 +417,7 @@ python3 scripts/execute_workflow.py \
 ```
 
 For durable provider selection, prefer job-level execution config in `config.yaml` instead of CLI role flags. The runner now supports named providers under `workflow.execution.providers` and per-stage assignment through `workflow.execution.stage_providers`, with model selection configured on the provider entry when the adapter supports it.
+Jobs may also declare `workflow.execution.provider_runtime_policy` to quarantine providers after repeated failures or live-drift regressions and reroute specific stages through named fallbacks.
 
 The automated runner uses this fixed stage order:
 
@@ -397,7 +429,37 @@ The automated runner uses this fixed stage order:
 6. `validate_job.py --final-artifact-ready`
 7. `generate_final_artifact.py`
 
-This is intentionally file-driven rather than provider-integrated. The runner passes each adapter the stage id, prompt-packet path, markdown output path, structured-output path where required, and the run-level source registry path. It waits for the expected artifact to exist and no longer contain placeholder content. For structured stages, it validates the JSON contract and cited source IDs before downstream execution continues. Markdown-to-JSON synthesis remains only as a migration fallback when a structured stage fails to write its JSON file directly.
+This is intentionally file-driven rather than provider-integrated. The runner passes each adapter the stage id, prompt-packet path, markdown output path, structured-output path where required, and the run-level source registry path. It waits for the expected artifact to exist and no longer contain placeholder content. For structured stages, it validates the JSON contract and cited source IDs before downstream execution continues. It no longer recovers authoritative artifacts out of stdout. Instead, adapter executors must materialize the requested file deterministically, and structured stages only run through providers that first qualify as `structured_safe`.
+
+You can probe an adapter directly with:
+
+```bash
+python3 scripts/qualify_adapters.py \
+  --adapter gemini \
+  --adapter-bin "$(command -v gemini)" \
+  --job-dir ~/Projects/research-hub/jobs/my-project-1
+```
+
+For the stronger stage-like regression profile, use:
+
+```bash
+python3 scripts/qualify_adapters.py \
+  --adapter gemini \
+  --adapter-bin "$(command -v gemini)" \
+  --job-dir ~/Projects/research-hub/jobs/my-project-1 \
+  --profile workflow-regression \
+  --run-dir ~/Projects/research-hub/jobs/my-project-1/runs/run-001 \
+  --provider-key gemini_judge \
+  --only-if-stale
+```
+
+`--only-if-stale` reruns regression qualification when watched inputs change, including:
+- `shared/prompts/`
+- `schemas/`
+- `scripts/`
+- the job's `config.yaml`
+
+The repo also now includes a GitHub Actions workflow at [.github/workflows/adapter-regression.yml](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/.github/workflows/adapter-regression.yml) that reruns the regression guard tests when prompts, schemas, scripts, tests, or the workflow itself change.
 
 ### 8. What is still manual
 

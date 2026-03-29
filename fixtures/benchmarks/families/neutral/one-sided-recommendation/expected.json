@@ -1,0 +1,6 @@
+{
+  "errors": [
+    "Quality gate failed: research relies on a one-sided source base.",
+    "Quality gate failed: recommendation REC-001 is supported only by disfavored sources."
+  ]
+}

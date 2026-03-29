@@ -9,8 +9,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from _stage_contracts import (
+    build_stage_json_from_markdown,
     build_claim_map_from_stage_json,
     merge_source_registry,
+    normalize_source_record,
     normalize_stage_citations,
     render_stage_markdown_from_json,
     source_quality_warnings,
@@ -22,6 +24,99 @@ from _stage_contracts import (
 
 
 class StageContractTests(unittest.TestCase):
+    def test_builds_judge_brief_improvements_from_markdown(self) -> None:
+        markdown = "\n".join(
+            [
+                "# Supported Conclusions",
+                "1. Hybrid edge architecture is feasible. [SRC-001]",
+                "",
+                "# Inferences And Synthesis Judgments",
+                "1. Thermal design is the main blocker. [SRC-001, SRC-002] Confidence: high",
+                "",
+                "# Unresolved Disagreements",
+                "1. Platform choice remains open.",
+                "",
+                "# Confidence Assessment",
+                "- High confidence in feasibility.",
+                "",
+                "# Evidence Gaps",
+                "- Measured enclosure thermals under sustained compute load.",
+                "",
+                "# Brief Improvement Recommendations",
+                "1. Missing input: Deployment budget ceiling. Why it matters: Cost constraints may change the ranking. Expected impact: Would improve recommendation specificity. Priority: high",
+                "",
+                "# Rationale And Traceability",
+                "- Judge preserved the power dispute for auditability.",
+                "",
+                "# Recommended Final Artifact Structure",
+                "- Executive Summary",
+            ]
+        )
+
+        payload = build_stage_json_from_markdown("judge", markdown)
+
+        self.assertEqual(
+            payload["brief_improvements"],
+            [
+                {
+                    "missing_input": "Deployment budget ceiling",
+                    "why_it_matters": "Cost constraints may change the ranking",
+                    "expected_impact": "Would improve recommendation specificity",
+                    "priority": "high",
+                }
+            ],
+        )
+
+    def test_normalize_source_record_populates_policy_fields(self) -> None:
+        normalized = normalize_source_record(
+            {
+                "id": "SRC-001",
+                "title": "Vendor product page",
+                "type": "marketing page",
+                "authority": "vendor",
+                "locator": "https://example.com/product",
+            }
+        )
+
+        self.assertEqual(normalized["source_class"], "external_evidence")
+        self.assertEqual(normalized["evidence_kind"], "marketing")
+        self.assertEqual(normalized["policy_outcome"], "disfavored")
+        self.assertFalse(normalized["supports_process_claims"])
+        self.assertTrue(normalized["supports_world_claims"])
+
+    def test_build_claim_map_preserves_explicit_claim_class(self) -> None:
+        payload = {
+            "stage": "judge",
+            "supported_conclusions": [],
+            "synthesis_judgments": [
+                {
+                    "id": "J-001",
+                    "text": "Option A should be recommended.",
+                    "claim_class": "recommendation",
+                    "evidence_sources": ["SRC-001"],
+                    "confidence": "high",
+                }
+            ],
+            "unresolved_disagreements": [],
+            "confidence_assessment": [],
+            "evidence_gaps": [],
+            "rationale": [],
+            "recommended_artifact_structure": [],
+            "sources": [
+                {
+                    "id": "SRC-001",
+                    "title": "Vendor source",
+                    "type": "official documentation",
+                    "authority": "vendor",
+                    "locator": "https://example.com/src-001",
+                }
+            ],
+        }
+
+        claim_map = build_claim_map_from_stage_json("judge", payload)
+
+        self.assertEqual(claim_map["claims"][0]["type"], "recommendation")
+
     def test_accepts_structured_critique_payload(self) -> None:
         payload = {
             "stage": "critique-a-on-b",
@@ -146,6 +241,39 @@ class StageContractTests(unittest.TestCase):
         errors = validate_claim_pass_payload("research-a", payload)
 
         self.assertTrue(any("must not include sources" in error.lower() for error in errors))
+
+    def test_rejects_duplicate_source_ids(self) -> None:
+        payload = {
+            "stage": "research-a",
+            "summary": [{"text": "Summary.", "evidence_sources": ["SRC-001"]}],
+            "facts": [{"id": "F-001", "text": "Fact.", "evidence_sources": ["SRC-001"]}],
+            "inferences": [{"id": "I-001", "text": "Inference.", "evidence_sources": ["SRC-001"], "confidence": "high"}],
+            "uncertainties": [],
+            "evidence_gaps": [],
+            "preliminary_disagreements": [],
+            "source_evaluation": [],
+            "sources": [
+                {"id": "SRC-001", "title": "Source A", "type": "document", "authority": "vendor", "locator": "https://example.com/a"},
+                {"id": "SRC-001", "title": "Source B", "type": "document", "authority": "vendor", "locator": "https://example.com/b"},
+            ],
+        }
+        registry = source_registry_placeholder("run-xyz")
+
+        errors = validate_stage_json("research-a", payload, registry)
+
+        self.assertTrue(any("duplicate" in error.lower() for error in errors))
+
+    def test_source_quality_warnings_flag_duplicate_external_locators(self) -> None:
+        payload = {
+            "sources": [
+                {"id": "SRC-001", "title": "Source A", "type": "document", "authority": "vendor", "locator": "https://example.com/same"},
+                {"id": "SRC-002", "title": "Source B", "type": "document", "authority": "vendor", "locator": "https://example.com/same"},
+            ]
+        }
+
+        warnings = source_quality_warnings(payload)
+
+        self.assertTrue(any("duplicates external locator" in warning.lower() for warning in warnings))
 
     def test_semantic_support_links_distinguish_evidence_from_provenance(self) -> None:
         payload = {
@@ -938,7 +1066,47 @@ class StageContractTests(unittest.TestCase):
         self.assertTrue(any(claim["text"] == "Platform choice" for claim in claim_map["claims"]))
         self.assertTrue(any(claim["text"] == "Executive Summary" for claim in claim_map["claims"]))
         self.assertIn("Platform choice", markdown)
-        self.assertIn("High confidence in feasibility, medium confidence in platform choice.", markdown)
+
+    def test_renders_judge_brief_improvement_section_when_present(self) -> None:
+        payload = {
+            "stage": "judge",
+            "supported_conclusions": [
+                {"id": "SC-001", "text": "Hybrid edge architecture is feasible.", "evidence_sources": ["SRC-001"]}
+            ],
+            "synthesis_judgments": [
+                {
+                    "id": "SJ-001",
+                    "text": "Thermal design is the main blocker.",
+                    "evidence_sources": ["SRC-001", "SRC-002"],
+                    "confidence": "high",
+                }
+            ],
+            "unresolved_disagreements": ["Platform choice remains open."],
+            "confidence_assessment": ["High confidence in feasibility."],
+            "evidence_gaps": ["Measured enclosure thermals under sustained compute load."],
+            "brief_improvements": [
+                {
+                    "missing_input": "Deployment budget ceiling",
+                    "why_it_matters": "Cost constraints may change the ranking.",
+                    "expected_impact": "Would improve recommendation specificity.",
+                    "priority": "high",
+                }
+            ],
+            "rationale": "Judge preserved the power dispute for auditability.",
+            "recommended_artifact_structure": {
+                "sections": ["Executive Summary", "Architecture", "Thermal Risks", "Roadmap"]
+            },
+            "sources": [
+                {"id": "SRC-001", "title": "Source 1", "type": "document", "authority": "vendor", "locator": "https://example.com/src-001"},
+                {"id": "SRC-002", "title": "Source 2", "type": "document", "authority": "vendor", "locator": "https://example.com/src-002"},
+            ],
+        }
+
+        markdown = render_stage_markdown_from_json("judge", payload)
+
+        self.assertIn("# Brief Improvement Recommendations", markdown)
+        self.assertIn("Deployment budget ceiling", markdown)
+        self.assertIn("- High confidence in feasibility.", markdown)
         self.assertIn("- Executive Summary", markdown)
 
 

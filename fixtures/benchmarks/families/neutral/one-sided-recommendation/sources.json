@@ -1,0 +1,8 @@
+{
+  "SRC-001": {
+    "id": "SRC-001",
+    "source_class": "external_evidence",
+    "policy_outcome": "disfavored",
+    "authority_tier": "vendor_marketing"
+  }
+}

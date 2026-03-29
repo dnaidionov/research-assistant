@@ -6,11 +6,11 @@ import argparse
 import json
 import re
 import sys
-from collections import Counter
 from pathlib import Path
 from typing import Iterable
 
-from _stage_contracts import build_claim_map_from_stage_json
+from _claim_model import build_claim_register
+from _stage_contracts import build_claim_map_from_stage_json, normalize_source_record
 from _workflow_lib import write_json
 
 
@@ -55,8 +55,13 @@ def normalize_whitespace(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
-def classify_marker(marker: str) -> tuple[str, str]:
+def classify_marker(marker: str, source_index: dict[str, dict[str, str]] | None = None) -> tuple[str, str]:
     normalized = normalize_whitespace(marker)
+    if source_index and normalized in source_index:
+        source_class = source_index[normalized].get("source_class", "")
+        if source_class == "workflow_provenance":
+            return "provenance", normalized
+        return "evidence", normalized
     if EVIDENCE_TOKEN_PATTERN.match(normalized):
         return "evidence", normalized
     if PROVENANCE_TOKEN_PATTERN.match(normalized):
@@ -64,7 +69,7 @@ def classify_marker(marker: str) -> tuple[str, str]:
     return "unclassified", normalized
 
 
-def extract_citations(text: str) -> tuple[list[str], list[str], list[str]]:
+def extract_citations(text: str, source_index: dict[str, dict[str, str]] | None = None) -> tuple[list[str], list[str], list[str]]:
     provenance: list[str] = []
     evidence_sources: list[str] = []
     unclassified_markers: list[str] = []
@@ -73,7 +78,7 @@ def extract_citations(text: str) -> tuple[list[str], list[str], list[str]]:
             candidate = normalize_whitespace(part)
             if not candidate:
                 continue
-            marker_type, normalized = classify_marker(candidate)
+            marker_type, normalized = classify_marker(candidate, source_index)
             if marker_type == "evidence":
                 evidence_sources.append(normalized)
             elif marker_type == "provenance":
@@ -224,8 +229,14 @@ def iter_candidate_claims(markdown: str) -> Iterable[tuple[int, str | None, str]
                 yield line_number, active_heading, atomic_unit
 
 
-def build_claim_record(index: int, line_number: int, heading: str | None, raw_text: str) -> dict[str, object]:
-    provenance, evidence_sources, unclassified_markers = extract_citations(raw_text)
+def build_claim_record(
+    index: int,
+    line_number: int,
+    heading: str | None,
+    raw_text: str,
+    source_index: dict[str, dict[str, str]] | None = None,
+) -> dict[str, object]:
+    provenance, evidence_sources, unclassified_markers = extract_citations(raw_text, source_index)
     confidence, without_confidence = extract_confidence(raw_text)
     text = strip_citations(without_confidence)
     text = text.rstrip(" ;,")
@@ -246,7 +257,7 @@ def build_claim_record(index: int, line_number: int, heading: str | None, raw_te
     return record
 
 
-def extract_claims(markdown: str) -> list[dict[str, object]]:
+def extract_claims(markdown: str, source_index: dict[str, dict[str, str]] | None = None) -> list[dict[str, object]]:
     claims: list[dict[str, object]] = []
     seen_keys: set[tuple[str, int]] = set()
 
@@ -260,43 +271,9 @@ def extract_claims(markdown: str) -> list[dict[str, object]]:
         if not preview or key in seen_keys:
             continue
         seen_keys.add(key)
-        claims.append(build_claim_record(len(claims) + 1, line_number, heading, raw_text))
+        claims.append(build_claim_record(len(claims) + 1, line_number, heading, raw_text, source_index))
 
     return claims
-
-
-def build_payload(claims: list[dict[str, object]]) -> dict[str, object]:
-    claim_type_counts = Counter(str(claim["type"]) for claim in claims)
-    uncited_facts = [
-        claim["id"]
-        for claim in claims
-        if claim["type"] == "fact" and not claim["evidence_sources"]
-    ]
-    uncited_inferences = [
-        claim["id"]
-        for claim in claims
-        if claim["type"] == "inference" and not claim["evidence_sources"]
-    ]
-    provenance_only_facts = [
-        claim["id"]
-        for claim in claims
-        if claim["type"] == "fact" and not claim["evidence_sources"] and claim["provenance"]
-    ]
-    claims_with_unclassified_markers = [
-        claim["id"] for claim in claims if claim.get("unclassified_markers")
-    ]
-    return {
-        "claims": claims,
-        "summary": {
-            "claim_type_counts": dict(sorted(claim_type_counts.items())),
-            "claims_with_unclassified_markers": claims_with_unclassified_markers,
-            "fact_count": claim_type_counts.get("fact", 0),
-            "inference_count": claim_type_counts.get("inference", 0),
-            "provenance_only_fact_ids": provenance_only_facts,
-            "uncited_fact_ids": uncited_facts,
-            "uncited_inference_ids": uncited_inferences,
-        },
-    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -308,6 +285,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--input", required=True, help="Path to the markdown input file.")
     parser.add_argument("--output", required=True, help="Path to the JSON claim register to write.")
+    parser.add_argument("--source-registry", help="Optional path to a source registry for semantic citation classification during markdown extraction.")
     parser.add_argument(
         "--strict",
         action="store_true",
@@ -320,6 +298,7 @@ def main() -> int:
     args = parse_args()
     input_path = Path(args.input).expanduser()
     output_path = Path(args.output).expanduser()
+    source_registry_path = Path(args.source_registry).expanduser() if args.source_registry else None
 
     if not input_path.exists():
         print(f"Input file not found: {input_path}", file=sys.stderr)
@@ -329,6 +308,21 @@ def main() -> int:
         return 1
 
     try:
+        source_index: dict[str, dict[str, str]] | None = None
+        if source_registry_path is not None and source_registry_path.is_file():
+            registry_payload = json.loads(source_registry_path.read_text(encoding="utf-8"))
+            source_index = {}
+            for source in registry_payload.get("sources", []):
+                if not isinstance(source, dict):
+                    continue
+                normalized_source = normalize_source_record(source)
+                source_id = normalized_source.get("id")
+                if isinstance(source_id, str) and source_id.strip():
+                    source_index[source_id] = {
+                        key: str(value)
+                        for key, value in normalized_source.items()
+                        if isinstance(value, str)
+                    }
         if input_path.suffix.lower() == ".json":
             structured_payload = json.loads(input_path.read_text(encoding="utf-8"))
             stage_id = structured_payload.get("stage")
@@ -338,8 +332,8 @@ def main() -> int:
                 raise ValueError("JSON input is not a recognized structured stage artifact.")
         else:
             markdown = input_path.read_text(encoding="utf-8")
-            claims = extract_claims(markdown)
-            payload = build_payload(claims)
+            claims = extract_claims(markdown, source_index)
+            payload = build_claim_register(claims)
         write_json(output_path, payload)
     except UnicodeDecodeError:
         print(f"Could not decode input file as UTF-8: {input_path}", file=sys.stderr)

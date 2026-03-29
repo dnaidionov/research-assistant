@@ -1,0 +1,33 @@
+name: Adapter Regression
+
+on:
+  pull_request:
+    paths:
+      - "shared/prompts/**"
+      - "schemas/**"
+      - "scripts/**"
+      - "tests/**"
+      - ".github/workflows/adapter-regression.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "shared/prompts/**"
+      - "schemas/**"
+      - "scripts/**"
+      - "tests/**"
+      - ".github/workflows/adapter-regression.yml"
+
+jobs:
+  adapter-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run adapter regression guard tests
+        run: |
+          python3 -m unittest \
+            tests.test_adapter_regression \
+            tests.test_execute_workflow

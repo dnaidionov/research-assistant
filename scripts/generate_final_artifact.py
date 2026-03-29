@@ -8,8 +8,13 @@ import re
 import sys
 from pathlib import Path
 
-from _publication import final_artifact_input_errors, referenced_source_publication_errors
-from _stage_contracts import normalize_source_record
+from _job_config import load_quality_policy_from_path
+from _publication import (
+    build_source_index,
+    extract_reference_ids,
+    publication_readiness_errors,
+    referenced_source_publication_errors,
+)
 from _workflow_lib import write_text
 
 
@@ -23,10 +28,6 @@ REQUIRED_SECTIONS = [
 ]
 JUDGE_SECTION_PATTERN = re.compile(r"^#\s+(.+)$", re.MULTILINE)
 PLACEHOLDER_PATTERN = re.compile(r"\{.+?\}|TODO|not started|placeholder", re.IGNORECASE)
-WORKFLOW_MARKER_PATTERN = re.compile(
-    r"^(?:PASS|CRIT|JUDGE|INTAKE|RUN|STAGE|WORK[_-]?ORDER|ARTIFACT)(?:[-_][A-Z0-9]+)*$",
-    re.IGNORECASE,
-)
 
 
 def parse_args() -> argparse.Namespace:
@@ -71,18 +72,6 @@ def normalize_lines(lines: list[str]) -> list[str]:
     return normalized
 
 
-def extract_reference_ids(claims: list[dict[str, object]]) -> list[str]:
-    seen: set[str] = set()
-    refs: list[str] = []
-    for claim in claims:
-        for source in claim.get("evidence_sources", []):
-            normalized = str(source)
-            if normalized not in seen and not WORKFLOW_MARKER_PATTERN.match(normalized):
-                seen.add(normalized)
-                refs.append(normalized)
-    return refs
-
-
 def format_citation_suffix(reference_ids: list[str]) -> str:
     if not reference_ids:
         return ""
@@ -98,67 +87,6 @@ def text_from_entry(item: object) -> str:
             if isinstance(value, str) and value.strip():
                 return value.strip()
     return str(item).strip()
-
-
-def infer_job_dir_from_judge_path(judge_path: Path) -> Path | None:
-    try:
-        runs_dir = judge_path.parents[2]
-        if runs_dir.name != "runs":
-            return None
-        return judge_path.parents[3]
-    except IndexError:
-        return None
-
-
-def normalize_reference_record(reference_id: str, record: dict[str, object], judge_path: Path) -> dict[str, str]:
-    normalized_source = normalize_source_record(record)
-    title = str(normalized_source.get("title") or reference_id)
-    source_type = str(normalized_source.get("type") or "").strip()
-    authority = str(normalized_source.get("authority") or "").strip()
-    locator = str(normalized_source.get("locator") or "").strip()
-    source_class = str(normalized_source.get("source_class") or "").strip()
-    job_dir = infer_job_dir_from_judge_path(judge_path)
-
-    if source_class == "job_input" and job_dir is not None:
-        lower_title = title.lower()
-        lower_locator = locator.lower()
-        candidate_path: Path | None = None
-        if source_type == "project_brief" or "brief" in lower_title or lower_locator.endswith("brief.md") or "/prompt-packets/" in lower_locator:
-            candidate_path = job_dir / "brief.md"
-            title = "Job brief"
-            authority = "Job input"
-        elif "config" in lower_title or lower_locator.endswith("config.yaml"):
-            candidate_path = job_dir / "config.yaml"
-            title = "Job config"
-            authority = "Job input"
-        if candidate_path is not None and candidate_path.is_file():
-            title = "Job brief"
-            locator = str(candidate_path)
-            if candidate_path.name == "config.yaml":
-                title = "Job config"
-
-    return {
-        "id": reference_id,
-        "title": title,
-        "type": source_type,
-        "authority": authority,
-        "source_class": source_class,
-        "locator": locator,
-    }
-
-
-def build_source_index(judge_structured_payload: dict[str, object] | None, judge_path: Path) -> dict[str, dict[str, str]]:
-    if not judge_structured_payload:
-        return {}
-    index: dict[str, dict[str, str]] = {}
-    for source in judge_structured_payload.get("sources", []):
-        if not isinstance(source, dict):
-            continue
-        source_id = source.get("id")
-        if not isinstance(source_id, str) or not source_id.strip():
-            continue
-        index[source_id] = normalize_reference_record(source_id, source, judge_path)
-    return index
 
 
 def render_reference_lines(reference_ids: list[str], source_index: dict[str, dict[str, str]]) -> list[str]:
@@ -227,8 +155,49 @@ def render_structured_confidence_lines(confidence_assessment: object) -> list[st
     return []
 
 
-def validate_inputs(judge_text: str, payload: dict[str, object]) -> None:
-    errors = final_artifact_input_errors(judge_text, payload)
+def render_brief_improvement_lines(brief_improvements: object) -> list[str]:
+    if not isinstance(brief_improvements, list):
+        return []
+    lines: list[str] = []
+    for item in brief_improvements:
+        if not isinstance(item, dict):
+            text = text_from_entry(item)
+            if text:
+                lines.append(text)
+            continue
+        missing_input = str(item.get("missing_input", "")).strip().rstrip(".")
+        why_it_matters = str(item.get("why_it_matters", "")).strip().rstrip(".")
+        expected_impact = str(item.get("expected_impact", "")).strip().rstrip(".")
+        priority = str(item.get("priority", "")).strip().lower()
+        parts: list[str] = []
+        if missing_input:
+            parts.append(f"Missing input: {missing_input}.")
+        if why_it_matters:
+            parts.append(f"Why it matters: {why_it_matters}.")
+        if expected_impact:
+            parts.append(f"Expected impact: {expected_impact}.")
+        if priority:
+            parts.append(f"Priority: {priority}")
+        if parts:
+            lines.append(" ".join(parts).strip())
+    return lines
+
+
+def validate_inputs(
+    judge_text: str,
+    payload: dict[str, object],
+    *,
+    judge_structured_payload: dict[str, object] | None = None,
+    judge_path: Path | None = None,
+    config_path: Path | None = None,
+) -> None:
+    errors = publication_readiness_errors(
+        judge_text,
+        payload,
+        judge_structured_payload=judge_structured_payload,
+        judge_path=judge_path,
+        quality_policy=load_quality_policy_from_path(config_path),
+    )
     if errors:
         normalized = errors[0]
         normalized = normalized.replace("Claim register contains ", "Cannot generate final artifact: ")
@@ -298,6 +267,7 @@ def render_artifact(
 
         confidence = render_structured_confidence_lines(judge_structured_payload.get("confidence_assessment"))
         open_questions = normalize_lines([text_from_entry(item) for item in judge_structured_payload.get("evidence_gaps", []) if text_from_entry(item)])
+        brief_improvements = render_brief_improvement_lines(judge_structured_payload.get("brief_improvements"))
     else:
         executive_summary = normalize_lines(sections.get("Supported Conclusions", []))
         if not executive_summary:
@@ -318,6 +288,7 @@ def render_artifact(
         recommendation = choose_recommendation(claims, sections)
         confidence = normalize_lines(sections.get("Confidence Assessment", []))
         open_questions = normalize_lines(sections.get("Evidence Gaps", []))
+        brief_improvements = normalize_lines(sections.get("Brief Improvement Recommendations", []))
 
     if not confidence:
         confidence = ["Confidence remains limited where source coverage is incomplete or evidence is mixed."]
@@ -327,6 +298,8 @@ def render_artifact(
             for claim in claims
             if claim.get("type") in {"open_question", "evidence_gap"}
         ][:5]
+    if not brief_improvements:
+        brief_improvements = []
 
     references = used_reference_ids or extract_reference_ids(claims)
     if not references:
@@ -353,16 +326,29 @@ def render_artifact(
         "",
         *[f"- {line}" for line in confidence],
         "",
-        "# References",
-        "",
-        *reference_lines,
-        "",
-        "# Open Questions",
-        "",
-        *[f"- {line}" for line in open_questions],
-        "",
-        "<!-- Workflow provenance remains in the audit artifacts and claim register, not in the user-facing references list. -->",
     ]
+    if brief_improvements:
+        parts.extend(
+            [
+                "# Brief Improvement Recommendations",
+                "",
+                *[f"- {line}" for line in brief_improvements],
+                "",
+            ]
+        )
+    parts.extend(
+        [
+            "# References",
+            "",
+            *reference_lines,
+            "",
+            "# Open Questions",
+            "",
+            *[f"- {line}" for line in open_questions],
+            "",
+            "<!-- Workflow provenance remains in the audit artifacts and claim register, not in the user-facing references list. -->",
+        ]
+    )
     artifact = "\n".join(parts).rstrip() + "\n"
     if PLACEHOLDER_PATTERN.search(artifact):
         raise ValueError("Generated artifact contains unresolved placeholder or template residue.")
@@ -382,12 +368,19 @@ def main() -> int:
     )
     claims_path = Path(args.claim_register).expanduser()
     output_path = Path(args.output).expanduser()
+    config_path = Path(args.config).expanduser() if args.config else None
 
     try:
         judge_text = judge_path.read_text(encoding="utf-8")
         judge_structured_payload = load_json(judge_structured_path) if judge_structured_path.is_file() else None
         payload = load_json(claims_path)
-        validate_inputs(judge_text, payload)
+        validate_inputs(
+            judge_text,
+            payload,
+            judge_structured_payload=judge_structured_payload,
+            judge_path=judge_path,
+            config_path=config_path,
+        )
         artifact = render_artifact(
             judge_text,
             payload,

@@ -1,0 +1,6 @@
+topic: reference-job-hardware-tradeoff
+requirements:
+  require_citations: true
+workflow:
+  execution:
+    required_provider_trust: structured_safe_realistic

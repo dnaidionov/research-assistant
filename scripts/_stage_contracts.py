@@ -8,6 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 from urllib.parse import urlparse
 
+from _claim_model import build_claim_register
 from _workflow_lib import write_json
 
 
@@ -84,6 +85,10 @@ STAGE_JSON_KEYS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+OPTIONAL_STAGE_JSON_KEYS: dict[str, tuple[str, ...]] = {
+    "judge": ("brief_improvements",),
+}
+
 SOURCE_PASS_KEYS = ("stage", "sources")
 
 
@@ -95,7 +100,8 @@ def stage_claim_keys(stage_id: str) -> tuple[str, ...]:
     expected_keys = STAGE_JSON_KEYS.get(stage_id)
     if expected_keys is None:
         raise KeyError(f"Stage {stage_id} does not have a structured contract.")
-    return tuple(key for key in expected_keys if key != "sources")
+    optional_keys = OPTIONAL_STAGE_JSON_KEYS.get(stage_id, ())
+    return tuple(key for key in (*expected_keys, *optional_keys) if key != "sources")
 
 
 def stage_structured_output_path(run_dir: Path, stage_id: str) -> Path:
@@ -228,8 +234,7 @@ def default_source_record(source_id: str, stage_id: str) -> dict[str, str]:
 def normalize_source_record(source: dict[str, object]) -> dict[str, object]:
     normalized = dict(source)
     source_class = normalized.get("source_class")
-    if isinstance(source_class, str) and source_class in SOURCE_CLASSES:
-        return normalized
+    explicit_source_class = isinstance(source_class, str) and bool(source_class.strip())
 
     source_type = str(normalized.get("type") or "").strip().lower()
     authority = str(normalized.get("authority") or "").strip()
@@ -253,21 +258,134 @@ def normalize_source_record(source: dict[str, object]) -> dict[str, object]:
             authority == RECOVERED_SOURCE_AUTHORITY or acquisition == "recovered_from_markdown"
         ):
             normalized["source_class"] = "recovered_provisional"
-            return normalized
-        return normalized
+        elif normalized_class in SOURCE_CLASSES:
+            normalized["source_class"] = normalized_class
 
-    if authority == RECOVERED_SOURCE_AUTHORITY or acquisition == "recovered_from_markdown":
-        normalized["source_class"] = "recovered_provisional"
-    elif source_type in {"project_brief", "job_input", "job_config"}:
-        normalized["source_class"] = "job_input"
-    elif source_type in {"workflow_artifact", "workflow_provenance"} or locator.startswith("urn:workflow:"):
-        normalized["source_class"] = "workflow_provenance"
-    else:
-        normalized["source_class"] = "external_evidence"
+    if normalized.get("source_class") not in SOURCE_CLASSES and not explicit_source_class:
+        if authority == RECOVERED_SOURCE_AUTHORITY or acquisition == "recovered_from_markdown":
+            normalized["source_class"] = "recovered_provisional"
+        elif source_type in {"project_brief", "job_input", "job_config"}:
+            normalized["source_class"] = "job_input"
+        elif source_type in {"workflow_artifact", "workflow_provenance"} or locator.startswith("urn:workflow:"):
+            normalized["source_class"] = "workflow_provenance"
+        else:
+            normalized["source_class"] = "external_evidence"
+
+    normalized.setdefault("evidence_kind", _infer_evidence_kind(normalized))
+    normalized.setdefault("authority_tier", _infer_authority_tier(normalized))
+    normalized.setdefault("freshness_status", _infer_freshness_status(normalized))
+    if "publication_date" not in normalized and isinstance(normalized.get("freshness_date"), str):
+        normalized["publication_date"] = normalized["freshness_date"]
+    support_flags = _infer_support_flags(normalized)
+    normalized.setdefault("supports_world_claims", support_flags["supports_world_claims"])
+    normalized.setdefault("supports_process_claims", support_flags["supports_process_claims"])
+    normalized.setdefault("policy_outcome", _infer_policy_outcome(normalized))
+    normalized.setdefault("policy_notes", _infer_policy_notes(normalized))
     return normalized
 
 
+def _infer_evidence_kind(source: dict[str, object]) -> str:
+    source_class = str(source.get("source_class") or "").strip()
+    source_type = str(source.get("type") or "").strip().lower()
+    if source_class == "job_input":
+        return "job_input"
+    if source_class == "workflow_provenance":
+        return "workflow_trace"
+    if source_class == "recovered_provisional":
+        return "recovered_artifact"
+    if "marketing" in source_type:
+        return "marketing"
+    if any(token in source_type for token in ("official documentation", "datasheet", "specification", "spec sheet")):
+        return "official_documentation"
+    if any(token in source_type for token in ("technical note", "technical report", "benchmark", "paper", "report")):
+        return "technical_report"
+    return "external_report"
+
+
+def _infer_authority_tier(source: dict[str, object]) -> str:
+    source_class = str(source.get("source_class") or "").strip()
+    evidence_kind = str(source.get("evidence_kind") or "").strip()
+    authority = str(source.get("authority") or "").strip().lower()
+    if source_class == "job_input":
+        return "primary_input"
+    if source_class == "workflow_provenance":
+        return "workflow_only"
+    if source_class == "recovered_provisional":
+        return "provisional_recovery"
+    if evidence_kind == "marketing":
+        return "vendor_marketing"
+    if evidence_kind == "official_documentation":
+        return "primary_vendor"
+    if evidence_kind == "technical_report" and authority == "vendor":
+        return "secondary_vendor"
+    return "unknown"
+
+
+def _infer_freshness_status(source: dict[str, object]) -> str:
+    freshness_status = str(source.get("freshness_status") or "").strip()
+    if freshness_status:
+        return freshness_status
+    publication_date = str(source.get("publication_date") or source.get("freshness_date") or "").strip()
+    return "undated" if publication_date else "unknown"
+
+
+def _infer_support_flags(source: dict[str, object]) -> dict[str, bool]:
+    source_class = str(source.get("source_class") or "").strip()
+    evidence_kind = str(source.get("evidence_kind") or "").strip()
+    if source_class == "workflow_provenance":
+        return {"supports_world_claims": False, "supports_process_claims": True}
+    if source_class == "recovered_provisional":
+        return {"supports_world_claims": False, "supports_process_claims": False}
+    if source_class == "job_input":
+        return {"supports_world_claims": True, "supports_process_claims": False}
+    if evidence_kind == "marketing":
+        return {"supports_world_claims": True, "supports_process_claims": False}
+    return {"supports_world_claims": True, "supports_process_claims": False}
+
+
+def _infer_policy_outcome(source: dict[str, object]) -> str:
+    source_class = str(source.get("source_class") or "").strip()
+    evidence_kind = str(source.get("evidence_kind") or "").strip()
+    freshness_status = str(source.get("freshness_status") or "").strip()
+    explicit = str(source.get("policy_outcome") or "").strip()
+    if explicit in {"allowed", "allowed_with_warning", "disfavored", "blocked"}:
+        return explicit
+    if source_class in {"workflow_provenance", "recovered_provisional"}:
+        return "blocked"
+    if evidence_kind == "marketing":
+        return "disfavored"
+    if freshness_status == "stale":
+        return "allowed_with_warning"
+    return "allowed"
+
+
+def _infer_policy_notes(source: dict[str, object]) -> list[str]:
+    explicit = source.get("policy_notes")
+    if isinstance(explicit, list):
+        return [str(note).strip() for note in explicit if str(note).strip()]
+    if isinstance(explicit, str) and explicit.strip():
+        return [explicit.strip()]
+    source_class = str(source.get("source_class") or "").strip()
+    evidence_kind = str(source.get("evidence_kind") or "").strip()
+    freshness_status = str(source.get("freshness_status") or "").strip()
+    if source_class == "workflow_provenance":
+        return ["Workflow provenance is not user-facing evidence."]
+    if source_class == "recovered_provisional":
+        return ["Recovered provisional source is not publication-safe evidence."]
+    if evidence_kind == "marketing":
+        return ["Marketing-only source is disfavored for final publication."]
+    if freshness_status == "stale":
+        return ["Source is stale and should be corroborated by fresher evidence."]
+    return []
+
+
 def source_supports_world_claims(source_record: dict[str, str]) -> bool:
+    if "supports_world_claims" in source_record:
+        value = source_record.get("supports_world_claims")
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.lower() == "true"
     return source_record.get("source_class") in {"external_evidence", "job_input"}
 
 
@@ -284,18 +402,28 @@ def source_quality_warnings(payload: dict[str, object]) -> list[str]:
     sources = payload.get("sources", [])
     if not isinstance(sources, list):
         return warnings
+    seen_external_locators: dict[str, str] = {}
     for position, source in enumerate(sources, start=1):
         if not isinstance(source, dict):
             continue
         normalized_source = normalize_source_record(source)
         source_class = str(normalized_source.get("source_class") or "")
         locator = str(normalized_source.get("locator") or "").strip()
+        source_id = str(normalized_source.get("id") or "").strip()
         if source_class == "external_evidence" and BARE_DOMAIN_PATTERN.match(locator):
             warnings.append(f"sources[{position}].locator uses a bare domain; prefer a specific page URL when available.")
         if source_class == "external_evidence" and external_locator_lacks_exact_location(locator):
             warnings.append(
                 f"sources[{position}].locator does not retain the exact location used; prefer the specific page or file locator instead of a root or degraded locator."
             )
+        if source_class == "external_evidence" and locator:
+            previous_source_id = seen_external_locators.get(locator)
+            if previous_source_id and previous_source_id != source_id:
+                warnings.append(
+                    f"sources[{position}].locator duplicates external locator {locator} already used by {previous_source_id}; prefer one canonical source ID per locator."
+                )
+            elif source_id:
+                seen_external_locators[locator] = source_id
         if source_class == "job_input" and ("/prompt-packets/" in locator or locator == "__PROMPT_PACKET__"):
             warnings.append(
                 f"sources[{position}].locator points to a prompt packet; prefer the canonical job artifact such as brief.md or config.yaml."
@@ -504,6 +632,38 @@ def _build_source_evaluation(lines: list[str]) -> list[dict[str, object]]:
     return entries
 
 
+def _build_brief_improvements(lines: list[str]) -> list[dict[str, str]]:
+    pattern = re.compile(
+        r"^Missing input:\s*(?P<missing>.+?)\.\s+"
+        r"Why it matters:\s*(?P<why>.+?)\.\s+"
+        r"Expected impact:\s*(?P<impact>.+?)"
+        r"(?:\.\s+Priority:\s*(?P<priority>low|medium|high))?\.?$",
+        re.IGNORECASE,
+    )
+    improvements: list[dict[str, str]] = []
+    for entry in collect_numbered_items(lines):
+        normalized_entry = strip_citations_and_confidence(entry)
+        match = pattern.match(normalized_entry)
+        if match:
+            record = {
+                "missing_input": match.group("missing").strip().rstrip("."),
+                "why_it_matters": match.group("why").strip().rstrip("."),
+                "expected_impact": match.group("impact").strip().rstrip("."),
+            }
+            priority = match.group("priority")
+            if priority:
+                record["priority"] = priority.lower()
+            improvements.append(record)
+            continue
+        fallback = {
+            "missing_input": normalized_entry.rstrip("."),
+            "why_it_matters": "Needs clarification from the requester",
+            "expected_impact": "Would improve analysis quality and decision specificity",
+        }
+        improvements.append(fallback)
+    return improvements
+
+
 def _collect_source_records(stage_id: str, payload: dict[str, object]) -> list[dict[str, str]]:
     source_ids: list[str] = []
     for key, value in payload.items():
@@ -566,6 +726,7 @@ def build_stage_json_from_markdown(stage_id: str, markdown: str) -> dict[str, ob
             "unresolved_disagreements": _build_text_entries(sections.get("Unresolved Disagreements", [])),
             "confidence_assessment": _build_text_entries(sections.get("Confidence Assessment", [])),
             "evidence_gaps": _build_text_entries(sections.get("Evidence Gaps", [])),
+            "brief_improvements": _build_brief_improvements(sections.get("Brief Improvement Recommendations", [])),
             "rationale": _build_text_entries(sections.get("Rationale And Traceability", [])),
             "recommended_artifact_structure": [entry["text"] for entry in _build_text_entries(sections.get("Recommended Final Artifact Structure", []))],
         }
@@ -737,6 +898,34 @@ def _judge_recommended_structure_lines(items: object) -> list[str]:
     return [line if line.startswith("- ") else f"- {line}" for line in entry_lines]
 
 
+def _judge_brief_improvement_lines(items: object) -> list[str]:
+    if not isinstance(items, list):
+        return []
+    lines: list[str] = []
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            text = _entry_text(item)
+            if text:
+                lines.append(f"{index}. {text}")
+            continue
+        missing_input = str(item.get("missing_input", "")).strip().rstrip(".")
+        why_it_matters = str(item.get("why_it_matters", "")).strip().rstrip(".")
+        expected_impact = str(item.get("expected_impact", "")).strip().rstrip(".")
+        priority = str(item.get("priority", "")).strip().lower()
+        parts: list[str] = []
+        if missing_input:
+            parts.append(f"Missing input: {missing_input}.")
+        if why_it_matters:
+            parts.append(f"Why it matters: {why_it_matters}.")
+        if expected_impact:
+            parts.append(f"Expected impact: {expected_impact}.")
+        if priority:
+            parts.append(f"Priority: {priority}")
+        if parts:
+            lines.append(f"{index}. {' '.join(parts)}".rstrip())
+    return lines
+
+
 def _critique_summary_lines(items: object) -> list[str]:
     if isinstance(items, dict):
         text = _entry_text(items)
@@ -829,6 +1018,10 @@ def render_stage_markdown_from_json(stage_id: str, payload: dict[str, object]) -
         lines.extend(_judge_confidence_lines(payload.get("confidence_assessment")))
         lines.extend(["", "# Evidence Gaps", ""])
         lines.extend(_entry_lines(payload.get("evidence_gaps")))
+        brief_improvements = _judge_brief_improvement_lines(payload.get("brief_improvements"))
+        if brief_improvements:
+            lines.extend(["", "# Brief Improvement Recommendations", ""])
+            lines.extend(brief_improvements)
         lines.extend(["", "# Rationale And Traceability", ""])
         lines.extend(_entry_lines(payload.get("rationale")))
         lines.extend(["", "# Recommended Final Artifact Structure", ""])
@@ -856,6 +1049,9 @@ def _validate_source_records(sources: object, errors: list[str]) -> dict[str, di
         source_id = normalized_source.get("id")
         if not isinstance(source_id, str) or not SOURCE_ID_PATTERN.match(source_id):
             errors.append(f"sources[{position}].id must be a canonical external source ID.")
+            continue
+        if source_id in index:
+            errors.append(f"sources[{position}].id duplicates source ID {source_id}.")
             continue
         for field in ("title", "type", "authority", "locator"):
             _require_string(normalized_source.get(field), f"sources[{position}].{field}", errors)
@@ -995,6 +1191,24 @@ def _validate_recommended_artifact_structure(items: object, errors: list[str]) -
                 errors.append(f"recommended_artifact_structure.sections[{position}] must be a non-empty string.")
         return
     _validate_text_entry_list(items, "recommended_artifact_structure", errors)
+
+
+def _validate_brief_improvements(items: object, errors: list[str]) -> None:
+    if items in (None, []):
+        return
+    if not isinstance(items, list):
+        errors.append("brief_improvements must be a list.")
+        return
+    for position, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            errors.append(f"brief_improvements[{position}] must be an object.")
+            continue
+        _require_string(item.get("missing_input"), f"brief_improvements[{position}].missing_input", errors)
+        _require_string(item.get("why_it_matters"), f"brief_improvements[{position}].why_it_matters", errors)
+        _require_string(item.get("expected_impact"), f"brief_improvements[{position}].expected_impact", errors)
+        priority = item.get("priority")
+        if priority is not None and priority not in {"low", "medium", "high"}:
+            errors.append(f"brief_improvements[{position}].priority must be low, medium, or high.")
 
 
 def _validate_critique_summary(items: object, errors: list[str]) -> None:
@@ -1157,11 +1371,12 @@ def validate_stage_json(stage_id: str, payload: dict[str, object], source_regist
     expected_keys = STAGE_JSON_KEYS.get(stage_id)
     if expected_keys is None:
         return [f"Stage {stage_id} does not have a structured contract."]
+    optional_keys = set(OPTIONAL_STAGE_JSON_KEYS.get(stage_id, ()))
 
     if payload.get("stage") != stage_id:
         errors.append(f"stage must equal {stage_id}.")
     for key in expected_keys:
-        if key not in payload:
+        if key not in payload and key not in optional_keys:
             errors.append(f"Missing required key: {key}.")
 
     source_index = _validate_source_records(source_registry.get("sources", []), errors)
@@ -1222,6 +1437,7 @@ def validate_stage_json(stage_id: str, payload: dict[str, object], source_regist
     _validate_judge_unresolved_disagreements(payload.get("unresolved_disagreements"), errors)
     _validate_confidence_assessment(payload.get("confidence_assessment"), errors)
     _validate_text_entry_list(payload.get("evidence_gaps"), "evidence_gaps", errors)
+    _validate_brief_improvements(payload.get("brief_improvements"), errors)
     _validate_text_entry_list(payload.get("rationale"), "rationale", errors)
     _validate_recommended_artifact_structure(payload.get("recommended_artifact_structure"), errors)
     return errors
@@ -1253,12 +1469,13 @@ def validate_claim_pass_payload(stage_id: str, payload: dict[str, object]) -> li
     if payload.get("stage") != stage_id:
         errors.append(f"stage must equal {stage_id}.")
     expected_keys = set(stage_claim_keys(stage_id))
+    optional_keys = set(OPTIONAL_STAGE_JSON_KEYS.get(stage_id, ()))
     if "sources" in payload:
         errors.append("claim-pass payload must not include sources.")
     extra_keys = sorted(key for key in payload.keys() if key not in expected_keys and key != "sources")
     if extra_keys:
         errors.append(f"claim-pass payload contains unexpected keys: {', '.join(extra_keys)}.")
-    missing_keys = sorted(key for key in expected_keys if key not in payload)
+    missing_keys = sorted(key for key in expected_keys if key not in payload and key not in optional_keys)
     for key in missing_keys:
         errors.append(f"Missing required key: {key}.")
     return errors
@@ -1400,6 +1617,13 @@ def _entry_sources(item: object) -> list[str]:
     return []
 
 
+def _claim_type(item: dict[str, object], default_type: str) -> str:
+    candidate = item.get("claim_class", item.get("type"))
+    if isinstance(candidate, str) and candidate.strip():
+        return candidate.strip()
+    return default_type
+
+
 def _append_semantic_claim(
     claims: list[dict[str, object]],
     *,
@@ -1453,7 +1677,7 @@ def build_claim_map_from_stage_json(stage_id: str, payload: dict[str, object]) -
                 claims,
                 claim_id=item["id"],
                 text=item["text"],
-                claim_type="fact",
+                claim_type=_claim_type(item, "fact"),
                 item=item,
                 source_index=source_index,
                 local_reference_map=local_reference_map,
@@ -1464,7 +1688,7 @@ def build_claim_map_from_stage_json(stage_id: str, payload: dict[str, object]) -
                 claims,
                 claim_id=item["id"],
                 text=item["text"],
-                claim_type="inference",
+                claim_type=_claim_type(item, "inference"),
                 item=item,
                 source_index=source_index,
                 local_reference_map=local_reference_map,
@@ -1495,13 +1719,13 @@ def build_claim_map_from_stage_json(stage_id: str, payload: dict[str, object]) -
                 _append_semantic_claim(
                     claims,
                     claim_id=f"{stage_id}-{field_name}-{index:03d}",
-                text=_entry_text(item),
-                claim_type="evaluation",
-                item=normalized_item,
-                source_index=source_index,
-                local_reference_map=local_reference_map,
-                section=section_name,
-            )
+                    text=_entry_text(item),
+                    claim_type=_claim_type(normalized_item, "evaluation"),
+                    item=normalized_item,
+                    source_index=source_index,
+                    local_reference_map=local_reference_map,
+                    section=section_name,
+                )
         summary = payload.get("summary")
         if isinstance(summary, list):
             for index, item in enumerate(summary, start=1):
@@ -1510,7 +1734,7 @@ def build_claim_map_from_stage_json(stage_id: str, payload: dict[str, object]) -
                     claims,
                     claim_id=f"{stage_id}-summary-{index:03d}",
                     text=_entry_text(item),
-                    claim_type="evaluation",
+                    claim_type=_claim_type(normalized_item, "evaluation"),
                     item=normalized_item,
                     source_index=source_index,
                     local_reference_map=local_reference_map,
@@ -1523,7 +1747,7 @@ def build_claim_map_from_stage_json(stage_id: str, payload: dict[str, object]) -
                 claims,
                 claim_id=f"{stage_id}-summary-001",
                 text=_entry_text(summary),
-                claim_type="evaluation",
+                claim_type=_claim_type(normalized_item, "evaluation"),
                 item=normalized_item,
                 source_index=source_index,
                 local_reference_map=local_reference_map,
@@ -1536,7 +1760,7 @@ def build_claim_map_from_stage_json(stage_id: str, payload: dict[str, object]) -
                 claims,
                 claim_id=item["id"],
                 text=item["text"],
-                claim_type="fact",
+                claim_type=_claim_type(item, "fact"),
                 item=item,
                 source_index=source_index,
                 local_reference_map=local_reference_map,
@@ -1547,7 +1771,7 @@ def build_claim_map_from_stage_json(stage_id: str, payload: dict[str, object]) -
                 claims,
                 claim_id=item["id"],
                 text=item["text"],
-                claim_type="inference",
+                claim_type=_claim_type(item, "inference"),
                 item=item,
                 source_index=source_index,
                 local_reference_map=local_reference_map,
@@ -1560,7 +1784,7 @@ def build_claim_map_from_stage_json(stage_id: str, payload: dict[str, object]) -
                 claims,
                 claim_id=f"judge-disagreement-{index:03d}",
                 text=_entry_text(item),
-                claim_type="evaluation",
+                claim_type=_claim_type(normalized_item, "evaluation"),
                 item=normalized_item,
                 source_index=source_index,
                 local_reference_map=local_reference_map,
@@ -1638,24 +1862,4 @@ def build_claim_map_from_stage_json(stage_id: str, payload: dict[str, object]) -
     else:
         raise KeyError(f"Stage {stage_id} does not have a structured claim map.")
 
-    summary = {
-        "claim_type_counts": {},
-        "claims_with_unclassified_markers": [],
-        "fact_count": 0,
-        "inference_count": 0,
-        "provenance_only_fact_ids": [],
-        "uncited_fact_ids": [],
-        "uncited_inference_ids": [],
-    }
-    for claim in claims:
-        claim_type = str(claim["type"])
-        summary["claim_type_counts"][claim_type] = summary["claim_type_counts"].get(claim_type, 0) + 1
-        if claim_type == "fact":
-            summary["fact_count"] += 1
-            if not claim["evidence_sources"]:
-                summary["uncited_fact_ids"].append(claim["id"])
-        if claim_type == "inference":
-            summary["inference_count"] += 1
-            if not claim["evidence_sources"]:
-                summary["uncited_inference_ids"].append(claim["id"])
-    return {"claims": claims, "summary": summary}
+    return build_claim_register(claims)
