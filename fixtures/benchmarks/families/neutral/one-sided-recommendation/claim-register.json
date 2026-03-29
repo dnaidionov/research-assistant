@@ -1,0 +1,10 @@
+{
+  "claims": [
+    {
+      "id": "REC-001",
+      "text": "Recommend Option A because the vendor benchmark says it is best.",
+      "type": "recommendation",
+      "evidence_sources": ["SRC-001"]
+    }
+  ]
+}

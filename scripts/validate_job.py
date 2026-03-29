@@ -8,7 +8,8 @@ import re
 import sys
 from pathlib import Path
 
-from _publication import claim_register_publication_errors
+from _job_config import load_quality_policy
+from _publication import publication_readiness_errors
 from _workflow_lib import REPO_ROOT, REQUIRED_JOB_DIRS, REQUIRED_JOB_FILES, validate_job_dir
 
 
@@ -131,6 +132,7 @@ def validate_template_consistency(errors: list[str], checks: dict[str, bool]) ->
 
 
 def validate_final_artifact_readiness(
+    job_dir: Path,
     judge_artifact: str | None,
     claim_register: str | None,
     errors: list[str],
@@ -144,6 +146,8 @@ def validate_final_artifact_readiness(
     ready = True
     judge_path = Path(judge_artifact).expanduser()
     claim_path = Path(claim_register).expanduser()
+    judge_text = ""
+    judge_structured_payload = None
 
     if not judge_path.is_file():
         ready = False
@@ -153,13 +157,22 @@ def validate_final_artifact_readiness(
         if not judge_text.strip():
             ready = False
             errors.append(f"Judge artifact is empty: {judge_path}")
+        judge_json_path = judge_path.with_suffix(".json")
+        if judge_json_path.is_file():
+            judge_structured_payload = json.loads(judge_json_path.read_text(encoding="utf-8"))
 
     if not claim_path.is_file():
         ready = False
         errors.append(f"Missing required claim register: {claim_path}")
     else:
         payload = json.loads(claim_path.read_text(encoding="utf-8"))
-        publication_errors = claim_register_publication_errors(payload)
+        publication_errors = publication_readiness_errors(
+            judge_text,
+            payload,
+            judge_structured_payload=judge_structured_payload,
+            judge_path=judge_path if judge_text else None,
+            quality_policy=load_quality_policy(job_dir),
+        )
         if publication_errors:
             ready = False
             errors.extend(publication_errors)
@@ -215,7 +228,7 @@ def main() -> int:
         validate_runs_path(job_dir, errors, checks)
         validate_template_consistency(errors, checks)
         if args.final_artifact_ready:
-            validate_final_artifact_readiness(args.judge_artifact, args.claim_register, errors, checks)
+            validate_final_artifact_readiness(job_dir, args.judge_artifact, args.claim_register, errors, checks)
 
         payload = build_payload(job_dir, sorted(set(errors)), sorted(set(warnings)), checks)
         if args.json:

@@ -1,0 +1,10 @@
+{
+  "claims": [
+    {
+      "id": "INF-001",
+      "text": "Option A performs well on runtime.",
+      "type": "inference",
+      "evidence_sources": ["SRC-001"]
+    }
+  ]
+}

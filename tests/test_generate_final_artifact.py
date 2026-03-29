@@ -9,6 +9,100 @@ GENERATE_FINAL_ARTIFACT = REPO_ROOT / "scripts" / "generate_final_artifact.py"
 
 
 class GenerateFinalArtifactTests(unittest.TestCase):
+    def test_rejects_blocked_policy_sources_during_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            judge_path = root / "judge.md"
+            judge_json_path = root / "judge.json"
+            claims_path = root / "claims.json"
+            output_path = root / "final.md"
+
+            judge_path.write_text(
+                "\n".join(
+                    [
+                        "# Supported Conclusions",
+                        "1. Option A is feasible. [SRC-001]",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            judge_json_path.write_text(
+                """{
+  "stage": "judge",
+  "supported_conclusions": [
+    {"id": "C-001", "text": "Option A is feasible.", "evidence_sources": ["SRC-001"]}
+  ],
+  "synthesis_judgments": [],
+  "unresolved_disagreements": [],
+  "confidence_assessment": [],
+  "evidence_gaps": [],
+  "rationale": [],
+  "recommended_artifact_structure": [],
+  "sources": [
+    {
+      "id": "SRC-001",
+      "title": "Marketing page",
+      "type": "marketing page",
+      "authority": "vendor",
+      "locator": "https://example.com/product",
+      "policy_outcome": "blocked",
+      "policy_notes": ["Marketing-only source is blocked for final publication."]
+    }
+  ]
+}""",
+                encoding="utf-8",
+            )
+            claims_path.write_text(
+                """{
+  "claims": [
+    {
+      "id": "C-001",
+      "text": "Option A is feasible.",
+      "type": "fact",
+      "provenance": [],
+      "evidence_sources": ["SRC-001"],
+      "unclassified_markers": []
+    }
+  ],
+  "summary": {
+    "claim_type_counts": {"fact": 1},
+    "truth_gated_claim_type_counts": {"fact": 1},
+    "claims_with_unclassified_markers": [],
+    "fact_count": 1,
+    "inference_count": 0,
+    "assumption_count": 0,
+    "provenance_only_fact_ids": [],
+    "uncited_fact_ids": [],
+    "uncited_inference_ids": [],
+    "uncited_truth_gated_ids": [],
+    "unsupported_recommendation_ids": []
+  }
+}""",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(GENERATE_FINAL_ARTIFACT),
+                    "--judge-input",
+                    str(judge_path),
+                    "--judge-structured-input",
+                    str(judge_json_path),
+                    "--claim-register",
+                    str(claims_path),
+                    "--output",
+                    str(output_path),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("blocked", result.stderr.lower())
+            self.assertIn("marketing-only source", result.stderr.lower())
+
     def test_prefers_structured_judge_input_and_renders_followable_references(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

@@ -38,6 +38,7 @@ For example:
 The four canonical prompts now enforce explicit downstream contracts:
 
 - `intake-template.md` returns JSON only, separating `known_facts`, `working_inferences`, and `uncertainty_notes`, and now requires `known_facts` to reference canonical intake-declared source IDs plus a short supporting `source_excerpt` and stable `source_anchor`.
+- the runner now decomposes intake internally into source declaration, fact lineage, normalization, and merge substeps, but the final intake artifact still conforms to the same intake-template contract
 - `research-template.md` returns fixed markdown sections with numbered fact and inference claims, explicit confidence labels, and a source-evaluation section.
 - `critique-template.md` returns fixed markdown sections that explicitly attack unsupported claims, weak sources, omissions, and overreach.
 - `judge-template.md` returns fixed markdown sections that separate supported conclusions from synthesis inferences and preserve unresolved disagreement when evidence is mixed.

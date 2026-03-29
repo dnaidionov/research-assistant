@@ -1,0 +1,6 @@
+topic: reference-job-policy-analysis
+requirements:
+  require_citations: true
+workflow:
+  execution:
+    required_provider_trust: structured_safe_realistic

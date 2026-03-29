@@ -1,0 +1,14 @@
+{
+  "SRC-001": {
+    "id": "SRC-001",
+    "source_class": "external_evidence",
+    "policy_outcome": "allowed",
+    "authority_tier": "independent_lab"
+  },
+  "SRC-002": {
+    "id": "SRC-002",
+    "source_class": "external_evidence",
+    "policy_outcome": "allowed",
+    "authority_tier": "independent_lab"
+  }
+}

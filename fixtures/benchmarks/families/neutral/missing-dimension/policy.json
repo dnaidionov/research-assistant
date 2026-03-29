@@ -1,0 +1,4 @@
+{
+  "required_dimensions": ["runtime", "cost"],
+  "evidence_quality_mismatch": true
+}

@@ -12,10 +12,24 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from _adapter_qualification import (
+    STRUCTURED_TRUST_LEVELS,
+    classify_adapter_qualification,
+    persist_adapter_qualification,
+    profile_for_required_trust,
+    trust_satisfies,
+)
+from _job_config import load_execution_config, load_yaml_document
+from _provider_runtime import (
+    apply_provider_runtime_policy,
+    record_provider_qualification,
+    record_provider_repair_attempt,
+    record_provider_stage_result,
+)
 from _stage_contracts import (
     build_claim_map_from_stage_json,
     is_structured_stage,
@@ -31,9 +45,23 @@ from _stage_contracts import (
     validate_claim_pass_payload,
     validate_source_pass_payload,
 )
-from _intake_contracts import validate_intake_payload
+from _intake_contracts import (
+    merge_intake_substep_payloads,
+    sanitize_intake_fact_lineage_payload,
+    sanitize_intake_normalization_payload,
+    sanitize_intake_sources_payload,
+    validate_intake_fact_lineage_payload,
+    validate_intake_normalization_payload,
+    validate_intake_payload,
+    validate_intake_sources_payload,
+)
 from _stage_validation import validate_structured_stage_artifact
 from _workflow_lib import write_json
+from _workflow_state import (
+    append_workflow_event,
+    derive_workflow_state_from_events,
+    initial_stage_substeps,
+)
 from run_workflow import RUN_STAGES, resolve_job_path, scaffold_run
 
 
@@ -44,9 +72,8 @@ DEFAULT_CLAUDE_BIN = "claude"
 DEFAULT_GEMINI_MODEL = "gemini-3.1-pro-preview"
 DEFAULT_JOBS_INDEX_ROOT = Path(__file__).resolve().parents[1] / "jobs-index"
 STAGE_CLAIM_STAGE_IDS = {"research-a", "research-b", "critique-a-on-b", "critique-b-on-a", "judge"}
-FENCED_BLOCK_PATTERN = re.compile(r"```(?:markdown)?\n(.*?)```", re.IGNORECASE | re.DOTALL)
-JSON_FENCED_BLOCK_PATTERN = re.compile(r"```json\s*(\{.*?\})\s*```", re.IGNORECASE | re.DOTALL)
 INCREMENTAL_RUN_ID_PATTERN = re.compile(r"^run-(\d+)$")
+DEFAULT_REQUIRED_PROVIDER_TRUST = "structured_safe_smoke"
 
 
 @dataclass(frozen=True)
@@ -80,7 +107,7 @@ RESET = "\x1b[0m"
 class CLIAdapter:
     name: str
     command_builder: Callable[[str, Path, str, str | None], list[str]]
-    stdout_artifact_recovery: bool = False
+    stdout_materialization: set[str] = field(default_factory=set)
     supports_model_selection: bool = False
 
 
@@ -153,7 +180,7 @@ class StageProcessController:
         for _, process in targets:
             try:
                 os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
+            except (ProcessLookupError, PermissionError):
                 continue
 
         deadline = time.time() + 0.5
@@ -164,7 +191,7 @@ class StageProcessController:
             except subprocess.TimeoutExpired:
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
+                except (ProcessLookupError, PermissionError):
                     continue
 
 
@@ -193,14 +220,18 @@ CLI_ADAPTERS: dict[str, CLIAdapter] = {
     "gemini": CLIAdapter(
         name="gemini",
         command_builder=build_gemini_command,
-        stdout_artifact_recovery=True,
+        stdout_materialization={"markdown", "structured_json"},
         supports_model_selection=True,
     ),
-    "antigravity": CLIAdapter(name="antigravity", command_builder=build_antigravity_command, stdout_artifact_recovery=True),
+    "antigravity": CLIAdapter(
+        name="antigravity",
+        command_builder=build_antigravity_command,
+        stdout_materialization={"markdown", "structured_json"},
+    ),
     "claude": CLIAdapter(
         name="claude",
         command_builder=build_claude_command,
-        stdout_artifact_recovery=True,
+        stdout_materialization={"markdown", "structured_json"},
         supports_model_selection=True,
     ),
 }
@@ -311,7 +342,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_state(path: Path) -> dict[str, object]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    if path.is_file():
+        return json.loads(path.read_text(encoding="utf-8"))
+    return derive_workflow_state_from_events(path.parent)
 
 
 def next_incremental_run_id(job_dir: Path) -> str:
@@ -365,6 +398,7 @@ def recompute_run_status(state: dict[str, object]) -> str:
 def save_state(path: Path, payload: dict[str, object]) -> None:
     payload["status"] = recompute_run_status(payload)
     write_json(path, payload)
+    append_workflow_event(path.parent, "state_checkpoint", state=payload)
 
 
 def is_placeholder_content(content: str) -> bool:
@@ -412,50 +446,47 @@ def expected_first_heading(stage_id: str) -> str | None:
     }.get(stage_id)
 
 
-def extract_markdown_artifact(stage_id: str, stdout: str) -> str | None:
-    expected_heading = expected_first_heading(stage_id)
-    for match in FENCED_BLOCK_PATTERN.finditer(stdout):
-        block = match.group(1).strip()
-        if expected_heading is None or expected_heading in block:
-            return block.rstrip() + "\n"
+def build_adapter_executor(adapter_name: str, adapter_bin: Path | str, artifact_kind: str) -> Callable[..., CommandResult]:
+    adapter = resolve_adapter(adapter_name)
+    if artifact_kind not in {"markdown", "structured_json"}:
+        raise ValueError(f"Unsupported artifact kind: {artifact_kind}")
+    if artifact_kind not in adapter.stdout_materialization and adapter.name != "codex":
+        raise ValueError(
+            f"Adapter '{adapter_name}' does not support deterministic {artifact_kind} materialization."
+        )
 
-    lines = stdout.splitlines()
-    start_index: int | None = None
-    for index, line in enumerate(lines):
-        if expected_heading is not None:
-            if line.strip() == expected_heading:
-                start_index = index
-                break
-        elif line.startswith("# "):
-            start_index = index
-            break
-    if start_index is None:
-        return None
-    artifact = "\n".join(lines[start_index:]).strip()
-    if not artifact:
-        return None
-    return artifact + "\n"
+    def executor(
+        cmd: list[str],
+        *,
+        job_dir: Path,
+        output_path: Path,
+        stage_id: str,
+        process_controller: StageProcessController | None = None,
+    ) -> CommandResult:
+        result = execute_adapter_command(
+            cmd,
+            job_dir=job_dir,
+            stage_id=stage_id,
+            process_controller=process_controller,
+        )
+        if result.returncode != 0:
+            return result
+        if artifact_kind == "markdown":
+            if not is_stage_output_complete(output_path):
+                output_path.write_text(result.stdout, encoding="utf-8")
+            return result
+        if not is_json_artifact_complete(output_path):
+            stripped = result.stdout.strip()
+            if not stripped:
+                return result
+            try:
+                payload = json.loads(stripped)
+            except json.JSONDecodeError:
+                return result
+            write_json(output_path, payload)
+        return result
 
-
-def extract_structured_json_artifact(stage_id: str, stdout: str) -> dict[str, object] | None:
-    for match in JSON_FENCED_BLOCK_PATTERN.finditer(stdout):
-        try:
-            payload = json.loads(match.group(1))
-        except json.JSONDecodeError:
-            continue
-        if payload.get("stage") == stage_id:
-            return payload
-    return None
-
-
-def recover_output_from_stdout(adapter: CLIAdapter, stage_id: str, output_path: Path, stdout: str) -> bool:
-    if not adapter.stdout_artifact_recovery or output_path.suffix.lower() != ".md":
-        return False
-    artifact = extract_markdown_artifact(stage_id, stdout)
-    if artifact is None:
-        return False
-    output_path.write_text(artifact, encoding="utf-8")
-    return True
+    return executor
 
 
 def stage_output_path(run_dir: Path, output_name: str) -> Path:
@@ -525,6 +556,19 @@ def set_stage_status(state: dict[str, object], stage_id: str, status: str) -> No
     raise KeyError(f"Unknown stage id: {stage_id}")
 
 
+def set_stage_substep_status(state: dict[str, object], stage_id: str, substep: str, status: str) -> None:
+    for stage in state["stages"]:
+        if stage["id"] == stage_id:
+            substeps = stage.setdefault("substeps", initial_stage_substeps(stage_id))
+            if not isinstance(substeps, dict):
+                substeps = initial_stage_substeps(stage_id)
+                stage["substeps"] = substeps
+            entry = substeps.setdefault(substep, {"status": "pending"})
+            entry["status"] = status
+            return
+    raise KeyError(f"Unknown stage id: {stage_id}")
+
+
 def ensure_post_processing_state(state: dict[str, object], claim_output: Path, final_output: Path) -> None:
     post_processing = state.setdefault("post_processing", {})
     stage_claims = post_processing.setdefault("stage_claims", {})
@@ -544,6 +588,50 @@ def set_post_processing_status(state: dict[str, object], key: str, status: str) 
 
 def set_stage_claim_status(state: dict[str, object], stage_id: str, status: str) -> None:
     state["post_processing"]["stage_claims"][stage_id]["status"] = status
+
+
+def transition_stage_status(run_dir: Path, state: dict[str, object], stage_id: str, status: str) -> None:
+    state_status = "running" if status == "started" else status
+    for stage in state["stages"]:
+        if stage["id"] == stage_id and stage.get("status") == state_status:
+            return
+    set_stage_status(state, stage_id, state_status)
+    append_workflow_event(run_dir, f"stage_{status}", stage_id=stage_id)
+
+
+def transition_substep_status(run_dir: Path, state: dict[str, object], stage_id: str, substep: str, status: str) -> None:
+    state_status = "running" if status == "started" else status
+    for stage in state["stages"]:
+        if stage["id"] == stage_id:
+            substeps = stage.setdefault("substeps", initial_stage_substeps(stage_id))
+            if isinstance(substeps, dict) and isinstance(substeps.get(substep), dict) and substeps[substep].get("status") == state_status:
+                return
+    set_stage_substep_status(state, stage_id, substep, state_status)
+    append_workflow_event(run_dir, f"substep_{status}", stage_id=stage_id, substep=substep)
+
+
+def transition_post_processing_status(
+    run_dir: Path,
+    state: dict[str, object],
+    key: str,
+    status: str,
+    *,
+    stage_id: str | None = None,
+) -> None:
+    state_status = "running" if status == "started" else status
+    if key == "stage_claims":
+        if state["post_processing"]["stage_claims"].get(stage_id or "", {}).get("status") == state_status:
+            return
+    elif state["post_processing"].get(key, {}).get("status") == state_status:
+        return
+    if key == "stage_claims":
+        set_stage_claim_status(state, stage_id or "", state_status)
+    else:
+        set_post_processing_status(state, key, state_status)
+    payload: dict[str, object] = {"key": key}
+    if stage_id is not None:
+        payload["stage_id"] = stage_id
+    append_workflow_event(run_dir, f"post_processing_{status}", **payload)
 
 
 def build_agent_prompt(stage: StageExecution, run_dir: Path) -> str:
@@ -571,6 +659,104 @@ def build_agent_prompt(stage: StageExecution, run_dir: Path) -> str:
             "Do not leave placeholder content in the output file.",
             "Use upstream stage output artifacts when the prompt packet references them.",
             "Evidence is never obvious. Every fact and world-claim inference must carry explicit evidence support on that exact item; nearby citations do not count.",
+        ]
+    )
+
+
+def intake_source_materials(job_dir: Path) -> tuple[str, str]:
+    brief_path = job_dir / "brief.md"
+    config_path = job_dir / "config.yaml"
+    brief_text = brief_path.read_text(encoding="utf-8") if brief_path.is_file() else ""
+    config_text = config_path.read_text(encoding="utf-8") if config_path.is_file() else ""
+    return brief_text, config_text
+
+
+def build_intake_source_prompt(job_dir: Path, run_dir: Path, output_json_path: Path, scratch_markdown_path: Path) -> str:
+    brief_text, config_text = intake_source_materials(job_dir)
+    return "\n".join(
+        [
+            "STAGE_ID=intake",
+            "SUBSTEP=source-pass",
+            f"OUTPUT_PATH={output_json_path}",
+            f"OUTPUT_JSON_PATH={output_json_path}",
+            "",
+            "Execute only the source declaration pass for intake.",
+            "Return JSON only.",
+            'Allowed JSON shape: {"stage": "intake", "sources": [...]}',
+            "Define only canonical job_input sources for the provided materials you actually used.",
+            "Do not emit facts, inferences, or normalization fields.",
+            "",
+            "SOURCE MATERIALS:",
+            "### brief.md",
+            brief_text,
+            "",
+            "### config.yaml",
+            config_text,
+        ]
+    )
+
+
+def build_intake_fact_prompt(
+    job_dir: Path,
+    run_dir: Path,
+    source_output_path: Path,
+    output_json_path: Path,
+    scratch_markdown_path: Path,
+) -> str:
+    brief_text, config_text = intake_source_materials(job_dir)
+    return "\n".join(
+        [
+            "STAGE_ID=intake",
+            "SUBSTEP=fact-lineage",
+            f"OUTPUT_PATH={output_json_path}",
+            f"OUTPUT_JSON_PATH={output_json_path}",
+            f"SOURCE_PASS_PATH={source_output_path}",
+            "",
+            "Execute only the direct fact-lineage pass for intake.",
+            "Return JSON only.",
+            'Allowed JSON shape: {"stage": "intake", "known_facts": [...]}',
+            "Use only the source IDs defined in SOURCE_PASS_PATH.",
+            "known_facts must contain only directly stated brief/config facts with source_ids, source_excerpt, and source_anchor.",
+            "Do not emit assumptions, constraints, missing information, or working inferences.",
+            "",
+            "SOURCE MATERIALS:",
+            "### brief.md",
+            brief_text,
+            "",
+            "### config.yaml",
+            config_text,
+        ]
+    )
+
+
+def build_intake_normalization_prompt(
+    job_dir: Path,
+    run_dir: Path,
+    fact_output_path: Path,
+    output_json_path: Path,
+    scratch_markdown_path: Path,
+) -> str:
+    brief_text, config_text = intake_source_materials(job_dir)
+    return "\n".join(
+        [
+            "STAGE_ID=intake",
+            "SUBSTEP=normalization",
+            f"OUTPUT_PATH={output_json_path}",
+            f"OUTPUT_JSON_PATH={output_json_path}",
+            f"FACT_LINEAGE_PATH={fact_output_path}",
+            "",
+            "Execute only the intake normalization pass.",
+            "Return JSON only.",
+            'Allowed JSON shape: {"stage": "intake", "question": ..., "scope": [...], "constraints": [...], "assumptions": [...], "missing_information": [...], "required_artifacts": [...], "notes_for_researchers": [...], "working_inferences": [...], "uncertainty_notes": [...]}',
+            "Do not repeat known_facts here. Use FACT_LINEAGE_PATH only to avoid restating direct facts as working_inferences.",
+            "Keep assumptions, missing information, and working inferences separate from direct facts.",
+            "",
+            "SOURCE MATERIALS:",
+            "### brief.md",
+            brief_text,
+            "",
+            "### config.yaml",
+            config_text,
         ]
     )
 
@@ -750,12 +936,15 @@ def execute_json_substep(
     process_controller: StageProcessController | None,
     validator: Callable[[dict[str, object]], list[str]],
     repair_prompt_builder: Callable[[list[str]], str],
+    sanitizer: Callable[[dict[str, object]], dict[str, object]] | None = None,
 ) -> tuple[CommandResult, dict[str, object], bool, CommandResult | None, list[str]]:
     repair_attempted = False
     repair_result: CommandResult | None = None
-    result = execute_adapter_command(
+    executor = build_adapter_executor(adapter.name, adapter_bin, "structured_json")
+    result = executor(
         adapter.command_builder(adapter_bin, job_dir, prompt, model),
         job_dir=job_dir,
+        output_path=output_json_path,
         stage_id=stage.stage_id,
         process_controller=process_controller,
     )
@@ -764,10 +953,6 @@ def execute_json_substep(
         if command_result.returncode != 0:
             return None, [], False
         if not is_json_artifact_complete(output_json_path):
-            recovered_payload = extract_structured_json_artifact(stage.stage_id, command_result.stdout)
-            if recovered_payload is not None:
-                write_json(output_json_path, recovered_payload)
-        if not is_json_artifact_complete(output_json_path):
             return None, [
                 f"Stage {stage.stage_id} did not produce a completed output artifact: {output_json_path}; completed structured output artifact is missing."
             ], False
@@ -775,6 +960,9 @@ def execute_json_substep(
             payload = load_contract_json(output_json_path)
         except (ValueError, json.JSONDecodeError) as exc:
             return None, [str(exc)], False
+        if sanitizer is not None:
+            payload = sanitizer(payload)
+            write_json(output_json_path, payload)
         validation_errors = validator(payload)
         return payload, validation_errors, True
 
@@ -782,9 +970,10 @@ def execute_json_substep(
     if result.returncode == 0 and validation_errors and repairable:
         repair_attempted = True
         repair_prompt = repair_prompt_builder(validation_errors)
-        repair_result = execute_adapter_command(
+        repair_result = executor(
             adapter.command_builder(adapter_bin, job_dir, repair_prompt, model),
             job_dir=job_dir,
+            output_path=output_json_path,
             stage_id=stage.stage_id,
             process_controller=process_controller,
         )
@@ -814,10 +1003,12 @@ def execute_json_substep(
     return result, payload, repair_attempted, repair_result, validation_errors
 
 
-def run_structured_stage(
+def run_intake_stage(
     stage: StageExecution,
     run_dir: Path,
     job_dir: Path,
+    state: dict[str, object],
+    state_path: Path,
     stage_selection: StageAdapterSelection,
     adapter: CLIAdapter,
     adapter_bin: str,
@@ -825,6 +1016,215 @@ def run_structured_stage(
     process_controller: StageProcessController | None,
 ) -> tuple[str, str]:
     reporter.start(adapter.name, stage.stage_id)
+    output_path = stage_output_path(run_dir, stage.output_name)
+    source_output_path = stage_substep_output_path(run_dir, stage.stage_id, "source-pass")
+    fact_output_path = stage_substep_output_path(run_dir, stage.stage_id, "fact-lineage")
+    normalization_output_path = stage_substep_output_path(run_dir, stage.stage_id, "normalization")
+    source_scratch_path = stage_substep_markdown_path(run_dir, stage.stage_id, "source-pass")
+    fact_scratch_path = stage_substep_markdown_path(run_dir, stage.stage_id, "fact-lineage")
+    normalization_scratch_path = stage_substep_markdown_path(run_dir, stage.stage_id, "normalization")
+    provider_key = stage_selection.provider_name or stage_selection.adapter_name
+
+    def try_resume_sources() -> tuple[bool, dict[str, object] | None]:
+        if not is_json_artifact_complete(source_output_path):
+            return False, None
+        payload = sanitize_intake_sources_payload(load_contract_json(source_output_path))
+        write_json(source_output_path, payload)
+        if validate_intake_sources_payload(payload):
+            return False, None
+        return True, payload
+
+    def try_resume_fact_lineage(sources_payload: dict[str, object]) -> tuple[bool, dict[str, object] | None]:
+        if not is_json_artifact_complete(fact_output_path):
+            return False, None
+        payload = sanitize_intake_fact_lineage_payload(load_contract_json(fact_output_path))
+        write_json(fact_output_path, payload)
+        if validate_intake_fact_lineage_payload(payload, sources_payload):
+            return False, None
+        return True, payload
+
+    def try_resume_normalization(fact_payload: dict[str, object]) -> tuple[bool, dict[str, object] | None]:
+        if not is_json_artifact_complete(normalization_output_path):
+            return False, None
+        payload = sanitize_intake_normalization_payload(load_contract_json(normalization_output_path))
+        write_json(normalization_output_path, payload)
+        if validate_intake_normalization_payload(payload, fact_payload):
+            return False, None
+        return True, payload
+
+    if is_json_artifact_complete(output_path):
+        final_payload = load_contract_json(output_path)
+        if not validate_intake_payload(final_payload):
+            reporter.complete(adapter.name, stage.stage_id)
+            return stage.stage_id, "completed"
+
+    source_prompt = build_intake_source_prompt(job_dir, run_dir, source_output_path, source_scratch_path)
+    fact_prompt = build_intake_fact_prompt(job_dir, run_dir, source_output_path, fact_output_path, fact_scratch_path)
+    normalization_prompt = build_intake_normalization_prompt(
+        job_dir,
+        run_dir,
+        fact_output_path,
+        normalization_output_path,
+        normalization_scratch_path,
+    )
+
+    try:
+        resumed_sources, sources_payload = try_resume_sources()
+        if resumed_sources:
+            transition_substep_status(run_dir, state, stage.stage_id, "source-pass", "completed")
+            save_state(state_path, state)
+        else:
+            transition_substep_status(run_dir, state, stage.stage_id, "source-pass", "started")
+            save_state(state_path, state)
+            _result, sources_payload, repair_attempted, _repair_result, _errors = execute_json_substep(
+                stage=stage,
+                substep="source-pass",
+                adapter=adapter,
+                adapter_bin=adapter_bin,
+                job_dir=job_dir,
+                run_dir=run_dir,
+                output_json_path=source_output_path,
+                prompt=source_prompt,
+                model=stage_selection.model,
+                process_controller=process_controller,
+                validator=validate_intake_sources_payload,
+                sanitizer=sanitize_intake_sources_payload,
+                repair_prompt_builder=lambda errors: "\n".join(
+                    [
+                        "STAGE_ID=intake",
+                        "SUBSTEP=source-pass",
+                        "REPAIR_ATTEMPT=1",
+                        f"OUTPUT_PATH={source_output_path}",
+                        f"OUTPUT_JSON_PATH={source_output_path}",
+                        "",
+                        "Repair only the intake source declaration output.",
+                        "Do not invent new sources or emit non-source fields.",
+                        "",
+                        "VALIDATION_ERRORS:",
+                        *errors,
+                    ]
+                ),
+            )
+            if repair_attempted:
+                record_provider_repair_attempt(job_dir, provider_key, stage_id=stage.stage_id, run_id=run_dir.name)
+            transition_substep_status(run_dir, state, stage.stage_id, "source-pass", "completed")
+            save_state(state_path, state)
+
+        resumed_facts, fact_payload = try_resume_fact_lineage(sources_payload)
+        if resumed_facts:
+            transition_substep_status(run_dir, state, stage.stage_id, "fact-lineage", "completed")
+            save_state(state_path, state)
+        else:
+            transition_substep_status(run_dir, state, stage.stage_id, "fact-lineage", "started")
+            save_state(state_path, state)
+            _result, fact_payload, repair_attempted, _repair_result, _errors = execute_json_substep(
+                stage=stage,
+                substep="fact-lineage",
+                adapter=adapter,
+                adapter_bin=adapter_bin,
+                job_dir=job_dir,
+                run_dir=run_dir,
+                output_json_path=fact_output_path,
+                prompt=fact_prompt,
+                model=stage_selection.model,
+                process_controller=process_controller,
+                validator=lambda payload: validate_intake_fact_lineage_payload(payload, sources_payload),
+                sanitizer=sanitize_intake_fact_lineage_payload,
+                repair_prompt_builder=lambda errors: "\n".join(
+                    [
+                        "STAGE_ID=intake",
+                        "SUBSTEP=fact-lineage",
+                        "REPAIR_ATTEMPT=1",
+                        f"OUTPUT_PATH={fact_output_path}",
+                        f"OUTPUT_JSON_PATH={fact_output_path}",
+                        f"SOURCE_PASS_PATH={source_output_path}",
+                        "",
+                        "Repair only the intake fact-lineage output.",
+                        "Keep only directly grounded known_facts with source_ids, source_excerpt, and source_anchor.",
+                        "",
+                        "VALIDATION_ERRORS:",
+                        *errors,
+                    ]
+                ),
+            )
+            if repair_attempted:
+                record_provider_repair_attempt(job_dir, provider_key, stage_id=stage.stage_id, run_id=run_dir.name)
+            transition_substep_status(run_dir, state, stage.stage_id, "fact-lineage", "completed")
+            save_state(state_path, state)
+
+        resumed_normalization, normalization_payload = try_resume_normalization(fact_payload)
+        if resumed_normalization:
+            transition_substep_status(run_dir, state, stage.stage_id, "normalization", "completed")
+            save_state(state_path, state)
+        else:
+            transition_substep_status(run_dir, state, stage.stage_id, "normalization", "started")
+            save_state(state_path, state)
+            _result, normalization_payload, repair_attempted, _repair_result, _errors = execute_json_substep(
+                stage=stage,
+                substep="normalization",
+                adapter=adapter,
+                adapter_bin=adapter_bin,
+                job_dir=job_dir,
+                run_dir=run_dir,
+                output_json_path=normalization_output_path,
+                prompt=normalization_prompt,
+                model=stage_selection.model,
+                process_controller=process_controller,
+                validator=lambda payload: validate_intake_normalization_payload(payload, fact_payload),
+                sanitizer=sanitize_intake_normalization_payload,
+                repair_prompt_builder=lambda errors: "\n".join(
+                    [
+                        "STAGE_ID=intake",
+                        "SUBSTEP=normalization",
+                        "REPAIR_ATTEMPT=1",
+                        f"OUTPUT_PATH={normalization_output_path}",
+                        f"OUTPUT_JSON_PATH={normalization_output_path}",
+                        f"FACT_LINEAGE_PATH={fact_output_path}",
+                        "",
+                        "Repair only the intake normalization output.",
+                        "Do not duplicate known_facts. Keep direct facts out of working_inferences.",
+                        "",
+                        "VALIDATION_ERRORS:",
+                        *errors,
+                    ]
+                ),
+            )
+            if repair_attempted:
+                record_provider_repair_attempt(job_dir, provider_key, stage_id=stage.stage_id, run_id=run_dir.name)
+            transition_substep_status(run_dir, state, stage.stage_id, "normalization", "completed")
+            save_state(state_path, state)
+
+        transition_substep_status(run_dir, state, stage.stage_id, "merge", "started")
+        save_state(state_path, state)
+        merged_payload = merge_intake_substep_payloads(sources_payload, fact_payload, normalization_payload)
+        validation_errors = validate_intake_payload(merged_payload)
+        if validation_errors:
+            transition_substep_status(run_dir, state, stage.stage_id, "merge", "failed")
+            save_state(state_path, state)
+            raise RuntimeError(f"intake validation failed: {'; '.join(validation_errors)}")
+        write_json(output_path, merged_payload)
+        transition_substep_status(run_dir, state, stage.stage_id, "merge", "completed")
+        save_state(state_path, state)
+        reporter.complete(adapter.name, stage.stage_id)
+        return stage.stage_id, "completed"
+    except SubstepExecutionError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
+def run_structured_stage(
+    stage: StageExecution,
+    run_dir: Path,
+    job_dir: Path,
+    state: dict[str, object],
+    state_path: Path,
+    stage_selection: StageAdapterSelection,
+    adapter: CLIAdapter,
+    adapter_bin: str,
+    reporter: ProgressReporter,
+    process_controller: StageProcessController | None,
+) -> tuple[str, str]:
+    reporter.start(adapter.name, stage.stage_id)
+    provider_key = stage_selection.provider_name or stage_selection.adapter_name
     output_path = stage_output_path(run_dir, stage.output_name)
     structured_output_path = stage_structured_output_path(run_dir, stage.stage_id)
     source_output_path = stage_substep_output_path(run_dir, stage.stage_id, "source-pass")
@@ -911,7 +1311,11 @@ def run_structured_stage(
         if resumed:
             source_pass_resumed = True
             source_payload = resumed_source_payload
+            transition_substep_status(run_dir, state, stage.stage_id, "source-pass", "completed")
+            save_state(state_path, state)
         else:
+            transition_substep_status(run_dir, state, stage.stage_id, "source-pass", "started")
+            save_state(state_path, state)
             try:
                 source_result, source_payload, source_repair_attempted, source_repair_result, _ = execute_json_substep(
                     stage=stage,
@@ -934,19 +1338,31 @@ def run_structured_stage(
                         scratch_markdown_path=source_scratch_path,
                     ),
                 )
+                if source_repair_attempted:
+                    record_provider_repair_attempt(job_dir, provider_key, stage_id=stage.stage_id, run_id=run_dir.name)
             except SubstepExecutionError as exc:
                 source_result = exc.command_result
                 source_repair_attempted = exc.repair_attempted
                 source_repair_result = exc.repair_result
+                if source_repair_attempted:
+                    record_provider_repair_attempt(job_dir, provider_key, stage_id=stage.stage_id, run_id=run_dir.name)
+                transition_substep_status(run_dir, state, stage.stage_id, "source-pass", "failed")
+                save_state(state_path, state)
                 raise RuntimeError(str(exc)) from exc
             restore_source_registry()
+            transition_substep_status(run_dir, state, stage.stage_id, "source-pass", "completed")
+            save_state(state_path, state)
 
         resumed_claim, merged_payload, validation = (False, None, None)
         if source_pass_resumed:
             resumed_claim, merged_payload, validation = try_resume_claim_pass(source_payload)
         if resumed_claim:
             claim_pass_resumed = True
+            transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "completed")
+            save_state(state_path, state)
         else:
+            transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "started")
+            save_state(state_path, state)
             claim_prompt = build_claim_pass_prompt(stage, run_dir, source_output_path, claim_output_path, claim_scratch_path)
             try:
                 claim_result, _claim_payload, claim_repair_attempted, claim_repair_result, _ = execute_json_substep(
@@ -971,10 +1387,16 @@ def run_structured_stage(
                         source_output_path=source_output_path,
                     ),
                 )
+                if claim_repair_attempted:
+                    record_provider_repair_attempt(job_dir, provider_key, stage_id=stage.stage_id, run_id=run_dir.name)
             except SubstepExecutionError as exc:
                 claim_result = exc.command_result
                 claim_repair_attempted = exc.repair_attempted
                 claim_repair_result = exc.repair_result
+                if claim_repair_attempted:
+                    record_provider_repair_attempt(job_dir, provider_key, stage_id=stage.stage_id, run_id=run_dir.name)
+                transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "failed")
+                save_state(state_path, state)
                 raise RuntimeError(str(exc)) from exc
             restore_source_registry()
             merged_payload, validation = validate_combined_claim_payload(source_payload)
@@ -984,6 +1406,7 @@ def run_structured_stage(
         markdown_validation_errors = validation.markdown_errors
         if structured_validation_errors or markdown_validation_errors:
             claim_repair_attempted = True
+            record_provider_repair_attempt(job_dir, provider_key, stage_id=stage.stage_id, run_id=run_dir.name)
             repair_prompt = build_substep_repair_prompt(
                 stage,
                     run_dir=run_dir,
@@ -1001,9 +1424,6 @@ def run_structured_stage(
             )
             restore_source_registry()
             if not is_json_artifact_complete(claim_output_path):
-                recovered_payload = extract_structured_json_artifact(stage.stage_id, claim_repair_result.stdout)
-                if recovered_payload is not None:
-                    write_json(claim_output_path, recovered_payload)
                 if process_controller is not None and process_controller.is_cancelled(stage.stage_id):
                     marker = "cancelled_due_to_parallel_stage_failure"
                     cancellation_marker = marker
@@ -1013,14 +1433,20 @@ def run_structured_stage(
                         claim_repair_result.stdout,
                         claim_repair_result.stderr + ("\n" if claim_repair_result.stderr else "") + marker,
                     )
+                transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "cancelled")
+                save_state(state_path, state)
                 raise StageCancelledError(f"Stage {stage.stage_id} cancelled due to parallel stage failure.")
             if claim_repair_result.returncode != 0:
+                transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "failed")
+                save_state(state_path, state)
                 raise RuntimeError(f"claim-pass failed via {adapter.name}: {claim_repair_result.stderr.strip()}")
             merged_payload, validation = validate_combined_claim_payload(source_payload)
             structured_validation_errors = validation.structured_errors
             structured_validation_warnings = validation.structured_warnings
             markdown_validation_errors = validation.markdown_errors
         if structured_validation_errors:
+            transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "failed")
+            save_state(state_path, state)
             details = "; ".join(structured_validation_errors)
             details = re.sub(
                 r"inferences\[\d+\] must include at least one evidence source\.",
@@ -1036,17 +1462,33 @@ def run_structured_stage(
             )
             raise RuntimeError(f"Stage {stage.stage_id} failed structured validation: {details}")
         if markdown_validation_errors:
+            transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "failed")
+            save_state(state_path, state)
             raise RuntimeError(f"Stage {stage.stage_id} failed markdown contract validation: {'; '.join(markdown_validation_errors)}")
 
+        transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "completed")
+        transition_substep_status(run_dir, state, stage.stage_id, "render", "started")
+        save_state(state_path, state)
         write_json(structured_output_path, validation.normalized_payload)
         output_path.write_text(validation.canonical_markdown, encoding="utf-8")
+        transition_substep_status(run_dir, state, stage.stage_id, "render", "completed")
+        save_state(state_path, state)
         reporter.complete(adapter.name, stage.stage_id)
         return stage.stage_id, "completed"
     except StageCancelledError:
         cancellation_marker = "cancelled_due_to_parallel_stage_failure"
+        transition_substep_status(run_dir, state, stage.stage_id, "render", "cancelled")
+        save_state(state_path, state)
         reporter.cancel(adapter.name, stage.stage_id)
         raise
     except Exception:
+        for stage_state in state["stages"]:
+            if stage_state["id"] == stage.stage_id:
+                render_entry = stage_state.get("substeps", {}).get("render", {})
+                if isinstance(render_entry, dict) and render_entry.get("status") == "running":
+                    transition_substep_status(run_dir, state, stage.stage_id, "render", "failed")
+                    save_state(state_path, state)
+                break
         reporter.fail(adapter.name, stage.stage_id)
         raise
     finally:
@@ -1160,83 +1602,6 @@ def resolve_adapter(adapter_name: str) -> CLIAdapter:
     return adapter
 
 
-def parse_yaml_scalar(raw: str) -> object:
-    value = raw.strip()
-    if not value:
-        return ""
-    lowered = value.lower()
-    if lowered == "true":
-        return True
-    if lowered == "false":
-        return False
-    if re.fullmatch(r"-?\d+", value):
-        return int(value)
-    if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
-        return value[1:-1]
-    return value
-
-
-def load_yaml_document(path: Path) -> dict[str, object]:
-    lines: list[tuple[int, str]] = []
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
-            continue
-        indent = len(raw_line) - len(raw_line.lstrip(" "))
-        lines.append((indent, raw_line.strip()))
-
-    def parse_block(index: int, indent: int) -> tuple[object, int]:
-        if index >= len(lines):
-            return {}, index
-        current_indent, current_text = lines[index]
-        if current_indent < indent:
-            return {}, index
-        if current_text.startswith("- "):
-            items: list[object] = []
-            while index < len(lines):
-                line_indent, text = lines[index]
-                if line_indent < indent:
-                    break
-                if line_indent != indent or not text.startswith("- "):
-                    raise ValueError(f"Unsupported YAML structure in {path}: {text}")
-                item_value = text[2:].strip()
-                if item_value:
-                    items.append(parse_yaml_scalar(item_value))
-                    index += 1
-                    continue
-                nested, index = parse_block(index + 1, indent + 2)
-                items.append(nested)
-            return items, index
-
-        mapping: dict[str, object] = {}
-        while index < len(lines):
-            line_indent, text = lines[index]
-            if line_indent < indent:
-                break
-            if line_indent != indent or ":" not in text:
-                raise ValueError(f"Unsupported YAML structure in {path}: {text}")
-            key, remainder = text.split(":", 1)
-            key = key.strip()
-            remainder = remainder.strip()
-            if remainder:
-                mapping[key] = parse_yaml_scalar(remainder)
-                index += 1
-                continue
-            if index + 1 >= len(lines) or lines[index + 1][0] <= indent:
-                mapping[key] = {}
-                index += 1
-                continue
-            nested, index = parse_block(index + 1, indent + 2)
-            mapping[key] = nested
-        return mapping, index
-
-    if not lines:
-        return {}
-    document, _ = parse_block(0, lines[0][0])
-    if not isinstance(document, dict):
-        raise ValueError(f"Expected YAML document root to be a mapping in {path}.")
-    return document
-
-
 def build_adapter_bin_map(args: argparse.Namespace) -> dict[str, str]:
     return {
         "codex": args.codex_bin,
@@ -1259,22 +1624,15 @@ def resolve_role_assignments(args: argparse.Namespace) -> dict[str, str]:
 def build_default_stage_assignments(args: argparse.Namespace) -> dict[str, StageAdapterSelection]:
     role_assignments = resolve_role_assignments(args)
     return {
-        stage.stage_id: StageAdapterSelection(adapter_name=role_assignments[stage.agent_role])
+        stage.stage_id: StageAdapterSelection(adapter_name=role_assignments[stage.agent_role], provider_name=stage.agent_role)
         for group in EXECUTION_PLAN
         for stage in group
     }
 
 
-def load_stage_assignments_from_job_config(job_dir: Path) -> dict[str, StageAdapterSelection] | None:
-    config_path = job_dir / "config.yaml"
-    if not config_path.is_file():
-        return None
-    document = load_yaml_document(config_path)
-    workflow = document.get("workflow")
-    if not isinstance(workflow, dict):
-        return None
-    execution = workflow.get("execution")
-    if not isinstance(execution, dict):
+def load_provider_catalog_from_job_config(job_dir: Path) -> dict[str, StageAdapterSelection] | None:
+    execution = load_execution_config(job_dir)
+    if execution is None:
         return None
     providers = execution.get("providers")
     stage_providers = execution.get("stage_providers")
@@ -1316,6 +1674,17 @@ def load_stage_assignments_from_job_config(job_dir: Path) -> dict[str, StageAdap
             "workflow.execution.stage_providers contains unknown stage IDs: " + ", ".join(sorted(unknown_stage_ids))
         )
 
+    return provider_configs
+
+
+def load_stage_assignments_from_job_config(job_dir: Path) -> dict[str, StageAdapterSelection] | None:
+    execution = load_execution_config(job_dir)
+    if execution is None:
+        return None
+    provider_configs = load_provider_catalog_from_job_config(job_dir)
+    stage_providers = execution.get("stage_providers")
+    if provider_configs is None or not isinstance(stage_providers, dict):
+        return None
     stage_assignments: dict[str, StageAdapterSelection] = {}
     for stage_id, provider_name in stage_providers.items():
         if not isinstance(provider_name, str) or provider_name not in provider_configs:
@@ -1333,10 +1702,118 @@ def resolve_stage_assignments(args: argparse.Namespace, job_dir: Path) -> dict[s
     return build_default_stage_assignments(args)
 
 
+def resolve_provider_runtime_policy(job_dir: Path) -> dict[str, object] | None:
+    execution = load_execution_config(job_dir)
+    if execution is None:
+        return None
+    runtime_policy = execution.get("provider_runtime_policy")
+    return runtime_policy if isinstance(runtime_policy, dict) else None
+
+
+def resolve_stage_required_provider_trust(job_dir: Path) -> dict[str, str]:
+    requirements = {
+        str(stage["id"]): DEFAULT_REQUIRED_PROVIDER_TRUST
+        for stage in RUN_STAGES
+        if stage_requires_structured_safe_adapter(str(stage["id"]))
+    }
+    execution = load_execution_config(job_dir)
+    if execution is None:
+        return requirements
+
+    global_required = execution.get("required_provider_trust")
+    if global_required is not None:
+        if not isinstance(global_required, str) or global_required not in STRUCTURED_TRUST_LEVELS:
+            raise ValueError(
+                "workflow.execution.required_provider_trust must be one of: "
+                + ", ".join(STRUCTURED_TRUST_LEVELS)
+            )
+        for stage_id in requirements:
+            requirements[stage_id] = global_required
+
+    stage_required = execution.get("stage_required_provider_trust")
+    if stage_required is None:
+        return requirements
+    if not isinstance(stage_required, dict):
+        raise ValueError("workflow.execution.stage_required_provider_trust must be a mapping when provided.")
+
+    expected_stage_ids = {str(stage["id"]) for stage in RUN_STAGES}
+    for stage_id, required_trust in stage_required.items():
+        if stage_id not in expected_stage_ids:
+            raise ValueError(
+                f"workflow.execution.stage_required_provider_trust.{stage_id} references an unknown stage."
+            )
+        if not stage_requires_structured_safe_adapter(str(stage_id)):
+            raise ValueError(
+                f"workflow.execution.stage_required_provider_trust.{stage_id} is not allowed for non-structured stages."
+            )
+        if not isinstance(required_trust, str) or required_trust not in STRUCTURED_TRUST_LEVELS:
+            raise ValueError(
+                f"workflow.execution.stage_required_provider_trust.{stage_id} must be one of: "
+                + ", ".join(STRUCTURED_TRUST_LEVELS)
+            )
+        requirements[str(stage_id)] = required_trust
+    return requirements
+
+
+def stage_requires_structured_safe_adapter(stage_id: str) -> bool:
+    if stage_id == "intake":
+        return True
+    return is_structured_stage(stage_id)
+
+
+def qualify_stage_adapters(
+    *,
+    run_dir: Path,
+    job_dir: Path,
+    stage_assignments: dict[str, StageAdapterSelection],
+    stage_required_trust: dict[str, str],
+    adapter_bins: dict[str, str],
+) -> dict[str, dict[str, object]]:
+    reports: dict[str, dict[str, object]] = {}
+    provider_required_trust: dict[tuple[str, str], str] = {}
+    for stage_id, selection in stage_assignments.items():
+        if not stage_requires_structured_safe_adapter(stage_id):
+            continue
+        provider_key = selection.provider_name or selection.adapter_name
+        pair = (provider_key, selection.adapter_name)
+        required_trust = stage_required_trust.get(stage_id, DEFAULT_REQUIRED_PROVIDER_TRUST)
+        current = provider_required_trust.get(pair)
+        if current is None or STRUCTURED_TRUST_LEVELS.index(required_trust) > STRUCTURED_TRUST_LEVELS.index(current):
+            provider_required_trust[pair] = required_trust
+
+    for (provider_key, adapter_name), required_trust in provider_required_trust.items():
+        profile = profile_for_required_trust(required_trust)
+        report = classify_adapter_qualification(
+            adapter_name=adapter_name,
+            adapter_bin=Path(adapter_bins[adapter_name]),
+            job_dir=job_dir,
+            profile=profile,
+        )
+        persist_adapter_qualification(run_dir, provider_key, adapter_name, report, profile=profile)
+        record_provider_qualification(job_dir, provider_key, report, run_id=run_dir.name)
+        reports[provider_key] = report
+
+    for stage_id, selection in stage_assignments.items():
+        if not stage_requires_structured_safe_adapter(stage_id):
+            continue
+        provider_key = selection.provider_name or selection.adapter_name
+        report = reports[provider_key]
+        required_trust = stage_required_trust.get(stage_id, DEFAULT_REQUIRED_PROVIDER_TRUST)
+        if not trust_satisfies(str(report.get("trust_level", "unsupported")), required_trust):
+            raise ValueError(
+                f"Provider '{provider_key}' using adapter '{selection.adapter_name}' is not qualified for structured stage execution; "
+                f"required_trust={required_trust}; trust_level={report.get('trust_level')}; "
+                f"classification={report.get('classification')}."
+            )
+    return reports
+
+
 def run_agent_stage(
     stage: StageExecution,
     run_dir: Path,
     job_dir: Path,
+    state: dict[str, object],
+    state_path: Path,
     stage_assignments: dict[str, StageAdapterSelection],
     adapter_bins: dict[str, str],
     reporter: ProgressReporter,
@@ -1345,11 +1822,26 @@ def run_agent_stage(
     stage_selection = stage_assignments[stage.stage_id]
     adapter = resolve_adapter(stage_selection.adapter_name)
     adapter_bin = adapter_bins[stage_selection.adapter_name]
+    if stage.stage_id == "intake":
+        return run_intake_stage(
+            stage,
+            run_dir,
+            job_dir,
+            state,
+            state_path,
+            stage_selection,
+            adapter,
+            adapter_bin,
+            reporter,
+            process_controller,
+        )
     if is_structured_stage(stage.stage_id):
         return run_structured_stage(
             stage,
             run_dir,
             job_dir,
+            state,
+            state_path,
             stage_selection,
             adapter,
             adapter_bin,
@@ -1366,13 +1858,12 @@ def run_agent_stage(
     )
     log_path = run_dir / "logs" / f"{stage.stage_id}.{adapter.name}.driver.log"
     cmd = adapter.command_builder(adapter_bin, job_dir, prompt, stage_selection.model)
-    completed = execute_adapter_command(cmd, job_dir=job_dir, stage_id=stage.stage_id, process_controller=process_controller)
     repair_attempted = False
     repair_result: CommandResult | None = None
+    artifact_kind = "structured_json" if output_path.suffix.lower() == ".json" else "markdown"
+    adapter_executor = build_adapter_executor(adapter.name, adapter_bin, artifact_kind)
 
     def evaluate_stage_result(command_result: CommandResult) -> dict[str, object]:
-        recovered_from_stdout = False
-        recovered_structured_from_stdout = False
         restored_source_registry = False
         structured_output_exists = structured_output_path.is_file() if structured_output_path is not None else False
         structured_output_complete = is_json_artifact_complete(structured_output_path) if structured_output_path is not None else False
@@ -1381,8 +1872,6 @@ def run_agent_stage(
         intake_validation_errors: list[str] = []
         markdown_validation_errors: list[str] = []
 
-        if command_result.returncode == 0 and not is_stage_output_complete(output_path):
-            recovered_from_stdout = recover_output_from_stdout(adapter, stage.stage_id, output_path, command_result.stdout)
         output_exists = output_path.is_file()
         output_complete = is_stage_output_complete(output_path)
         if command_result.returncode == 0 and output_complete and stage.stage_id == "intake":
@@ -1391,11 +1880,6 @@ def run_agent_stage(
             except (ValueError, json.JSONDecodeError) as exc:
                 intake_validation_errors = [str(exc)]
         if command_result.returncode == 0 and output_complete and structured_output_path is not None:
-            if not is_json_artifact_complete(structured_output_path):
-                recovered_payload = extract_structured_json_artifact(stage.stage_id, command_result.stdout)
-                if recovered_payload is not None:
-                    write_json(structured_output_path, recovered_payload)
-                    recovered_structured_from_stdout = True
             if (
                 source_registry_file is not None
                 and source_registry_snapshot is not None
@@ -1423,8 +1907,6 @@ def run_agent_stage(
                 except ValueError as exc:
                     structured_validation_errors = [str(exc)]
         return {
-            "recovered_from_stdout": recovered_from_stdout,
-            "recovered_structured_from_stdout": recovered_structured_from_stdout,
             "restored_source_registry": restored_source_registry,
             "structured_output_exists": structured_output_exists,
             "structured_output_complete": structured_output_complete,
@@ -1436,6 +1918,13 @@ def run_agent_stage(
             "output_complete": output_complete,
         }
 
+    completed = adapter_executor(
+        cmd,
+        job_dir=job_dir,
+        output_path=output_path,
+        stage_id=stage.stage_id,
+        process_controller=process_controller,
+    )
     evaluation = evaluate_stage_result(completed)
     if (
         completed.returncode == 0
@@ -1452,9 +1941,10 @@ def run_agent_stage(
             [*evaluation["structured_validation_errors"], *evaluation["markdown_validation_errors"]],
         )
         repair_cmd = adapter.command_builder(adapter_bin, job_dir, repair_prompt, stage_selection.model)
-        repair_result = execute_adapter_command(
+        repair_result = adapter_executor(
             repair_cmd,
             job_dir=job_dir,
+            output_path=output_path,
             stage_id=stage.stage_id,
             process_controller=process_controller,
         )
@@ -1493,9 +1983,6 @@ def run_agent_stage(
                 "OUTPUT_COMPLETE:",
                 str(evaluation["output_complete"]),
                 "",
-                "OUTPUT_RECOVERED_FROM_STDOUT:",
-                str(evaluation["recovered_from_stdout"]),
-                "",
                 "STRUCTURED_OUTPUT_PATH:",
                 str(structured_output_path) if structured_output_path is not None else "<not-applicable>",
                 "",
@@ -1504,9 +1991,6 @@ def run_agent_stage(
                 "",
                 "STRUCTURED_OUTPUT_COMPLETE:",
                 str(evaluation["structured_output_complete"]),
-                "",
-                "STRUCTURED_OUTPUT_RECOVERED_FROM_STDOUT:",
-                str(evaluation["recovered_structured_from_stdout"]),
                 "",
                 "SOURCE_REGISTRY_RESTORED_AFTER_STAGE:",
                 str(evaluation["restored_source_registry"]),
@@ -1601,7 +2085,7 @@ def run_stage_claim_extraction(
         return
 
     reporter.start("system", f"{stage_id}-claims")
-    set_stage_claim_status(state, stage_id, "running")
+    transition_post_processing_status(run_dir, state, "stage_claims", "started", stage_id=stage_id)
     save_state(state_path, state)
 
     stage_output = next(
@@ -1641,6 +2125,8 @@ def run_stage_claim_extraction(
                 str(stage_output),
                 "--output",
                 str(claim_output),
+                "--source-registry",
+                str(source_registry_path(run_dir)),
             ]
             completed = subprocess.run(cmd, cwd=job_dir, capture_output=True, text=True)
             command_display = " ".join(cmd)
@@ -1671,8 +2157,8 @@ def run_stage_claim_extraction(
         encoding="utf-8",
     )
     if completed_return_code != 0 or validation_errors:
-        set_stage_status(state, stage_id, "failed")
-        set_stage_claim_status(state, stage_id, "failed")
+        transition_stage_status(run_dir, state, stage_id, "failed")
+        transition_post_processing_status(run_dir, state, "stage_claims", "failed", stage_id=stage_id)
         save_state(state_path, state)
         reporter.fail("system", f"{stage_id}-claims")
         details = completed_stderr.strip() or "; ".join(validation_errors)
@@ -1681,7 +2167,7 @@ def run_stage_claim_extraction(
         details = details.replace("lacks an external evidence citation", "is an uncited inference or fact")
         raise RuntimeError(f"Stage claim extraction failed for {stage_id}: {details}")
 
-    set_stage_claim_status(state, stage_id, "completed")
+    transition_post_processing_status(run_dir, state, "stage_claims", "completed", stage_id=stage_id)
     save_state(state_path, state)
     reporter.complete("system", f"{stage_id}-claims")
 
@@ -1699,8 +2185,19 @@ def run_stage_group(
     runnable: list[StageExecution] = []
     for stage in stages:
         if is_stage_execution_complete(run_dir, stage):
-            set_stage_status(state, stage.stage_id, "completed")
-            adapter_name = stage_assignments[stage.stage_id].adapter_name
+            transition_stage_status(run_dir, state, stage.stage_id, "completed")
+            selection = stage_assignments[stage.stage_id]
+            adapter_name = selection.adapter_name
+            provider_key = selection.provider_name or adapter_name
+            record_provider_stage_result(
+                job_dir,
+                provider_key,
+                stage.stage_id,
+                "completed",
+                run_id=run_dir.name,
+                adapter_name=adapter_name,
+                model=selection.model,
+            )
             reporter.complete(adapter_name, stage.stage_id)
             save_state(state_path, state)
             if stage.stage_id == "intake":
@@ -1711,7 +2208,7 @@ def run_stage_group(
         else:
             runnable.append(stage)
     for stage in runnable:
-        set_stage_status(state, stage.stage_id, "running")
+        transition_stage_status(run_dir, state, stage.stage_id, "started")
     save_state(state_path, state)
 
     if not runnable:
@@ -1720,7 +2217,18 @@ def run_stage_group(
     process_controller = StageProcessController()
     with ThreadPoolExecutor(max_workers=len(runnable)) as executor:
         futures = {
-            executor.submit(run_agent_stage, stage, run_dir, job_dir, stage_assignments, adapter_bins, reporter, process_controller): stage
+            executor.submit(
+                run_agent_stage,
+                stage,
+                run_dir,
+                job_dir,
+                state,
+                state_path,
+                stage_assignments,
+                adapter_bins,
+                reporter,
+                process_controller,
+            ): stage
             for stage in runnable
         }
         pending_error: Exception | None = None
@@ -1728,7 +2236,18 @@ def run_stage_group(
             stage = futures[future]
             try:
                 stage_id, status = future.result()
-                set_stage_status(state, stage_id, status)
+                transition_stage_status(run_dir, state, stage_id, status)
+                selection = stage_assignments[stage_id]
+                provider_key = selection.provider_name or selection.adapter_name
+                record_provider_stage_result(
+                    job_dir,
+                    provider_key,
+                    stage_id,
+                    status,
+                    run_id=run_dir.name,
+                    adapter_name=selection.adapter_name,
+                    model=selection.model,
+                )
                 save_state(state_path, state)
                 if stage_id == "intake":
                     merge_intake_sources_into_registry(run_dir)
@@ -1736,14 +2255,36 @@ def run_stage_group(
                     merge_stage_sources_into_registry(stage_id, run_dir)
                 run_stage_claim_extraction(stage_id, run_dir, job_dir, state, state_path, reporter)
             except StageCancelledError:
-                set_stage_status(state, stage.stage_id, "cancelled")
+                transition_stage_status(run_dir, state, stage.stage_id, "cancelled")
+                selection = stage_assignments[stage.stage_id]
+                provider_key = selection.provider_name or selection.adapter_name
+                record_provider_stage_result(
+                    job_dir,
+                    provider_key,
+                    stage.stage_id,
+                    "cancelled",
+                    run_id=run_dir.name,
+                    adapter_name=selection.adapter_name,
+                    model=selection.model,
+                )
                 if stage.stage_id in STAGE_CLAIM_STAGE_IDS:
-                    set_stage_claim_status(state, stage.stage_id, "cancelled")
+                    transition_post_processing_status(run_dir, state, "stage_claims", "cancelled", stage_id=stage.stage_id)
                 save_state(state_path, state)
             except Exception as exc:
-                set_stage_status(state, stage.stage_id, "failed")
+                transition_stage_status(run_dir, state, stage.stage_id, "failed")
+                selection = stage_assignments[stage.stage_id]
+                provider_key = selection.provider_name or selection.adapter_name
+                record_provider_stage_result(
+                    job_dir,
+                    provider_key,
+                    stage.stage_id,
+                    "failed",
+                    run_id=run_dir.name,
+                    adapter_name=selection.adapter_name,
+                    model=selection.model,
+                )
                 if stage.stage_id in STAGE_CLAIM_STAGE_IDS:
-                    set_stage_claim_status(state, stage.stage_id, "failed")
+                    transition_post_processing_status(run_dir, state, "stage_claims", "failed", stage_id=stage.stage_id)
                 save_state(state_path, state)
                 if pending_error is None:
                     pending_error = exc
@@ -1762,13 +2303,13 @@ def run_extract_claims(
     reporter: ProgressReporter,
 ) -> None:
     if claim_output.is_file():
-        set_post_processing_status(state, "claim_extraction", "completed")
+        transition_post_processing_status(run_dir, state, "claim_extraction", "completed")
         save_state(state_path, state)
         reporter.complete("system", "claim-extraction")
         return
 
     reporter.start("system", "claim-extraction")
-    set_post_processing_status(state, "claim_extraction", "running")
+    transition_post_processing_status(run_dir, state, "claim_extraction", "started")
     save_state(state_path, state)
 
     judge_output = run_dir / "stage-outputs" / "06-judge.md"
@@ -1800,6 +2341,8 @@ def run_extract_claims(
             str(judge_output),
             "--output",
             str(claim_output),
+            "--source-registry",
+            str(source_registry_path(run_dir)),
             "--strict",
         ]
         completed = subprocess.run(cmd, cwd=job_dir, capture_output=True, text=True)
@@ -1808,9 +2351,12 @@ def run_extract_claims(
             encoding="utf-8",
         )
         if completed.returncode != 0:
+            transition_post_processing_status(run_dir, state, "claim_extraction", "failed")
+            save_state(state_path, state)
             reporter.fail("system", "claim-extraction")
             raise RuntimeError(f"Claim extraction failed: {completed.stderr.strip()}")
     set_post_processing_status(state, "claim_extraction", "completed")
+    transition_post_processing_status(run_dir, state, "claim_extraction", "completed")
     save_state(state_path, state)
     reporter.complete("system", "claim-extraction")
 
@@ -1825,13 +2371,13 @@ def run_final_artifact(
     reporter: ProgressReporter,
 ) -> None:
     if final_output.is_file():
-        set_post_processing_status(state, "final_artifact", "completed")
+        transition_post_processing_status(run_dir, state, "final_artifact", "completed")
         save_state(state_path, state)
         reporter.complete("system", "final-artifact")
         return
 
     reporter.start("system", "final-artifact")
-    set_post_processing_status(state, "final_artifact", "running")
+    transition_post_processing_status(run_dir, state, "final_artifact", "started")
     save_state(state_path, state)
 
     judge_output = run_dir / "stage-outputs" / "06-judge.md"
@@ -1854,6 +2400,8 @@ def run_final_artifact(
         encoding="utf-8",
     )
     if validate_result.returncode != 0:
+        transition_post_processing_status(run_dir, state, "final_artifact", "failed")
+        save_state(state_path, state)
         reporter.fail("system", "final-artifact")
         raise RuntimeError(f"Final artifact readiness validation failed: {validate_result.stderr.strip() or validate_result.stdout.strip()}")
 
@@ -1868,6 +2416,8 @@ def run_final_artifact(
         str(claim_output),
         "--output",
         str(final_output),
+        "--config",
+        str(job_dir / "config.yaml"),
     ]
     completed = subprocess.run(cmd, cwd=job_dir, capture_output=True, text=True)
     (run_dir / "logs" / "final-artifact.driver.log").write_text(
@@ -1875,9 +2425,11 @@ def run_final_artifact(
         encoding="utf-8",
     )
     if completed.returncode != 0:
+        transition_post_processing_status(run_dir, state, "final_artifact", "failed")
+        save_state(state_path, state)
         reporter.fail("system", "final-artifact")
         raise RuntimeError(f"Final artifact generation failed: {completed.stderr.strip()}")
-    set_post_processing_status(state, "final_artifact", "completed")
+    transition_post_processing_status(run_dir, state, "final_artifact", "completed")
     save_state(state_path, state)
     reporter.complete("system", "final-artifact")
 
@@ -1895,6 +2447,17 @@ def main() -> int:
             jobs_index_root=Path(args.jobs_index_root).expanduser(),
         )
         stage_assignments = resolve_stage_assignments(args, job_dir)
+        provider_catalog = load_provider_catalog_from_job_config(job_dir) or {
+            selection.provider_name or selection.adapter_name: selection
+            for selection in stage_assignments.values()
+        }
+        stage_assignments = apply_provider_runtime_policy(
+            job_dir,
+            stage_assignments,
+            provider_catalog,
+            resolve_provider_runtime_policy(job_dir),
+        )
+        stage_required_trust = resolve_stage_required_provider_trust(job_dir)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -1927,6 +2490,13 @@ def main() -> int:
     ) and claim_output.is_file() and final_output.is_file()
 
     try:
+        qualify_stage_adapters(
+            run_dir=run_dir,
+            job_dir=job_dir,
+            stage_assignments=stage_assignments,
+            stage_required_trust=stage_required_trust,
+            adapter_bins=adapter_bins,
+        )
         for group in EXECUTION_PLAN:
             run_stage_group(group, run_dir, job_dir, state_path, state, stage_assignments, adapter_bins, reporter)
 

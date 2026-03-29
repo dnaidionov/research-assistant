@@ -333,6 +333,256 @@ class ValidateJobTests(unittest.TestCase):
             self.assertFalse(payload["checks"]["final_artifact_ready"])
             self.assertTrue(any("uncited inferences" in error.lower() for error in payload["errors"]))
 
+    def test_final_artifact_readiness_fails_on_unresolved_structured_references(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            job_dir = self._make_job(Path(tmpdir))
+            claims_path = job_dir / "evidence" / "claims-run-001.json"
+            judge_path = job_dir / "runs" / "run-001" / "stage-outputs" / "06-judge.md"
+            judge_json_path = job_dir / "runs" / "run-001" / "stage-outputs" / "06-judge.json"
+            judge_path.parent.mkdir(parents=True)
+            judge_path.write_text(
+                "# Supported Conclusions\n1. Option A is viable. [SRC-001]\n",
+                encoding="utf-8",
+            )
+            judge_json_path.write_text(
+                """{
+  "stage": "judge",
+  "supported_conclusions": [
+    {"id": "C-001", "text": "Option A is viable.", "evidence_sources": ["SRC-001"]}
+  ],
+  "synthesis_judgments": [],
+  "unresolved_disagreements": [],
+  "confidence_assessment": [],
+  "evidence_gaps": [],
+  "rationale": [],
+  "recommended_artifact_structure": [],
+  "sources": []
+}""",
+                encoding="utf-8",
+            )
+            claims_path.write_text(
+                """{
+  "claims": [
+    {
+      "id": "C001",
+      "text": "Option A is viable.",
+      "type": "fact",
+      "provenance": [],
+      "evidence_sources": ["SRC-001"],
+      "unclassified_markers": []
+    }
+  ],
+  "summary": {
+    "claim_type_counts": {"fact": 1},
+    "claims_with_unclassified_markers": [],
+    "fact_count": 1,
+    "inference_count": 0,
+    "provenance_only_fact_ids": [],
+    "uncited_fact_ids": [],
+    "uncited_inference_ids": []
+  }
+}""",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(VALIDATE_JOB),
+                    "--job-dir",
+                    str(job_dir),
+                    "--json",
+                    "--final-artifact-ready",
+                    "--judge-artifact",
+                    str(judge_path),
+                    "--claim-register",
+                    str(claims_path),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            payload = json.loads(result.stdout)
+            self.assertFalse(payload["checks"]["final_artifact_ready"])
+            self.assertTrue(any("unresolved" in error.lower() for error in payload["errors"]))
+
+    def test_final_artifact_readiness_fails_on_provisional_structured_references(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            job_dir = self._make_job(Path(tmpdir))
+            claims_path = job_dir / "evidence" / "claims-run-001.json"
+            judge_path = job_dir / "runs" / "run-001" / "stage-outputs" / "06-judge.md"
+            judge_json_path = job_dir / "runs" / "run-001" / "stage-outputs" / "06-judge.json"
+            judge_path.parent.mkdir(parents=True)
+            judge_path.write_text(
+                "# Supported Conclusions\n1. Option A is viable. [SRC-001]\n",
+                encoding="utf-8",
+            )
+            judge_json_path.write_text(
+                """{
+  "stage": "judge",
+  "supported_conclusions": [
+    {"id": "C-001", "text": "Option A is viable.", "evidence_sources": ["SRC-001"]}
+  ],
+  "synthesis_judgments": [],
+  "unresolved_disagreements": [],
+  "confidence_assessment": [],
+  "evidence_gaps": [],
+  "rationale": [],
+  "recommended_artifact_structure": [],
+  "sources": [
+    {
+      "id": "SRC-001",
+      "title": "Recovered source",
+      "type": "unknown",
+      "authority": "recovered-from-markdown",
+      "locator": "urn:recovered:judge:SRC-001",
+      "source_class": "recovered_provisional"
+    }
+  ]
+}""",
+                encoding="utf-8",
+            )
+            claims_path.write_text(
+                """{
+  "claims": [
+    {
+      "id": "C001",
+      "text": "Option A is viable.",
+      "type": "fact",
+      "provenance": [],
+      "evidence_sources": ["SRC-001"],
+      "unclassified_markers": []
+    }
+  ],
+  "summary": {
+    "claim_type_counts": {"fact": 1},
+    "claims_with_unclassified_markers": [],
+    "fact_count": 1,
+    "inference_count": 0,
+    "provenance_only_fact_ids": [],
+    "uncited_fact_ids": [],
+    "uncited_inference_ids": []
+  }
+}""",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(VALIDATE_JOB),
+                    "--job-dir",
+                    str(job_dir),
+                    "--json",
+                    "--final-artifact-ready",
+                    "--judge-artifact",
+                    str(judge_path),
+                    "--claim-register",
+                    str(claims_path),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            payload = json.loads(result.stdout)
+            self.assertFalse(payload["checks"]["final_artifact_ready"])
+            self.assertTrue(any("provisional" in error.lower() for error in payload["errors"]))
+
+    def test_final_artifact_readiness_fails_on_quality_gate_violation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            job_dir = self._make_job(Path(tmpdir))
+            (job_dir / "config.yaml").write_text(
+                "\n".join(
+                    [
+                        "topic: my-project-1",
+                        "quality_policy:",
+                        "  one_sided_source_selection: true",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            claims_path = job_dir / "evidence" / "claims-run-001.json"
+            judge_path = job_dir / "runs" / "run-001" / "stage-outputs" / "06-judge.md"
+            judge_path.parent.mkdir(parents=True)
+            judge_path.write_text("# Supported Conclusions\n1. Option A is lower risk. [SRC-001]\n", encoding="utf-8")
+            judge_path.with_suffix(".json").write_text(
+                """{
+  "stage": "judge",
+  "supported_conclusions": [
+    {"id": "C-001", "text": "Option A is lower risk.", "evidence_sources": ["SRC-001"]}
+  ],
+  "synthesis_judgments": [
+    {"id": "J-001", "text": "Recommend Option A.", "claim_class": "recommendation", "evidence_sources": ["SRC-001"], "confidence": "medium", "rationale": "Thin support."}
+  ],
+  "unresolved_disagreements": [],
+  "confidence_assessment": [],
+  "evidence_gaps": [],
+  "rationale": [],
+  "recommended_artifact_structure": [],
+  "sources": [
+    {"id": "SRC-001", "title": "Vendor marketing page", "type": "marketing page", "authority": "vendor", "locator": "https://example.com/product"}
+  ]
+}""",
+                encoding="utf-8",
+            )
+            claims_path.write_text(
+                """{
+  "claims": [
+    {
+      "id": "J-001",
+      "text": "Recommend Option A.",
+      "type": "recommendation",
+      "provenance": [],
+      "evidence_sources": ["SRC-001"],
+      "unclassified_markers": [],
+      "confidence": "medium",
+      "rationale": "Thin support."
+    }
+  ],
+  "summary": {
+    "claim_type_counts": {"recommendation": 1},
+    "truth_gated_claim_type_counts": {"recommendation": 1},
+    "claims_with_unclassified_markers": [],
+    "fact_count": 0,
+    "inference_count": 0,
+    "assumption_count": 0,
+    "provenance_only_fact_ids": [],
+    "uncited_fact_ids": [],
+    "uncited_inference_ids": [],
+    "uncited_truth_gated_ids": [],
+    "unsupported_recommendation_ids": []
+  }
+}""",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(VALIDATE_JOB),
+                    "--job-dir",
+                    str(job_dir),
+                    "--json",
+                    "--final-artifact-ready",
+                    "--judge-artifact",
+                    str(judge_path),
+                    "--claim-register",
+                    str(claims_path),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            payload = json.loads(result.stdout)
+            self.assertTrue(any("quality gate" in error.lower() for error in payload["errors"]))
+
 
 if __name__ == "__main__":
     unittest.main()

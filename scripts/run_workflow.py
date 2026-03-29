@@ -14,6 +14,7 @@ from _stage_contracts import (
     stage_structured_output_path,
     structured_output_placeholder,
 )
+from _workflow_state import append_workflow_event, initial_stage_substeps
 from _workflow_lib import (
     DEFAULT_JOB_ROOT,
     REPO_ROOT,
@@ -234,6 +235,8 @@ def build_state(job_name: str, job_dir: Path, run_id: str, run_dir: Path, create
         "job_dir": str(job_dir),
         "job_name": job_name,
         "post_processing": {
+            "claim_extraction": {"output_path": str(job_dir / "evidence" / f"claims-{run_id}.json"), "status": "pending"},
+            "final_artifact": {"output_path": str(job_dir / "outputs" / f"final-{run_id}.md"), "status": "pending"},
             "stage_claims": stage_claims,
         },
         "run_dir": str(run_dir),
@@ -252,6 +255,7 @@ def build_state(job_name: str, job_dir: Path, run_id: str, run_dir: Path, create
                 "packet_path": str(run_dir / "prompt-packets" / str(stage["packet"])),
                 "prompt_template": str(stage["template"]),
                 "status": "pending",
+                "substeps": initial_stage_substeps(str(stage["id"])),
             }
             for stage in RUN_STAGES
         ],
@@ -404,8 +408,10 @@ def scaffold_run(job_name: str, job_dir: Path, run_id: str) -> Path:
     created_files.append(sources_path)
 
     state_path = run_dir / "workflow-state.json"
-    write_json(state_path, build_state(job_name, job_dir, run_id, run_dir, created_at))
+    initial_state = build_state(job_name, job_dir, run_id, run_dir, created_at)
+    write_json(state_path, initial_state)
     created_files.append(state_path)
+    append_workflow_event(run_dir, "run_started", initial_state=initial_state)
 
     work_order_path = run_dir / "WORK_ORDER.md"
     write_text(work_order_path, build_work_order(job_name, job_dir, run_id, created_at))

@@ -1,0 +1,7 @@
+topic: reference-job-neutral
+requirements:
+  require_citations: true
+  preserve_uncertainty: true
+workflow:
+  execution:
+    required_provider_trust: structured_safe_realistic

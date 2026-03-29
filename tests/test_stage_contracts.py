@@ -11,6 +11,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from _stage_contracts import (
     build_claim_map_from_stage_json,
     merge_source_registry,
+    normalize_source_record,
     normalize_stage_citations,
     render_stage_markdown_from_json,
     source_quality_warnings,
@@ -22,6 +23,56 @@ from _stage_contracts import (
 
 
 class StageContractTests(unittest.TestCase):
+    def test_normalize_source_record_populates_policy_fields(self) -> None:
+        normalized = normalize_source_record(
+            {
+                "id": "SRC-001",
+                "title": "Vendor product page",
+                "type": "marketing page",
+                "authority": "vendor",
+                "locator": "https://example.com/product",
+            }
+        )
+
+        self.assertEqual(normalized["source_class"], "external_evidence")
+        self.assertEqual(normalized["evidence_kind"], "marketing")
+        self.assertEqual(normalized["policy_outcome"], "disfavored")
+        self.assertFalse(normalized["supports_process_claims"])
+        self.assertTrue(normalized["supports_world_claims"])
+
+    def test_build_claim_map_preserves_explicit_claim_class(self) -> None:
+        payload = {
+            "stage": "judge",
+            "supported_conclusions": [],
+            "synthesis_judgments": [
+                {
+                    "id": "J-001",
+                    "text": "Option A should be recommended.",
+                    "claim_class": "recommendation",
+                    "evidence_sources": ["SRC-001"],
+                    "confidence": "high",
+                }
+            ],
+            "unresolved_disagreements": [],
+            "confidence_assessment": [],
+            "evidence_gaps": [],
+            "rationale": [],
+            "recommended_artifact_structure": [],
+            "sources": [
+                {
+                    "id": "SRC-001",
+                    "title": "Vendor source",
+                    "type": "official documentation",
+                    "authority": "vendor",
+                    "locator": "https://example.com/src-001",
+                }
+            ],
+        }
+
+        claim_map = build_claim_map_from_stage_json("judge", payload)
+
+        self.assertEqual(claim_map["claims"][0]["type"], "recommendation")
+
     def test_accepts_structured_critique_payload(self) -> None:
         payload = {
             "stage": "critique-a-on-b",
@@ -146,6 +197,39 @@ class StageContractTests(unittest.TestCase):
         errors = validate_claim_pass_payload("research-a", payload)
 
         self.assertTrue(any("must not include sources" in error.lower() for error in errors))
+
+    def test_rejects_duplicate_source_ids(self) -> None:
+        payload = {
+            "stage": "research-a",
+            "summary": [{"text": "Summary.", "evidence_sources": ["SRC-001"]}],
+            "facts": [{"id": "F-001", "text": "Fact.", "evidence_sources": ["SRC-001"]}],
+            "inferences": [{"id": "I-001", "text": "Inference.", "evidence_sources": ["SRC-001"], "confidence": "high"}],
+            "uncertainties": [],
+            "evidence_gaps": [],
+            "preliminary_disagreements": [],
+            "source_evaluation": [],
+            "sources": [
+                {"id": "SRC-001", "title": "Source A", "type": "document", "authority": "vendor", "locator": "https://example.com/a"},
+                {"id": "SRC-001", "title": "Source B", "type": "document", "authority": "vendor", "locator": "https://example.com/b"},
+            ],
+        }
+        registry = source_registry_placeholder("run-xyz")
+
+        errors = validate_stage_json("research-a", payload, registry)
+
+        self.assertTrue(any("duplicate" in error.lower() for error in errors))
+
+    def test_source_quality_warnings_flag_duplicate_external_locators(self) -> None:
+        payload = {
+            "sources": [
+                {"id": "SRC-001", "title": "Source A", "type": "document", "authority": "vendor", "locator": "https://example.com/same"},
+                {"id": "SRC-002", "title": "Source B", "type": "document", "authority": "vendor", "locator": "https://example.com/same"},
+            ]
+        }
+
+        warnings = source_quality_warnings(payload)
+
+        self.assertTrue(any("duplicates external locator" in warning.lower() for warning in warnings))
 
     def test_semantic_support_links_distinguish_evidence_from_provenance(self) -> None:
         payload = {
