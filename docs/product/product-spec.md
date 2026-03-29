@@ -125,6 +125,7 @@ Implemented today:
 - `job_input` remains admissible evidence for claims about the current system, stated requirements, and explicit constraints when the provided brief directly contains those facts
 - `context` links no longer satisfy the semantic evidence requirement for facts or inferences that assert world claims; those claims now require at least one world-supporting `evidence` link
 - final publication now fails when any referenced evidence source is unresolved instead of rendering a bare source ID into the user-facing report
+- judge synthesis may now also carry optional structured `brief_improvements`, and final artifact generation renders them as `# Brief Improvement Recommendations` after confidence and before references when that requester-facing guidance is present
 - source-quality warnings now flag `job_input` locators that point at prompt packets so the workflow can prefer the underlying canonical artifact such as `brief.md` or `config.yaml`
 - source validation now rejects duplicate source IDs within a stage payload and warns when multiple external source IDs point at the same locator
 - markdown-only claim extraction can now consult the run-level source registry so provenance-versus-evidence classification follows source classes when a registry is available instead of relying only on marker patterns

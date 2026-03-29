@@ -9,6 +9,114 @@ GENERATE_FINAL_ARTIFACT = REPO_ROOT / "scripts" / "generate_final_artifact.py"
 
 
 class GenerateFinalArtifactTests(unittest.TestCase):
+    def test_renders_brief_improvement_recommendations_in_documented_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            judge_path = root / "judge.md"
+            judge_json_path = root / "judge.json"
+            claims_path = root / "claims.json"
+            output_path = root / "final.md"
+
+            judge_path.write_text(
+                "\n".join(
+                    [
+                        "# Supported Conclusions",
+                        "1. Option A is feasible. [SRC-001]",
+                        "",
+                        "# Inferences And Synthesis Judgments",
+                        "1. Option A is preferred. [SRC-001] Confidence: medium",
+                        "",
+                        "# Unresolved Disagreements",
+                        "- Thermal trade-offs remain open.",
+                        "",
+                        "# Confidence Assessment",
+                        "- Medium confidence.",
+                        "",
+                        "# Evidence Gaps",
+                        "- Thermal benchmark is missing.",
+                        "",
+                        "# Brief Improvement Recommendations",
+                        "1. Missing input: Deployment budget. Why it matters: This could change option ranking. Expected impact: Would narrow the recommendation. Priority: high",
+                        "",
+                        "# Rationale And Traceability",
+                        "- Judge summary.",
+                        "",
+                        "# Recommended Final Artifact Structure",
+                        "- Summary",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            judge_json_path.write_text(
+                """{
+  "stage": "judge",
+  "supported_conclusions": [
+    {"id": "C-001", "text": "Option A is feasible.", "evidence_sources": ["SRC-001"]}
+  ],
+  "synthesis_judgments": [
+    {"id": "J-001", "text": "Option A is preferred.", "evidence_sources": ["SRC-001"], "confidence": "medium"}
+  ],
+  "unresolved_disagreements": ["Thermal trade-offs remain open."],
+  "confidence_assessment": ["Medium confidence."],
+  "evidence_gaps": ["Thermal benchmark is missing."],
+  "brief_improvements": [
+    {
+      "missing_input": "Deployment budget",
+      "why_it_matters": "This could change option ranking.",
+      "expected_impact": "Would narrow the recommendation.",
+      "priority": "high"
+    }
+  ],
+  "rationale": ["Judge summary."],
+  "recommended_artifact_structure": ["Summary"],
+  "sources": [
+    {"id": "SRC-001", "title": "Primary source", "type": "report", "authority": "Vendor", "locator": "https://example.com/src-001"}
+  ]
+}""",
+                encoding="utf-8",
+            )
+            claims_path.write_text(
+                """{
+  "claims": [
+    {"id": "C-001", "text": "Option A is feasible.", "type": "fact", "provenance": [], "evidence_sources": ["SRC-001"], "unclassified_markers": []},
+    {"id": "J-001", "text": "Option A is preferred.", "type": "inference", "provenance": [], "evidence_sources": ["SRC-001"], "unclassified_markers": []}
+  ],
+  "summary": {
+    "claim_type_counts": {"fact": 1, "inference": 1},
+    "claims_with_unclassified_markers": [],
+    "fact_count": 1,
+    "inference_count": 1,
+    "provenance_only_fact_ids": [],
+    "uncited_fact_ids": [],
+    "uncited_inference_ids": []
+  }
+}""",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(GENERATE_FINAL_ARTIFACT),
+                    "--judge-input",
+                    str(judge_path),
+                    "--judge-structured-input",
+                    str(judge_json_path),
+                    "--claim-register",
+                    str(claims_path),
+                    "--output",
+                    str(output_path),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            artifact = output_path.read_text(encoding="utf-8")
+            self.assertLess(artifact.index("# Confidence And Uncertainty"), artifact.index("# Brief Improvement Recommendations"))
+            self.assertLess(artifact.index("# Brief Improvement Recommendations"), artifact.index("# References"))
+            self.assertLess(artifact.index("# References"), artifact.index("# Open Questions"))
     def test_rejects_blocked_policy_sources_during_publication(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

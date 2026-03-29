@@ -27,6 +27,12 @@ Write the final user-facing artifact for the job using the judge synthesis and c
 5. `# References`
 6. `# Open Questions`
 
+## Optional Output Sections
+
+- `# Brief Improvement Recommendations`
+  - Include this only when the judge record identifies concrete requester-supplied inputs or clarifications that would materially improve the quality, specificity, or decisiveness of the research outcome.
+  - When present, render it after `# Confidence And Uncertainty` and before `# References`.
+
 ## Source Materials
 
 Use only run artifacts produced earlier in this workflow. Treat workflow provenance as audit material rather than as external support.

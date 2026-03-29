@@ -123,6 +123,19 @@
         {"type": "array"}
       ]
     },
+    "brief_improvements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["missing_input", "why_it_matters", "expected_impact"],
+        "properties": {
+          "missing_input": {"type": "string"},
+          "why_it_matters": {"type": "string"},
+          "expected_impact": {"type": "string"},
+          "priority": {"type": "string", "enum": ["low", "medium", "high"]}
+        }
+      }
+    },
     "rationale": {
       "oneOf": [
         {"type": "string"},

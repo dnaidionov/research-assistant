@@ -115,6 +115,7 @@ The trust fields let a job demand stronger qualification depth globally or per s
 - produce the final user-facing artifact
 - use only cited claims from prior stages
 - include summary, option comparison, recommendation, confidence or uncertainty, references, and open questions
+- when the judge artifact contains actionable upstream clarifications, also include `# Brief Improvement Recommendations` after confidence and before references without reordering the required sections
 - keep workflow provenance in audit artifacts, not in the user-facing references section
 
 ## Run Artifacts

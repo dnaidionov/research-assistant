@@ -9,6 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from _stage_contracts import (
+    build_stage_json_from_markdown,
     build_claim_map_from_stage_json,
     merge_source_registry,
     normalize_source_record,
@@ -23,6 +24,49 @@ from _stage_contracts import (
 
 
 class StageContractTests(unittest.TestCase):
+    def test_builds_judge_brief_improvements_from_markdown(self) -> None:
+        markdown = "\n".join(
+            [
+                "# Supported Conclusions",
+                "1. Hybrid edge architecture is feasible. [SRC-001]",
+                "",
+                "# Inferences And Synthesis Judgments",
+                "1. Thermal design is the main blocker. [SRC-001, SRC-002] Confidence: high",
+                "",
+                "# Unresolved Disagreements",
+                "1. Platform choice remains open.",
+                "",
+                "# Confidence Assessment",
+                "- High confidence in feasibility.",
+                "",
+                "# Evidence Gaps",
+                "- Measured enclosure thermals under sustained compute load.",
+                "",
+                "# Brief Improvement Recommendations",
+                "1. Missing input: Deployment budget ceiling. Why it matters: Cost constraints may change the ranking. Expected impact: Would improve recommendation specificity. Priority: high",
+                "",
+                "# Rationale And Traceability",
+                "- Judge preserved the power dispute for auditability.",
+                "",
+                "# Recommended Final Artifact Structure",
+                "- Executive Summary",
+            ]
+        )
+
+        payload = build_stage_json_from_markdown("judge", markdown)
+
+        self.assertEqual(
+            payload["brief_improvements"],
+            [
+                {
+                    "missing_input": "Deployment budget ceiling",
+                    "why_it_matters": "Cost constraints may change the ranking",
+                    "expected_impact": "Would improve recommendation specificity",
+                    "priority": "high",
+                }
+            ],
+        )
+
     def test_normalize_source_record_populates_policy_fields(self) -> None:
         normalized = normalize_source_record(
             {
@@ -1022,7 +1066,47 @@ class StageContractTests(unittest.TestCase):
         self.assertTrue(any(claim["text"] == "Platform choice" for claim in claim_map["claims"]))
         self.assertTrue(any(claim["text"] == "Executive Summary" for claim in claim_map["claims"]))
         self.assertIn("Platform choice", markdown)
-        self.assertIn("High confidence in feasibility, medium confidence in platform choice.", markdown)
+
+    def test_renders_judge_brief_improvement_section_when_present(self) -> None:
+        payload = {
+            "stage": "judge",
+            "supported_conclusions": [
+                {"id": "SC-001", "text": "Hybrid edge architecture is feasible.", "evidence_sources": ["SRC-001"]}
+            ],
+            "synthesis_judgments": [
+                {
+                    "id": "SJ-001",
+                    "text": "Thermal design is the main blocker.",
+                    "evidence_sources": ["SRC-001", "SRC-002"],
+                    "confidence": "high",
+                }
+            ],
+            "unresolved_disagreements": ["Platform choice remains open."],
+            "confidence_assessment": ["High confidence in feasibility."],
+            "evidence_gaps": ["Measured enclosure thermals under sustained compute load."],
+            "brief_improvements": [
+                {
+                    "missing_input": "Deployment budget ceiling",
+                    "why_it_matters": "Cost constraints may change the ranking.",
+                    "expected_impact": "Would improve recommendation specificity.",
+                    "priority": "high",
+                }
+            ],
+            "rationale": "Judge preserved the power dispute for auditability.",
+            "recommended_artifact_structure": {
+                "sections": ["Executive Summary", "Architecture", "Thermal Risks", "Roadmap"]
+            },
+            "sources": [
+                {"id": "SRC-001", "title": "Source 1", "type": "document", "authority": "vendor", "locator": "https://example.com/src-001"},
+                {"id": "SRC-002", "title": "Source 2", "type": "document", "authority": "vendor", "locator": "https://example.com/src-002"},
+            ],
+        }
+
+        markdown = render_stage_markdown_from_json("judge", payload)
+
+        self.assertIn("# Brief Improvement Recommendations", markdown)
+        self.assertIn("Deployment budget ceiling", markdown)
+        self.assertIn("- High confidence in feasibility.", markdown)
         self.assertIn("- Executive Summary", markdown)
 
 

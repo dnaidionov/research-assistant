@@ -38,6 +38,15 @@ class StageSchemaTests(unittest.TestCase):
             ["evidence", "context", "challenge", "provenance"],
         )
 
+    def test_judge_schema_exposes_brief_improvements(self) -> None:
+        schema = load_schema("judge-stage.schema.json")
+        brief_improvements = schema["properties"]["brief_improvements"]["items"]["properties"]
+
+        self.assertIn("missing_input", brief_improvements)
+        self.assertIn("why_it_matters", brief_improvements)
+        self.assertIn("expected_impact", brief_improvements)
+        self.assertEqual(brief_improvements["priority"]["enum"], ["low", "medium", "high"])
+
     def test_critique_schema_exposes_semantic_support_links(self) -> None:
         schema = load_schema("critique-stage.schema.json")
         supported_claim = schema["properties"]["supported_claims"]["items"]["oneOf"][1]["properties"]

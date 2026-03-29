@@ -45,6 +45,7 @@ The runner now also enforces the rule that evidence is never implicit: each fact
 Driver logs record the invoked command, return code, stdout, stderr, output-path status, and a preview of the generated artifact so placeholder or misdirected-output failures can be diagnosed after the fact.
 `workflow-state.json` now advances to terminal run-level statuses such as `completed` and `failed` instead of remaining stuck at `scaffolded` after execution.
 Final-artifact readiness and final-artifact generation now share one publication-validation path, and markdown-only claim extraction can optionally consult the run-level source registry so provenance-versus-evidence classification follows source classes when registry data is available. Structured sidecars, standalone extraction, readiness checks, and publication now all share the same canonical claim-register summary logic. `quality_policy` now participates in readiness/publication checks, and `scripts/run_quality_benchmarks.py` evaluates stable benchmark fixtures under `fixtures/benchmarks/families/` so those quality gates remain regressible.
+Judge outputs may now also include optional requester-facing `brief_improvements`. The judge markdown bridge can round-trip that section back into structured JSON, and final artifact generation inserts it after confidence and before references without reordering the required sections.
 
 ## Canonical Research Lifecycle
 

@@ -85,6 +85,10 @@ STAGE_JSON_KEYS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+OPTIONAL_STAGE_JSON_KEYS: dict[str, tuple[str, ...]] = {
+    "judge": ("brief_improvements",),
+}
+
 SOURCE_PASS_KEYS = ("stage", "sources")
 
 
@@ -96,7 +100,8 @@ def stage_claim_keys(stage_id: str) -> tuple[str, ...]:
     expected_keys = STAGE_JSON_KEYS.get(stage_id)
     if expected_keys is None:
         raise KeyError(f"Stage {stage_id} does not have a structured contract.")
-    return tuple(key for key in expected_keys if key != "sources")
+    optional_keys = OPTIONAL_STAGE_JSON_KEYS.get(stage_id, ())
+    return tuple(key for key in (*expected_keys, *optional_keys) if key != "sources")
 
 
 def stage_structured_output_path(run_dir: Path, stage_id: str) -> Path:
@@ -627,6 +632,38 @@ def _build_source_evaluation(lines: list[str]) -> list[dict[str, object]]:
     return entries
 
 
+def _build_brief_improvements(lines: list[str]) -> list[dict[str, str]]:
+    pattern = re.compile(
+        r"^Missing input:\s*(?P<missing>.+?)\.\s+"
+        r"Why it matters:\s*(?P<why>.+?)\.\s+"
+        r"Expected impact:\s*(?P<impact>.+?)"
+        r"(?:\.\s+Priority:\s*(?P<priority>low|medium|high))?\.?$",
+        re.IGNORECASE,
+    )
+    improvements: list[dict[str, str]] = []
+    for entry in collect_numbered_items(lines):
+        normalized_entry = strip_citations_and_confidence(entry)
+        match = pattern.match(normalized_entry)
+        if match:
+            record = {
+                "missing_input": match.group("missing").strip().rstrip("."),
+                "why_it_matters": match.group("why").strip().rstrip("."),
+                "expected_impact": match.group("impact").strip().rstrip("."),
+            }
+            priority = match.group("priority")
+            if priority:
+                record["priority"] = priority.lower()
+            improvements.append(record)
+            continue
+        fallback = {
+            "missing_input": normalized_entry.rstrip("."),
+            "why_it_matters": "Needs clarification from the requester",
+            "expected_impact": "Would improve analysis quality and decision specificity",
+        }
+        improvements.append(fallback)
+    return improvements
+
+
 def _collect_source_records(stage_id: str, payload: dict[str, object]) -> list[dict[str, str]]:
     source_ids: list[str] = []
     for key, value in payload.items():
@@ -689,6 +726,7 @@ def build_stage_json_from_markdown(stage_id: str, markdown: str) -> dict[str, ob
             "unresolved_disagreements": _build_text_entries(sections.get("Unresolved Disagreements", [])),
             "confidence_assessment": _build_text_entries(sections.get("Confidence Assessment", [])),
             "evidence_gaps": _build_text_entries(sections.get("Evidence Gaps", [])),
+            "brief_improvements": _build_brief_improvements(sections.get("Brief Improvement Recommendations", [])),
             "rationale": _build_text_entries(sections.get("Rationale And Traceability", [])),
             "recommended_artifact_structure": [entry["text"] for entry in _build_text_entries(sections.get("Recommended Final Artifact Structure", []))],
         }
@@ -860,6 +898,34 @@ def _judge_recommended_structure_lines(items: object) -> list[str]:
     return [line if line.startswith("- ") else f"- {line}" for line in entry_lines]
 
 
+def _judge_brief_improvement_lines(items: object) -> list[str]:
+    if not isinstance(items, list):
+        return []
+    lines: list[str] = []
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            text = _entry_text(item)
+            if text:
+                lines.append(f"{index}. {text}")
+            continue
+        missing_input = str(item.get("missing_input", "")).strip().rstrip(".")
+        why_it_matters = str(item.get("why_it_matters", "")).strip().rstrip(".")
+        expected_impact = str(item.get("expected_impact", "")).strip().rstrip(".")
+        priority = str(item.get("priority", "")).strip().lower()
+        parts: list[str] = []
+        if missing_input:
+            parts.append(f"Missing input: {missing_input}.")
+        if why_it_matters:
+            parts.append(f"Why it matters: {why_it_matters}.")
+        if expected_impact:
+            parts.append(f"Expected impact: {expected_impact}.")
+        if priority:
+            parts.append(f"Priority: {priority}")
+        if parts:
+            lines.append(f"{index}. {' '.join(parts)}".rstrip())
+    return lines
+
+
 def _critique_summary_lines(items: object) -> list[str]:
     if isinstance(items, dict):
         text = _entry_text(items)
@@ -952,6 +1018,10 @@ def render_stage_markdown_from_json(stage_id: str, payload: dict[str, object]) -
         lines.extend(_judge_confidence_lines(payload.get("confidence_assessment")))
         lines.extend(["", "# Evidence Gaps", ""])
         lines.extend(_entry_lines(payload.get("evidence_gaps")))
+        brief_improvements = _judge_brief_improvement_lines(payload.get("brief_improvements"))
+        if brief_improvements:
+            lines.extend(["", "# Brief Improvement Recommendations", ""])
+            lines.extend(brief_improvements)
         lines.extend(["", "# Rationale And Traceability", ""])
         lines.extend(_entry_lines(payload.get("rationale")))
         lines.extend(["", "# Recommended Final Artifact Structure", ""])
@@ -1123,6 +1193,24 @@ def _validate_recommended_artifact_structure(items: object, errors: list[str]) -
     _validate_text_entry_list(items, "recommended_artifact_structure", errors)
 
 
+def _validate_brief_improvements(items: object, errors: list[str]) -> None:
+    if items in (None, []):
+        return
+    if not isinstance(items, list):
+        errors.append("brief_improvements must be a list.")
+        return
+    for position, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            errors.append(f"brief_improvements[{position}] must be an object.")
+            continue
+        _require_string(item.get("missing_input"), f"brief_improvements[{position}].missing_input", errors)
+        _require_string(item.get("why_it_matters"), f"brief_improvements[{position}].why_it_matters", errors)
+        _require_string(item.get("expected_impact"), f"brief_improvements[{position}].expected_impact", errors)
+        priority = item.get("priority")
+        if priority is not None and priority not in {"low", "medium", "high"}:
+            errors.append(f"brief_improvements[{position}].priority must be low, medium, or high.")
+
+
 def _validate_critique_summary(items: object, errors: list[str]) -> None:
     if isinstance(items, dict):
         text = items.get("text", items.get("summary"))
@@ -1283,11 +1371,12 @@ def validate_stage_json(stage_id: str, payload: dict[str, object], source_regist
     expected_keys = STAGE_JSON_KEYS.get(stage_id)
     if expected_keys is None:
         return [f"Stage {stage_id} does not have a structured contract."]
+    optional_keys = set(OPTIONAL_STAGE_JSON_KEYS.get(stage_id, ()))
 
     if payload.get("stage") != stage_id:
         errors.append(f"stage must equal {stage_id}.")
     for key in expected_keys:
-        if key not in payload:
+        if key not in payload and key not in optional_keys:
             errors.append(f"Missing required key: {key}.")
 
     source_index = _validate_source_records(source_registry.get("sources", []), errors)
@@ -1348,6 +1437,7 @@ def validate_stage_json(stage_id: str, payload: dict[str, object], source_regist
     _validate_judge_unresolved_disagreements(payload.get("unresolved_disagreements"), errors)
     _validate_confidence_assessment(payload.get("confidence_assessment"), errors)
     _validate_text_entry_list(payload.get("evidence_gaps"), "evidence_gaps", errors)
+    _validate_brief_improvements(payload.get("brief_improvements"), errors)
     _validate_text_entry_list(payload.get("rationale"), "rationale", errors)
     _validate_recommended_artifact_structure(payload.get("recommended_artifact_structure"), errors)
     return errors
@@ -1379,12 +1469,13 @@ def validate_claim_pass_payload(stage_id: str, payload: dict[str, object]) -> li
     if payload.get("stage") != stage_id:
         errors.append(f"stage must equal {stage_id}.")
     expected_keys = set(stage_claim_keys(stage_id))
+    optional_keys = set(OPTIONAL_STAGE_JSON_KEYS.get(stage_id, ()))
     if "sources" in payload:
         errors.append("claim-pass payload must not include sources.")
     extra_keys = sorted(key for key in payload.keys() if key not in expected_keys and key != "sources")
     if extra_keys:
         errors.append(f"claim-pass payload contains unexpected keys: {', '.join(extra_keys)}.")
-    missing_keys = sorted(key for key in expected_keys if key not in payload)
+    missing_keys = sorted(key for key in expected_keys if key not in payload and key not in optional_keys)
     for key in missing_keys:
         errors.append(f"Missing required key: {key}.")
     return errors

@@ -155,6 +155,34 @@ def render_structured_confidence_lines(confidence_assessment: object) -> list[st
     return []
 
 
+def render_brief_improvement_lines(brief_improvements: object) -> list[str]:
+    if not isinstance(brief_improvements, list):
+        return []
+    lines: list[str] = []
+    for item in brief_improvements:
+        if not isinstance(item, dict):
+            text = text_from_entry(item)
+            if text:
+                lines.append(text)
+            continue
+        missing_input = str(item.get("missing_input", "")).strip().rstrip(".")
+        why_it_matters = str(item.get("why_it_matters", "")).strip().rstrip(".")
+        expected_impact = str(item.get("expected_impact", "")).strip().rstrip(".")
+        priority = str(item.get("priority", "")).strip().lower()
+        parts: list[str] = []
+        if missing_input:
+            parts.append(f"Missing input: {missing_input}.")
+        if why_it_matters:
+            parts.append(f"Why it matters: {why_it_matters}.")
+        if expected_impact:
+            parts.append(f"Expected impact: {expected_impact}.")
+        if priority:
+            parts.append(f"Priority: {priority}")
+        if parts:
+            lines.append(" ".join(parts).strip())
+    return lines
+
+
 def validate_inputs(
     judge_text: str,
     payload: dict[str, object],
@@ -239,6 +267,7 @@ def render_artifact(
 
         confidence = render_structured_confidence_lines(judge_structured_payload.get("confidence_assessment"))
         open_questions = normalize_lines([text_from_entry(item) for item in judge_structured_payload.get("evidence_gaps", []) if text_from_entry(item)])
+        brief_improvements = render_brief_improvement_lines(judge_structured_payload.get("brief_improvements"))
     else:
         executive_summary = normalize_lines(sections.get("Supported Conclusions", []))
         if not executive_summary:
@@ -259,6 +288,7 @@ def render_artifact(
         recommendation = choose_recommendation(claims, sections)
         confidence = normalize_lines(sections.get("Confidence Assessment", []))
         open_questions = normalize_lines(sections.get("Evidence Gaps", []))
+        brief_improvements = normalize_lines(sections.get("Brief Improvement Recommendations", []))
 
     if not confidence:
         confidence = ["Confidence remains limited where source coverage is incomplete or evidence is mixed."]
@@ -268,6 +298,8 @@ def render_artifact(
             for claim in claims
             if claim.get("type") in {"open_question", "evidence_gap"}
         ][:5]
+    if not brief_improvements:
+        brief_improvements = []
 
     references = used_reference_ids or extract_reference_ids(claims)
     if not references:
@@ -294,16 +326,29 @@ def render_artifact(
         "",
         *[f"- {line}" for line in confidence],
         "",
-        "# References",
-        "",
-        *reference_lines,
-        "",
-        "# Open Questions",
-        "",
-        *[f"- {line}" for line in open_questions],
-        "",
-        "<!-- Workflow provenance remains in the audit artifacts and claim register, not in the user-facing references list. -->",
     ]
+    if brief_improvements:
+        parts.extend(
+            [
+                "# Brief Improvement Recommendations",
+                "",
+                *[f"- {line}" for line in brief_improvements],
+                "",
+            ]
+        )
+    parts.extend(
+        [
+            "# References",
+            "",
+            *reference_lines,
+            "",
+            "# Open Questions",
+            "",
+            *[f"- {line}" for line in open_questions],
+            "",
+            "<!-- Workflow provenance remains in the audit artifacts and claim register, not in the user-facing references list. -->",
+        ]
+    )
     artifact = "\n".join(parts).rstrip() + "\n"
     if PLACEHOLDER_PATTERN.search(artifact):
         raise ValueError("Generated artifact contains unresolved placeholder or template residue.")

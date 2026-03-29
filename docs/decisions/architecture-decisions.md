@@ -165,6 +165,7 @@ Status:
 - provider scorecards now also separate adapter execution outcomes from downstream claim-extraction failures. A stage that executed successfully but later failed claim extraction is recorded once as adapter `completed`; the later extraction failure still fails the run, but it does not create a second synthetic provider `failed` event for the same attempt.
 - a structured-stage repair that exits `0` but still fails to materialize its required JSON artifact is now treated as a hard missing-artifact failure, not as an implicit cancellation. That keeps the authoritative artifact contract consistent: missing structured output is not a recoverable success path.
 - research quality now has explicit benchmarked gates. `quality_policy` participates in final-artifact readiness/publication checks, and `scripts/run_quality_benchmarks.py` evaluates stable benchmark fixtures under `fixtures/benchmarks/families/` for one-sided source selection, disfavored recommendation support, missing required comparison dimensions, evidence-quality mismatch, and disagreement collapse.
+- judge synthesis may now carry optional `brief_improvements` for requester-actionable missing inputs. The markdown bridge round-trips that section back into structured JSON, and final artifact generation inserts it after confidence and before references so the optional section does not reorder the required artifact contract.
 
 ---
 
