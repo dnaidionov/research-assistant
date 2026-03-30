@@ -84,6 +84,10 @@ Implemented today:
 - append-only workflow event journals at `runs/<run-id>/events.jsonl`
 - scaffolded run-level source registries
 - scaffolded structured JSON stage outputs for research A, research B, both critique stages, and judge
+- run-level usage telemetry under `runs/<run-id>/audit/usage/`, with execution attempts and qualification probes tracked separately
+- usage telemetry now records duration, prompt size, stdout/stderr size, adapter, model, and token counts when a CLI exposes them; otherwise token fields remain null and the record is marked `usage_status: unavailable`
+- usage telemetry resume paths do not append synthetic post-processing completion records when claim-extraction or final-artifact outputs already exist
+- usage telemetry records sibling-interrupted structured substeps as `cancelled` rather than `failed`
 - explicit intake-contract validation for the intake JSON stage, now with source-backed `known_facts`, intake-declared sources, short supporting excerpts for each fact, stable source anchors, and decomposed source / fact-lineage / normalization execution before the final intake artifact is accepted
 - unified structured-stage validation for research, critique, and judge outputs, including source-ID resolution against the run registry
 - flexible validation for non-truth-critical narrative sections such as summaries, uncertainties, and source-evaluation notes

@@ -114,7 +114,7 @@ class ExecuteWorkflowTests(unittest.TestCase):
 
         self.assertEqual(
             cmd,
-            ["gemini", "--model", "gemini-3.1-pro-preview", "-p", "prompt text", "-y"],
+            ["gemini", "--model", "gemini-3.1-pro-preview", "-p", "prompt text", "-y", "--output-format", "text"],
         )
 
     def test_build_adapter_executor_rejects_unknown_artifact_kind(self) -> None:
@@ -1501,6 +1501,31 @@ class ExecuteWorkflowTests(unittest.TestCase):
         self.assertIn("DOC-BRIEF", source_ids)
         self.assertIn("DOC-CONFIG", source_ids)
 
+        usage_records_path = run_dir / "audit" / "usage" / "usage-records.json"
+        usage_summary_path = run_dir / "audit" / "usage" / "usage-summary.json"
+        qualification_usage_records_path = run_dir / "audit" / "usage" / "qualification-usage-records.json"
+        self.assertTrue(usage_records_path.is_file())
+        self.assertTrue(usage_summary_path.is_file())
+        self.assertTrue(qualification_usage_records_path.is_file())
+
+        usage_records = json.loads(usage_records_path.read_text(encoding="utf-8"))
+        self.assertTrue(any(record["stage_id"] == "intake" and record["substep"] == "source-pass" for record in usage_records))
+        self.assertTrue(any(record["stage_id"] == "research-a" and record["substep"] == "claim-pass" for record in usage_records))
+        self.assertTrue(any(record["stage_id"] == "judge" and record["substep"] == "render" for record in usage_records))
+        self.assertTrue(any(record["stage_id"] == "claim-extraction" and record["scope"] == "post_processing" for record in usage_records))
+        self.assertTrue(any(record["stage_id"] == "final-artifact" and record["scope"] == "post_processing" for record in usage_records))
+        self.assertTrue(all(record["usage_status"] in {"reported", "estimated", "unavailable"} for record in usage_records))
+
+        usage_summary = json.loads(usage_summary_path.read_text(encoding="utf-8"))
+        self.assertIn("execution", usage_summary)
+        self.assertIn("qualification", usage_summary)
+        self.assertGreaterEqual(usage_summary["execution"]["totals"]["records"], len(usage_records))
+
+        qualification_usage_records = json.loads(qualification_usage_records_path.read_text(encoding="utf-8"))
+        self.assertTrue(any(record["scope"] == "qualification" and record["probe_name"] == "markdown_render" for record in qualification_usage_records))
+        self.assertTrue(any(record["provider_key"] == "primary" for record in qualification_usage_records))
+        self.assertTrue(any(record["provider_key"] == "secondary" for record in qualification_usage_records))
+
         state = json.loads((run_dir / "workflow-state.json").read_text(encoding="utf-8"))
         statuses = {stage["id"]: stage["status"] for stage in state["stages"]}
         self.assertEqual(statuses["intake"], "completed")
@@ -2227,6 +2252,63 @@ class ExecuteWorkflowTests(unittest.TestCase):
             self.assertEqual(after["totals"], before["totals"])
             self.assertEqual(len(after["stage_results"]), len(before["stage_results"]))
 
+    def test_resuming_completed_run_does_not_duplicate_post_processing_usage_records(self) -> None:
+        first = subprocess.run(
+            [
+                "python3",
+                str(EXECUTE_WORKFLOW),
+                "--job-path",
+                str(self.job_dir),
+                "--run-id",
+                "run-usage-resume",
+                "--codex-bin",
+                str(self.codex_bin),
+                "--gemini-bin",
+                str(self.gemini_bin),
+                "--antigravity-bin",
+                str(self.antigravity_bin),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(first.returncode, 0, first.stderr)
+
+        usage_path = self.job_dir / "runs" / "run-usage-resume" / "audit" / "usage" / "usage-records.json"
+        before_records = json.loads(usage_path.read_text(encoding="utf-8"))
+        before_post_processing = [
+            record for record in before_records if record["stage_id"] in {"claim-extraction", "final-artifact"}
+        ]
+        self.assertEqual(len(before_post_processing), 2)
+
+        resumed = subprocess.run(
+            [
+                "python3",
+                str(EXECUTE_WORKFLOW),
+                "--job-path",
+                str(self.job_dir),
+                "--run-id",
+                "run-usage-resume",
+                "--codex-bin",
+                str(self.codex_bin),
+                "--gemini-bin",
+                str(self.gemini_bin),
+                "--antigravity-bin",
+                str(self.antigravity_bin),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            input="yes\n",
+        )
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+
+        after_records = json.loads(usage_path.read_text(encoding="utf-8"))
+        after_post_processing = [
+            record for record in after_records if record["stage_id"] in {"claim-extraction", "final-artifact"}
+        ]
+        self.assertEqual(after_post_processing, before_post_processing)
+
     def test_run_stage_group_does_not_double_record_provider_result_when_claim_extraction_fails(self) -> None:
         run_dir = self.job_dir / "runs" / "run-claim-extraction-fails"
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -2591,6 +2673,15 @@ class ExecuteWorkflowTests(unittest.TestCase):
         self.assertIn("OUTPUT_EXISTS:\nTrue", driver_log)
         self.assertIn("OUTPUT_COMPLETE:\nFalse", driver_log)
         self.assertIn("Status: not started", driver_log)
+
+        usage_records = json.loads((run_dir / "audit" / "usage" / "usage-records.json").read_text(encoding="utf-8"))
+        failed_research_b_records = [
+            record
+            for record in usage_records
+            if record["stage_id"] == "research-b" and record["scope"] == "stage" and record["status"] == "failed"
+        ]
+        self.assertTrue(failed_research_b_records)
+        self.assertTrue(all(record["failure_reason"] for record in failed_research_b_records))
 
     def test_fails_when_intake_output_breaks_contract(self) -> None:
         self.codex_bin.write_text(
@@ -3409,6 +3500,13 @@ class ExecuteWorkflowTests(unittest.TestCase):
         self.assertEqual(statuses["research-b"], "cancelled")
         driver_log = (run_dir / "logs" / "research-b.gemini.driver.log").read_text(encoding="utf-8")
         self.assertIn("cancelled_due_to_parallel_stage_failure", driver_log)
+        usage_records = json.loads((run_dir / "audit" / "usage" / "usage-records.json").read_text(encoding="utf-8"))
+        research_b_records = [
+            record for record in usage_records if record["stage_id"] == "research-b" and record["scope"] == "stage"
+        ]
+        self.assertTrue(research_b_records)
+        self.assertTrue(any(record["status"] == "cancelled" for record in research_b_records))
+        self.assertFalse(any(record["status"] == "failed" for record in research_b_records))
 
     def test_rejects_unknown_adapter_name(self) -> None:
         result = subprocess.run(

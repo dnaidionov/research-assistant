@@ -134,6 +134,12 @@ The run directory contains:
 - `audit/`
 - `logs/`
 
+Automated runs now also write usage telemetry under `audit/usage/`:
+
+- `usage-records.json` for execution-stage, substage, and post-processing attempts
+- `qualification-usage-records.json` for provider qualification probes
+- `usage-summary.json` for run-level totals and grouping by stage, provider, adapter, and model
+
 The workflow script writes placeholder stage outputs as part of the scaffold so the run is auditable before any provider execution happens.
 
 ## Job-Level Artifacts
@@ -184,7 +190,13 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - if a new research area does not fit an existing family, the workflow should continue using `neutral` by default while a new family is created and customized explicitly
 - supports stale-aware reruns for regression qualification by fingerprinting `shared/prompts/`, `schemas/`, `scripts/`, and the target job's `config.yaml`
 - fingerprints the realistic qualification fixtures and the stable reference job fixtures too, so stale detection now follows repo-side drift in those artifacts as well
+- forces Gemini into plain-text headless output so structured artifact recovery does not depend on rich terminal rendering
 - passes each tool explicit stage metadata including stage id, prompt-packet path, markdown output path, structured-output path where required, and source-registry path
+- records execution usage telemetry for stage attempts, structured substages, and post-processing steps for both successful and failed runs
+- records qualification probe usage separately from execution usage so preflight overhead can be inspected without corrupting workflow-stage totals
+- treats token counts as opportunistic exact telemetry rather than universal truth: when a CLI does not expose token usage, the record is kept with `usage_status: unavailable`
+- does not append synthetic claim-extraction or final-artifact usage records when those outputs already exist on resume
+- records sibling-interrupted structured substeps as `cancelled` in usage telemetry instead of inflating failure counts
 - executes intake as:
   - source declaration
   - direct fact-lineage extraction
@@ -243,6 +255,7 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - classifies the adapter as `structured_safe`, `markdown_only`, or `unsupported`
 - also reports a trust tier such as `structured_safe_smoke`, `structured_safe_regression`, or `structured_safe_realistic`
 - can persist that report into a run's `audit/adapter-qualification/` directory
+- when persisted through the workflow runner, also contributes per-probe usage records under `audit/usage/qualification-usage-records.json`
 - supports `--profile smoke` and `--profile workflow-regression`
 - also supports `--profile workflow-regression-realistic`
 - the `workflow-regression` profile is now probe-set version `workflow-regression.v2` and treats critique and judge regression probes as part of the structured-safe decision rather than as informational extras

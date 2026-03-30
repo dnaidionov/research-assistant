@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 from _adapter_regression import qualification_inputs_fingerprint
+from _usage_telemetry import append_usage_record, build_usage_record
 from _workflow_lib import REPO_ROOT
 from _workflow_lib import write_json
 
@@ -379,10 +380,29 @@ def classify_adapter_qualification(
             )
             cmd = adapter.command_builder(str(adapter_bin), job_dir, prompt, None)
             result = executor(cmd, job_dir=job_dir, output_path=probe_path, stage_id="adapter-qualification")
+            probe_usage = build_usage_record(
+                scope="qualification",
+                stage_id=str(probe["stage_id"]),
+                substep=str(probe["substep"]) if probe["substep"] is not None else None,
+                probe_name=probe_name,
+                profile=profile,
+                provider_key=adapter_name,
+                adapter=adapter_name,
+                model=None,
+                status="completed" if result.returncode == 0 else "failed",
+                started_at=result.started_at or "",
+                finished_at=result.finished_at or "",
+                duration_ms=result.duration_ms or 0,
+                prompt_text=prompt,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                failure_reason=result.stderr.strip() or None if result.returncode != 0 else None,
+            )
             if result.returncode != 0:
                 probe_results[probe_name] = {
                     "ok": False,
                     "error": result.stderr.strip() or f"{artifact_kind} qualification command failed",
+                    "usage": probe_usage,
                 }
                 continue
             ok, error = (
@@ -390,7 +410,7 @@ def classify_adapter_qualification(
                 if artifact_kind == "markdown"
                 else _validate_structured_output(probe_path)
             )
-            probe_results[probe_name] = {"ok": ok}
+            probe_results[probe_name] = {"ok": ok, "usage": probe_usage}
             if error:
                 probe_results[probe_name]["error"] = error
 
@@ -441,4 +461,16 @@ def persist_adapter_qualification(
 ) -> Path:
     path = qualification_report_path(run_dir, provider_key, adapter_name, profile)
     write_json(path, payload)
+    for probe_name, probe_payload in payload.get("probes", {}).items():
+        if not isinstance(probe_payload, dict):
+            continue
+        usage = probe_payload.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        qualification_record = dict(usage)
+        qualification_record["provider_key"] = provider_key
+        qualification_record["adapter"] = adapter_name
+        qualification_record["probe_name"] = str(probe_name)
+        qualification_record["profile"] = profile
+        append_usage_record(run_dir, qualification_record, qualification=True)
     return path

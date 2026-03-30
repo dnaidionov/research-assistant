@@ -55,6 +55,14 @@ from _intake_contracts import (
     validate_intake_payload,
     validate_intake_sources_payload,
 )
+from _usage_telemetry import (
+    append_usage_record,
+    build_manual_usage_record,
+    build_usage_record,
+    finish_operation,
+    timed_operation_bounds,
+    utc_now_iso,
+)
 from _stage_validation import validate_structured_stage_artifact
 from _workflow_lib import write_json
 from _workflow_state import (
@@ -123,6 +131,17 @@ class CommandResult:
     returncode: int
     stdout: str
     stderr: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    duration_ms: int | None = None
+    prompt_chars: int | None = None
+    prompt_bytes: int | None = None
+    stdout_bytes: int | None = None
+    stderr_bytes: int | None = None
+    usage_status: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
 
 
 class StageCancelledError(RuntimeError):
@@ -200,7 +219,7 @@ def build_codex_command(binary: str, job_dir: Path, prompt: str, model: str | No
 
 
 def build_gemini_command(binary: str, job_dir: Path, prompt: str, model: str | None = None) -> list[str]:
-    return [binary, "--model", model or DEFAULT_GEMINI_MODEL, "-p", prompt, "-y"]
+    return [binary, "--model", model or DEFAULT_GEMINI_MODEL, "-p", prompt, "-y", "--output-format", "text"]
 
 
 def build_antigravity_command(binary: str, job_dir: Path, prompt: str, model: str | None = None) -> list[str]:
@@ -472,12 +491,14 @@ def build_adapter_executor(adapter_name: str, adapter_bin: Path | str, artifact_
         job_dir: Path,
         output_path: Path,
         stage_id: str,
+        prompt_text: str | None = None,
         process_controller: StageProcessController | None = None,
     ) -> CommandResult:
         result = execute_adapter_command(
             cmd,
             job_dir=job_dir,
             stage_id=stage_id,
+            prompt_text=prompt_text,
             process_controller=process_controller,
         )
         if result.returncode != 0:
@@ -599,6 +620,79 @@ def set_post_processing_status(state: dict[str, object], key: str, status: str) 
 
 def set_stage_claim_status(state: dict[str, object], stage_id: str, status: str) -> None:
     state["post_processing"]["stage_claims"][stage_id]["status"] = status
+
+
+def append_command_usage_record(
+    *,
+    run_dir: Path,
+    scope: str,
+    stage_id: str,
+    provider_key: str,
+    adapter: str,
+    model: str | None,
+    result: CommandResult,
+    status: str,
+    prompt_text: str | None,
+    failure_reason: str | None = None,
+    substep: str | None = None,
+    attempt_index: int = 1,
+) -> None:
+    started_at = result.started_at or utc_now_iso()
+    finished_at = result.finished_at or started_at
+    duration_ms = result.duration_ms or 0
+    record = build_usage_record(
+        scope=scope,
+        stage_id=stage_id,
+        status=status,
+        provider_key=provider_key,
+        adapter=adapter,
+        model=model,
+        started_at=started_at,
+        finished_at=finished_at,
+        duration_ms=duration_ms,
+        prompt_text=prompt_text,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        attempt_index=attempt_index,
+        failure_reason=failure_reason,
+        substep=substep,
+        usage_status=result.usage_status,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        total_tokens=result.total_tokens,
+    )
+    append_usage_record(run_dir, record)
+
+
+def append_manual_stage_usage_record(
+    *,
+    run_dir: Path,
+    scope: str,
+    stage_id: str,
+    status: str,
+    provider_key: str,
+    adapter: str,
+    model: str | None,
+    started_at: str,
+    finished_at: str,
+    failure_reason: str | None = None,
+    substep: str | None = None,
+) -> None:
+    append_usage_record(
+        run_dir,
+        build_manual_usage_record(
+            scope=scope,
+            stage_id=stage_id,
+            status=status,
+            provider_key=provider_key,
+            adapter=adapter,
+            model=model,
+            started_at=started_at,
+            finished_at=finished_at,
+            failure_reason=failure_reason,
+            substep=substep,
+        ),
+    )
 
 
 def transition_stage_status(run_dir: Path, state: dict[str, object], stage_id: str, status: str) -> None:
@@ -913,8 +1007,10 @@ def execute_adapter_command(
     *,
     job_dir: Path,
     stage_id: str,
+    prompt_text: str | None = None,
     process_controller: StageProcessController | None = None,
 ) -> CommandResult:
+    started_monotonic, started_at = timed_operation_bounds()
     process = subprocess.Popen(
         cmd,
         cwd=job_dir,
@@ -930,13 +1026,45 @@ def execute_adapter_command(
     finally:
         if process_controller is not None:
             process_controller.unregister(stage_id, process)
-    return CommandResult(returncode=process.returncode, stdout=stdout, stderr=stderr)
+    finished_at, duration_ms = finish_operation(started_monotonic)
+    usage_record = build_usage_record(
+        scope="stage",
+        stage_id=stage_id,
+        status="completed" if process.returncode == 0 else "failed",
+        provider_key="<unknown>",
+        adapter="<unknown>",
+        model=None,
+        started_at=started_at,
+        finished_at=finished_at,
+        duration_ms=duration_ms,
+        prompt_text=prompt_text,
+        stdout=stdout,
+        stderr=stderr,
+        failure_reason=stderr.strip() or None if process.returncode != 0 else None,
+    )
+    return CommandResult(
+        returncode=process.returncode,
+        stdout=stdout,
+        stderr=stderr,
+        started_at=started_at,
+        finished_at=finished_at,
+        duration_ms=duration_ms,
+        prompt_chars=usage_record["prompt_chars"],
+        prompt_bytes=usage_record["prompt_bytes"],
+        stdout_bytes=usage_record["stdout_bytes"],
+        stderr_bytes=usage_record["stderr_bytes"],
+        usage_status=usage_record["usage_status"],
+        input_tokens=usage_record["input_tokens"],
+        output_tokens=usage_record["output_tokens"],
+        total_tokens=usage_record["total_tokens"],
+    )
 
 
 def execute_json_substep(
     *,
     stage: StageExecution,
     substep: str,
+    provider_key: str,
     adapter: CLIAdapter,
     adapter_bin: str,
     job_dir: Path,
@@ -951,12 +1079,14 @@ def execute_json_substep(
 ) -> tuple[CommandResult, dict[str, object], bool, CommandResult | None, list[str]]:
     repair_attempted = False
     repair_result: CommandResult | None = None
+    attempt_records: list[dict[str, object]] = []
     executor = build_adapter_executor(adapter.name, adapter_bin, "structured_json")
     result = executor(
         adapter.command_builder(adapter_bin, job_dir, prompt, model),
         job_dir=job_dir,
         output_path=output_json_path,
         stage_id=stage.stage_id,
+        prompt_text=prompt,
         process_controller=process_controller,
     )
 
@@ -977,7 +1107,49 @@ def execute_json_substep(
         validation_errors = validator(payload)
         return payload, validation_errors, True
 
+    def queue_attempt_record(
+        *,
+        command_result: CommandResult,
+        status: str,
+        prompt_text: str,
+        failure_reason: str | None,
+        attempt_index: int,
+    ) -> None:
+        attempt_records.append(
+            {
+                "result": command_result,
+                "status": status,
+                "prompt_text": prompt_text,
+                "failure_reason": failure_reason,
+                "attempt_index": attempt_index,
+            }
+        )
+
+    def flush_attempt_records() -> None:
+        for record in attempt_records:
+            append_command_usage_record(
+                run_dir=run_dir,
+                scope="stage",
+                stage_id=stage.stage_id,
+                provider_key=provider_key,
+                adapter=adapter.name,
+                model=model,
+                result=record["result"],
+                status=record["status"],
+                prompt_text=record["prompt_text"],
+                failure_reason=record["failure_reason"],
+                substep=substep,
+                attempt_index=record["attempt_index"],
+            )
+
     payload, validation_errors, repairable = load_and_validate(result)
+    queue_attempt_record(
+        command_result=result,
+        status="completed" if result.returncode == 0 and not validation_errors else "failed",
+        prompt_text=prompt,
+        failure_reason=None if result.returncode == 0 and not validation_errors else (result.stderr.strip() or "; ".join(validation_errors) or "validation failed"),
+        attempt_index=1,
+    )
     if result.returncode == 0 and validation_errors and repairable:
         repair_attempted = True
         repair_prompt = repair_prompt_builder(validation_errors)
@@ -986,16 +1158,42 @@ def execute_json_substep(
             job_dir=job_dir,
             output_path=output_json_path,
             stage_id=stage.stage_id,
+            prompt_text=repair_prompt,
             process_controller=process_controller,
         )
         result = repair_result
         payload, validation_errors, _ = load_and_validate(repair_result)
+        queue_attempt_record(
+            command_result=repair_result,
+            status="completed" if repair_result.returncode == 0 and not validation_errors else "failed",
+            prompt_text=repair_prompt,
+            failure_reason=None if repair_result.returncode == 0 and not validation_errors else (repair_result.stderr.strip() or "; ".join(validation_errors) or "validation failed"),
+            attempt_index=2,
+        )
 
     if process_controller is not None and process_controller.is_cancelled(stage.stage_id):
         marker = "cancelled_due_to_parallel_stage_failure"
         if marker not in result.stderr:
             result = CommandResult(result.returncode, result.stdout, result.stderr + ("\n" if result.stderr else "") + marker)
+        if repair_result is None:
+            attempt_records = [
+                {
+                    "result": result,
+                    "status": "cancelled",
+                    "prompt_text": prompt,
+                    "failure_reason": marker,
+                    "attempt_index": 1,
+                }
+            ]
+        else:
+            last_attempt = attempt_records[-1]
+            last_attempt["result"] = result
+            last_attempt["status"] = "cancelled"
+            last_attempt["failure_reason"] = marker
+        flush_attempt_records()
         raise StageCancelledError(f"Stage {stage.stage_id} cancelled due to parallel stage failure.")
+
+    flush_attempt_records()
 
     if result.returncode != 0:
         raise SubstepExecutionError(
@@ -1028,6 +1226,7 @@ def run_intake_stage(
     process_controller: StageProcessController | None,
 ) -> tuple[str, str]:
     reporter.start(adapter.name, stage.stage_id)
+    stage_started_monotonic, stage_started_at = timed_operation_bounds()
     output_path = stage_output_path(run_dir, stage.output_name)
     source_output_path = stage_substep_output_path(run_dir, stage.stage_id, "source-pass")
     fact_output_path = stage_substep_output_path(run_dir, stage.stage_id, "fact-lineage")
@@ -1036,6 +1235,8 @@ def run_intake_stage(
     fact_scratch_path = stage_substep_markdown_path(run_dir, stage.stage_id, "fact-lineage")
     normalization_scratch_path = stage_substep_markdown_path(run_dir, stage.stage_id, "normalization")
     provider_key = stage_selection.provider_name or stage_selection.adapter_name
+    stage_failure_reason: str | None = None
+    stage_status = "completed"
 
     def try_resume_sources() -> tuple[bool, dict[str, object] | None]:
         if not is_json_artifact_complete(source_output_path):
@@ -1099,6 +1300,7 @@ def run_intake_stage(
             _result, sources_payload, repair_attempted, _repair_result, _errors = execute_json_substep(
                 stage=stage,
                 substep="source-pass",
+                provider_key=provider_key,
                 adapter=adapter,
                 adapter_bin=adapter_bin,
                 job_dir=job_dir,
@@ -1152,6 +1354,7 @@ def run_intake_stage(
             _result, fact_payload, repair_attempted, _repair_result, _errors = execute_json_substep(
                 stage=stage,
                 substep="fact-lineage",
+                provider_key=provider_key,
                 adapter=adapter,
                 adapter_bin=adapter_bin,
                 job_dir=job_dir,
@@ -1206,6 +1409,7 @@ def run_intake_stage(
             _result, normalization_payload, repair_attempted, _repair_result, _errors = execute_json_substep(
                 stage=stage,
                 substep="normalization",
+                provider_key=provider_key,
                 adapter=adapter,
                 adapter_bin=adapter_bin,
                 job_dir=job_dir,
@@ -1248,9 +1452,24 @@ def run_intake_stage(
             state,
             lambda: transition_substep_status(run_dir, state, stage.stage_id, "merge", "started"),
         )
+        merge_started_at = utc_now_iso()
         merged_payload = merge_intake_substep_payloads(sources_payload, fact_payload, normalization_payload)
         validation_errors = validate_intake_payload(merged_payload)
         if validation_errors:
+            merge_failed_at = utc_now_iso()
+            append_manual_stage_usage_record(
+                run_dir=run_dir,
+                scope="stage",
+                stage_id=stage.stage_id,
+                status="failed",
+                provider_key=provider_key,
+                adapter=adapter.name,
+                model=stage_selection.model,
+                started_at=merge_started_at,
+                finished_at=merge_failed_at,
+                failure_reason="; ".join(validation_errors),
+                substep="merge",
+            )
             apply_state_update(
                 state_lock,
                 state_path,
@@ -1265,10 +1484,43 @@ def run_intake_stage(
             state,
             lambda: transition_substep_status(run_dir, state, stage.stage_id, "merge", "completed"),
         )
+        merge_finished_at = utc_now_iso()
+        append_manual_stage_usage_record(
+            run_dir=run_dir,
+            scope="stage",
+            stage_id=stage.stage_id,
+            status="completed",
+            provider_key=provider_key,
+            adapter=adapter.name,
+            model=stage_selection.model,
+            started_at=merge_started_at,
+            finished_at=merge_finished_at,
+            substep="merge",
+        )
         reporter.complete(adapter.name, stage.stage_id)
         return stage.stage_id, "completed"
     except SubstepExecutionError as exc:
+        stage_failure_reason = str(exc)
+        stage_status = "failed"
         raise RuntimeError(str(exc)) from exc
+    except Exception as exc:
+        stage_failure_reason = str(exc)
+        stage_status = "failed"
+        raise
+    finally:
+        stage_finished_at, _stage_duration_ms = finish_operation(stage_started_monotonic)
+        append_manual_stage_usage_record(
+            run_dir=run_dir,
+            scope="stage",
+            stage_id=stage.stage_id,
+            status=stage_status,
+            provider_key=provider_key,
+            adapter=adapter.name,
+            model=stage_selection.model,
+            started_at=stage_started_at,
+            finished_at=stage_finished_at,
+            failure_reason=stage_failure_reason,
+        )
 
 
 def run_structured_stage(
@@ -1285,6 +1537,7 @@ def run_structured_stage(
     process_controller: StageProcessController | None,
 ) -> tuple[str, str]:
     reporter.start(adapter.name, stage.stage_id)
+    stage_started_monotonic, stage_started_at = timed_operation_bounds()
     provider_key = stage_selection.provider_name or stage_selection.adapter_name
     output_path = stage_output_path(run_dir, stage.output_name)
     structured_output_path = stage_structured_output_path(run_dir, stage.stage_id)
@@ -1310,6 +1563,8 @@ def run_structured_stage(
     cancellation_marker = ""
     source_pass_resumed = False
     claim_pass_resumed = False
+    stage_status = "completed"
+    stage_failure_reason: str | None = None
 
     def restore_source_registry() -> None:
         nonlocal source_registry_restored
@@ -1389,6 +1644,7 @@ def run_structured_stage(
                 source_result, source_payload, source_repair_attempted, source_repair_result, _ = execute_json_substep(
                     stage=stage,
                     substep="source-pass",
+                    provider_key=provider_key,
                     adapter=adapter,
                     adapter_bin=adapter_bin,
                     job_dir=job_dir,
@@ -1453,6 +1709,7 @@ def run_structured_stage(
                 claim_result, _claim_payload, claim_repair_attempted, claim_repair_result, _ = execute_json_substep(
                     stage=stage,
                     substep="claim-pass",
+                    provider_key=provider_key,
                     adapter=adapter,
                     adapter_bin=adapter_bin,
                     job_dir=job_dir,
@@ -1509,6 +1766,7 @@ def run_structured_stage(
                 adapter.command_builder(adapter_bin, job_dir, repair_prompt, stage_selection.model),
                 job_dir=job_dir,
                 stage_id=stage.stage_id,
+                prompt_text=repair_prompt,
                 process_controller=process_controller,
             )
             restore_source_registry()
@@ -1589,6 +1847,7 @@ def run_structured_stage(
                 transition_substep_status(run_dir, state, stage.stage_id, "render", "started"),
             ),
         )
+        render_started_at = utc_now_iso()
         write_json(structured_output_path, validation.normalized_payload)
         output_path.write_text(validation.canonical_markdown, encoding="utf-8")
         apply_state_update(
@@ -1597,10 +1856,25 @@ def run_structured_stage(
             state,
             lambda: transition_substep_status(run_dir, state, stage.stage_id, "render", "completed"),
         )
+        render_finished_at = utc_now_iso()
+        append_manual_stage_usage_record(
+            run_dir=run_dir,
+            scope="stage",
+            stage_id=stage.stage_id,
+            status="completed",
+            provider_key=provider_key,
+            adapter=adapter.name,
+            model=stage_selection.model,
+            started_at=render_started_at,
+            finished_at=render_finished_at,
+            substep="render",
+        )
         reporter.complete(adapter.name, stage.stage_id)
         return stage.stage_id, "completed"
     except StageCancelledError:
         cancellation_marker = "cancelled_due_to_parallel_stage_failure"
+        stage_status = "cancelled"
+        stage_failure_reason = "cancelled_due_to_parallel_stage_failure"
         apply_state_update(
             state_lock,
             state_path,
@@ -1609,7 +1883,9 @@ def run_structured_stage(
         )
         reporter.cancel(adapter.name, stage.stage_id)
         raise
-    except Exception:
+    except Exception as exc:
+        stage_status = "failed"
+        stage_failure_reason = str(exc)
         with state_lock:
             render_running = False
             for stage_state in state["stages"]:
@@ -1618,6 +1894,20 @@ def run_structured_stage(
                     render_running = isinstance(render_entry, dict) and render_entry.get("status") == "running"
                     break
         if render_running:
+            render_failed_at = utc_now_iso()
+            append_manual_stage_usage_record(
+                run_dir=run_dir,
+                scope="stage",
+                stage_id=stage.stage_id,
+                status="failed",
+                provider_key=provider_key,
+                adapter=adapter.name,
+                model=stage_selection.model,
+                started_at=stage_started_at,
+                finished_at=render_failed_at,
+                failure_reason="render failed",
+                substep="render",
+            )
             apply_state_update(
                 state_lock,
                 state_path,
@@ -1627,6 +1917,19 @@ def run_structured_stage(
         reporter.fail(adapter.name, stage.stage_id)
         raise
     finally:
+        stage_finished_at, _stage_duration_ms = finish_operation(stage_started_monotonic)
+        append_manual_stage_usage_record(
+            run_dir=run_dir,
+            scope="stage",
+            stage_id=stage.stage_id,
+            status=stage_status,
+            provider_key=provider_key,
+            adapter=adapter.name,
+            model=stage_selection.model,
+            started_at=stage_started_at,
+            finished_at=stage_finished_at,
+            failure_reason=stage_failure_reason,
+        )
         log_path = run_dir / "logs" / f"{stage.stage_id}.{adapter.name}.driver.log"
         log_path.write_text(
             "\n".join(
@@ -1987,6 +2290,7 @@ def run_agent_stage(
             process_controller,
         )
     reporter.start(adapter.name, stage.stage_id)
+    stage_started_monotonic, stage_started_at = timed_operation_bounds()
     prompt = build_agent_prompt(stage, run_dir)
     output_path = stage_output_path(run_dir, stage.output_name)
     structured_output_path = stage_structured_output_path(run_dir, stage.stage_id) if is_structured_stage(stage.stage_id) else None
@@ -1998,6 +2302,8 @@ def run_agent_stage(
     cmd = adapter.command_builder(adapter_bin, job_dir, prompt, stage_selection.model)
     repair_attempted = False
     repair_result: CommandResult | None = None
+    stage_status = "completed"
+    stage_failure_reason: str | None = None
     artifact_kind = "structured_json" if output_path.suffix.lower() == ".json" else "markdown"
     adapter_executor = build_adapter_executor(adapter.name, adapter_bin, artifact_kind)
 
@@ -2061,6 +2367,7 @@ def run_agent_stage(
         job_dir=job_dir,
         output_path=output_path,
         stage_id=stage.stage_id,
+        prompt_text=prompt,
         process_controller=process_controller,
     )
     evaluation = evaluate_stage_result(completed)
@@ -2084,6 +2391,7 @@ def run_agent_stage(
             job_dir=job_dir,
             output_path=output_path,
             stage_id=stage.stage_id,
+            prompt_text=repair_prompt,
             process_controller=process_controller,
         )
         completed = repair_result
@@ -2168,21 +2476,92 @@ def run_agent_stage(
     )
 
     if completed.returncode != 0 and process_controller is not None and process_controller.is_cancelled(stage.stage_id):
+        stage_status = "cancelled"
+        stage_failure_reason = "cancelled_due_to_parallel_stage_failure"
+        append_manual_stage_usage_record(
+            run_dir=run_dir,
+            scope="stage",
+            stage_id=stage.stage_id,
+            status=stage_status,
+            provider_key=stage_selection.provider_name or stage_selection.adapter_name,
+            adapter=adapter.name,
+            model=stage_selection.model,
+            started_at=stage_started_at,
+            finished_at=utc_now_iso(),
+            failure_reason=stage_failure_reason,
+        )
         reporter.cancel(adapter.name, stage.stage_id)
         raise StageCancelledError(f"Stage {stage.stage_id} cancelled due to parallel stage failure.")
     if completed.returncode != 0:
+        stage_status = "failed"
+        stage_failure_reason = completed.stderr.strip() or f"Stage {stage.stage_id} failed via {adapter.name}"
+        append_manual_stage_usage_record(
+            run_dir=run_dir,
+            scope="stage",
+            stage_id=stage.stage_id,
+            status=stage_status,
+            provider_key=stage_selection.provider_name or stage_selection.adapter_name,
+            adapter=adapter.name,
+            model=stage_selection.model,
+            started_at=stage_started_at,
+            finished_at=utc_now_iso(),
+            failure_reason=stage_failure_reason,
+        )
         reporter.fail(adapter.name, stage.stage_id)
         raise RuntimeError(f"Stage {stage.stage_id} failed via {adapter.name}: {completed.stderr.strip()}")
     if not evaluation["output_complete"]:
+        stage_status = "failed"
+        stage_failure_reason = f"Stage {stage.stage_id} did not produce a completed output artifact: {output_path}"
+        append_manual_stage_usage_record(
+            run_dir=run_dir,
+            scope="stage",
+            stage_id=stage.stage_id,
+            status=stage_status,
+            provider_key=stage_selection.provider_name or stage_selection.adapter_name,
+            adapter=adapter.name,
+            model=stage_selection.model,
+            started_at=stage_started_at,
+            finished_at=utc_now_iso(),
+            failure_reason=stage_failure_reason,
+        )
         reporter.fail(adapter.name, stage.stage_id)
         raise RuntimeError(f"Stage {stage.stage_id} did not produce a completed output artifact: {output_path}")
     if evaluation["intake_validation_errors"]:
+        stage_status = "failed"
+        stage_failure_reason = "; ".join(evaluation["intake_validation_errors"])
+        append_manual_stage_usage_record(
+            run_dir=run_dir,
+            scope="stage",
+            stage_id=stage.stage_id,
+            status=stage_status,
+            provider_key=stage_selection.provider_name or stage_selection.adapter_name,
+            adapter=adapter.name,
+            model=stage_selection.model,
+            started_at=stage_started_at,
+            finished_at=utc_now_iso(),
+            failure_reason=stage_failure_reason,
+        )
         reporter.fail(adapter.name, stage.stage_id)
         raise RuntimeError(f"Stage {stage.stage_id} failed intake validation: {'; '.join(evaluation['intake_validation_errors'])}")
     if structured_output_path is not None and not evaluation["structured_output_complete"]:
+        stage_status = "failed"
+        stage_failure_reason = f"Stage {stage.stage_id} did not produce a completed structured output artifact: {structured_output_path}"
+        append_manual_stage_usage_record(
+            run_dir=run_dir,
+            scope="stage",
+            stage_id=stage.stage_id,
+            status=stage_status,
+            provider_key=stage_selection.provider_name or stage_selection.adapter_name,
+            adapter=adapter.name,
+            model=stage_selection.model,
+            started_at=stage_started_at,
+            finished_at=utc_now_iso(),
+            failure_reason=stage_failure_reason,
+        )
         reporter.fail(adapter.name, stage.stage_id)
         raise RuntimeError(f"Stage {stage.stage_id} did not produce a completed structured output artifact: {structured_output_path}")
     if evaluation["structured_validation_errors"]:
+        stage_status = "failed"
         reporter.fail(adapter.name, stage.stage_id)
         details = "; ".join(evaluation["structured_validation_errors"])
         details = re.sub(
@@ -2199,10 +2578,49 @@ def run_agent_stage(
         )
         if "references unresolved source id" in details.lower():
             details = re.sub(r"references unresolved source id", "references unresolved source ID", details, flags=re.IGNORECASE)
+        stage_failure_reason = details
+        append_manual_stage_usage_record(
+            run_dir=run_dir,
+            scope="stage",
+            stage_id=stage.stage_id,
+            status=stage_status,
+            provider_key=stage_selection.provider_name or stage_selection.adapter_name,
+            adapter=adapter.name,
+            model=stage_selection.model,
+            started_at=stage_started_at,
+            finished_at=utc_now_iso(),
+            failure_reason=stage_failure_reason,
+        )
         raise RuntimeError(f"Stage {stage.stage_id} failed structured validation: {details}")
     if evaluation["markdown_validation_errors"]:
+        stage_status = "failed"
+        stage_failure_reason = "; ".join(evaluation["markdown_validation_errors"])
+        append_manual_stage_usage_record(
+            run_dir=run_dir,
+            scope="stage",
+            stage_id=stage.stage_id,
+            status=stage_status,
+            provider_key=stage_selection.provider_name or stage_selection.adapter_name,
+            adapter=adapter.name,
+            model=stage_selection.model,
+            started_at=stage_started_at,
+            finished_at=utc_now_iso(),
+            failure_reason=stage_failure_reason,
+        )
         reporter.fail(adapter.name, stage.stage_id)
         raise RuntimeError(f"Stage {stage.stage_id} failed markdown contract validation: {'; '.join(evaluation['markdown_validation_errors'])}")
+    append_manual_stage_usage_record(
+        run_dir=run_dir,
+        scope="stage",
+        stage_id=stage.stage_id,
+        status=stage_status,
+        provider_key=stage_selection.provider_name or stage_selection.adapter_name,
+        adapter=adapter.name,
+        model=stage_selection.model,
+        started_at=stage_started_at,
+        finished_at=utc_now_iso(),
+        failure_reason=stage_failure_reason,
+    )
     reporter.complete(adapter.name, stage.stage_id)
     return stage.stage_id, "completed"
 
@@ -2480,6 +2898,7 @@ def run_extract_claims(
     state_path: Path,
     reporter: ProgressReporter,
 ) -> None:
+    _started_monotonic, started_at = timed_operation_bounds()
     if claim_output.is_file():
         transition_post_processing_status(run_dir, state, "claim_extraction", "completed")
         save_state(state_path, state)
@@ -2531,8 +2950,59 @@ def run_extract_claims(
         if completed.returncode != 0:
             transition_post_processing_status(run_dir, state, "claim_extraction", "failed")
             save_state(state_path, state)
+            finished_at = utc_now_iso()
+            append_command_usage_record(
+                run_dir=run_dir,
+                scope="post_processing",
+                stage_id="claim-extraction",
+                provider_key="system",
+                adapter="system",
+                model=None,
+                result=CommandResult(
+                    completed.returncode,
+                    completed.stdout,
+                    completed.stderr,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                    duration_ms=0,
+                ),
+                status="failed",
+                prompt_text=" ".join(cmd),
+                failure_reason=completed.stderr.strip() or "claim extraction failed",
+            )
             reporter.fail("system", "claim-extraction")
             raise RuntimeError(f"Claim extraction failed: {completed.stderr.strip()}")
+        finished_at = utc_now_iso()
+        append_command_usage_record(
+            run_dir=run_dir,
+            scope="post_processing",
+            stage_id="claim-extraction",
+            provider_key="system",
+            adapter="system",
+            model=None,
+            result=CommandResult(
+                completed.returncode,
+                completed.stdout,
+                completed.stderr,
+                started_at=started_at,
+                finished_at=finished_at,
+                duration_ms=0,
+            ),
+            status="completed",
+            prompt_text=" ".join(cmd),
+        )
+    if is_json_artifact_complete(judge_json):
+        append_manual_stage_usage_record(
+            run_dir=run_dir,
+            scope="post_processing",
+            stage_id="claim-extraction",
+            status="completed",
+            provider_key="system",
+            adapter="system",
+            model=None,
+            started_at=started_at,
+            finished_at=utc_now_iso(),
+        )
     set_post_processing_status(state, "claim_extraction", "completed")
     transition_post_processing_status(run_dir, state, "claim_extraction", "completed")
     save_state(state_path, state)
@@ -2548,6 +3018,7 @@ def run_final_artifact(
     state_path: Path,
     reporter: ProgressReporter,
 ) -> None:
+    _started_monotonic, started_at = timed_operation_bounds()
     if final_output.is_file():
         transition_post_processing_status(run_dir, state, "final_artifact", "completed")
         save_state(state_path, state)
@@ -2580,6 +3051,26 @@ def run_final_artifact(
     if validate_result.returncode != 0:
         transition_post_processing_status(run_dir, state, "final_artifact", "failed")
         save_state(state_path, state)
+        finished_at = utc_now_iso()
+        append_command_usage_record(
+            run_dir=run_dir,
+            scope="post_processing",
+            stage_id="final-artifact",
+            provider_key="system",
+            adapter="system",
+            model=None,
+            result=CommandResult(
+                validate_result.returncode,
+                validate_result.stdout,
+                validate_result.stderr,
+                started_at=started_at,
+                finished_at=finished_at,
+                duration_ms=0,
+            ),
+            status="failed",
+            prompt_text=" ".join(validate_cmd),
+            failure_reason=validate_result.stderr.strip() or validate_result.stdout.strip() or "final artifact readiness validation failed",
+        )
         reporter.fail("system", "final-artifact")
         raise RuntimeError(f"Final artifact readiness validation failed: {validate_result.stderr.strip() or validate_result.stdout.strip()}")
 
@@ -2605,8 +3096,47 @@ def run_final_artifact(
     if completed.returncode != 0:
         transition_post_processing_status(run_dir, state, "final_artifact", "failed")
         save_state(state_path, state)
+        finished_at = utc_now_iso()
+        append_command_usage_record(
+            run_dir=run_dir,
+            scope="post_processing",
+            stage_id="final-artifact",
+            provider_key="system",
+            adapter="system",
+            model=None,
+            result=CommandResult(
+                completed.returncode,
+                completed.stdout,
+                completed.stderr,
+                started_at=started_at,
+                finished_at=finished_at,
+                duration_ms=0,
+            ),
+            status="failed",
+            prompt_text=" ".join(cmd),
+            failure_reason=completed.stderr.strip() or "final artifact generation failed",
+        )
         reporter.fail("system", "final-artifact")
         raise RuntimeError(f"Final artifact generation failed: {completed.stderr.strip()}")
+    finished_at = utc_now_iso()
+    append_command_usage_record(
+        run_dir=run_dir,
+        scope="post_processing",
+        stage_id="final-artifact",
+        provider_key="system",
+        adapter="system",
+        model=None,
+        result=CommandResult(
+            completed.returncode,
+            completed.stdout,
+            completed.stderr,
+            started_at=started_at,
+            finished_at=finished_at,
+            duration_ms=0,
+        ),
+        status="completed",
+        prompt_text=" ".join(cmd),
+    )
     transition_post_processing_status(run_dir, state, "final_artifact", "completed")
     save_state(state_path, state)
     reporter.complete("system", "final-artifact")
