@@ -226,6 +226,8 @@ Example:
 - automated runs now also persist stage, substage, and post-processing usage telemetry under `audit/usage/`
 - execution usage and qualification usage are tracked separately so provider-health overhead does not pollute workflow cost tuning
 - usage telemetry records duration, prompt size, stdout and stderr size, adapter, model, and token counts when the CLI exposes them; when exact token counts are not available, records are marked `usage_status: unavailable` instead of inventing fake numbers
+- resume fast-paths update workflow state without appending synthetic post-processing usage records for already-existing claim-extraction or final-artifact outputs
+- when a parallel sibling is interrupted after another stage fails, the interrupted substep usage record is persisted as `cancelled`, not misclassified as `failed`
 - provider runtime scorecards now live under `audit/provider-scorecards/` and persist qualification history, live-drift history, repair attempts, stage outcomes, and quarantine status
 - `workflow.execution.provider_runtime_policy` can quarantine repeated provider failures and reroute named stages through configured fallback providers
 - `scripts/provider_scorecards_report.py --job-dir <job-dir>` summarizes those scorecards

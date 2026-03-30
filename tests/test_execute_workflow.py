@@ -2252,6 +2252,63 @@ class ExecuteWorkflowTests(unittest.TestCase):
             self.assertEqual(after["totals"], before["totals"])
             self.assertEqual(len(after["stage_results"]), len(before["stage_results"]))
 
+    def test_resuming_completed_run_does_not_duplicate_post_processing_usage_records(self) -> None:
+        first = subprocess.run(
+            [
+                "python3",
+                str(EXECUTE_WORKFLOW),
+                "--job-path",
+                str(self.job_dir),
+                "--run-id",
+                "run-usage-resume",
+                "--codex-bin",
+                str(self.codex_bin),
+                "--gemini-bin",
+                str(self.gemini_bin),
+                "--antigravity-bin",
+                str(self.antigravity_bin),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(first.returncode, 0, first.stderr)
+
+        usage_path = self.job_dir / "runs" / "run-usage-resume" / "audit" / "usage" / "usage-records.json"
+        before_records = json.loads(usage_path.read_text(encoding="utf-8"))
+        before_post_processing = [
+            record for record in before_records if record["stage_id"] in {"claim-extraction", "final-artifact"}
+        ]
+        self.assertEqual(len(before_post_processing), 2)
+
+        resumed = subprocess.run(
+            [
+                "python3",
+                str(EXECUTE_WORKFLOW),
+                "--job-path",
+                str(self.job_dir),
+                "--run-id",
+                "run-usage-resume",
+                "--codex-bin",
+                str(self.codex_bin),
+                "--gemini-bin",
+                str(self.gemini_bin),
+                "--antigravity-bin",
+                str(self.antigravity_bin),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            input="yes\n",
+        )
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+
+        after_records = json.loads(usage_path.read_text(encoding="utf-8"))
+        after_post_processing = [
+            record for record in after_records if record["stage_id"] in {"claim-extraction", "final-artifact"}
+        ]
+        self.assertEqual(after_post_processing, before_post_processing)
+
     def test_run_stage_group_does_not_double_record_provider_result_when_claim_extraction_fails(self) -> None:
         run_dir = self.job_dir / "runs" / "run-claim-extraction-fails"
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -3443,6 +3500,13 @@ class ExecuteWorkflowTests(unittest.TestCase):
         self.assertEqual(statuses["research-b"], "cancelled")
         driver_log = (run_dir / "logs" / "research-b.gemini.driver.log").read_text(encoding="utf-8")
         self.assertIn("cancelled_due_to_parallel_stage_failure", driver_log)
+        usage_records = json.loads((run_dir / "audit" / "usage" / "usage-records.json").read_text(encoding="utf-8"))
+        research_b_records = [
+            record for record in usage_records if record["stage_id"] == "research-b" and record["scope"] == "stage"
+        ]
+        self.assertTrue(research_b_records)
+        self.assertTrue(any(record["status"] == "cancelled" for record in research_b_records))
+        self.assertFalse(any(record["status"] == "failed" for record in research_b_records))
 
     def test_rejects_unknown_adapter_name(self) -> None:
         result = subprocess.run(

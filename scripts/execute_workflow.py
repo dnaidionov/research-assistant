@@ -1079,6 +1079,7 @@ def execute_json_substep(
 ) -> tuple[CommandResult, dict[str, object], bool, CommandResult | None, list[str]]:
     repair_attempted = False
     repair_result: CommandResult | None = None
+    attempt_records: list[dict[str, object]] = []
     executor = build_adapter_executor(adapter.name, adapter_bin, "structured_json")
     result = executor(
         adapter.command_builder(adapter_bin, job_dir, prompt, model),
@@ -1106,19 +1107,47 @@ def execute_json_substep(
         validation_errors = validator(payload)
         return payload, validation_errors, True
 
+    def queue_attempt_record(
+        *,
+        command_result: CommandResult,
+        status: str,
+        prompt_text: str,
+        failure_reason: str | None,
+        attempt_index: int,
+    ) -> None:
+        attempt_records.append(
+            {
+                "result": command_result,
+                "status": status,
+                "prompt_text": prompt_text,
+                "failure_reason": failure_reason,
+                "attempt_index": attempt_index,
+            }
+        )
+
+    def flush_attempt_records() -> None:
+        for record in attempt_records:
+            append_command_usage_record(
+                run_dir=run_dir,
+                scope="stage",
+                stage_id=stage.stage_id,
+                provider_key=provider_key,
+                adapter=adapter.name,
+                model=model,
+                result=record["result"],
+                status=record["status"],
+                prompt_text=record["prompt_text"],
+                failure_reason=record["failure_reason"],
+                substep=substep,
+                attempt_index=record["attempt_index"],
+            )
+
     payload, validation_errors, repairable = load_and_validate(result)
-    append_command_usage_record(
-        run_dir=run_dir,
-        scope="stage",
-        stage_id=stage.stage_id,
-        provider_key=provider_key,
-        adapter=adapter.name,
-        model=model,
-        result=result,
+    queue_attempt_record(
+        command_result=result,
         status="completed" if result.returncode == 0 and not validation_errors else "failed",
         prompt_text=prompt,
         failure_reason=None if result.returncode == 0 and not validation_errors else (result.stderr.strip() or "; ".join(validation_errors) or "validation failed"),
-        substep=substep,
         attempt_index=1,
     )
     if result.returncode == 0 and validation_errors and repairable:
@@ -1134,18 +1163,11 @@ def execute_json_substep(
         )
         result = repair_result
         payload, validation_errors, _ = load_and_validate(repair_result)
-        append_command_usage_record(
-            run_dir=run_dir,
-            scope="stage",
-            stage_id=stage.stage_id,
-            provider_key=provider_key,
-            adapter=adapter.name,
-            model=model,
-            result=repair_result,
+        queue_attempt_record(
+            command_result=repair_result,
             status="completed" if repair_result.returncode == 0 and not validation_errors else "failed",
             prompt_text=repair_prompt,
             failure_reason=None if repair_result.returncode == 0 and not validation_errors else (repair_result.stderr.strip() or "; ".join(validation_errors) or "validation failed"),
-            substep=substep,
             attempt_index=2,
         )
 
@@ -1153,7 +1175,25 @@ def execute_json_substep(
         marker = "cancelled_due_to_parallel_stage_failure"
         if marker not in result.stderr:
             result = CommandResult(result.returncode, result.stdout, result.stderr + ("\n" if result.stderr else "") + marker)
+        if repair_result is None:
+            attempt_records = [
+                {
+                    "result": result,
+                    "status": "cancelled",
+                    "prompt_text": prompt,
+                    "failure_reason": marker,
+                    "attempt_index": 1,
+                }
+            ]
+        else:
+            last_attempt = attempt_records[-1]
+            last_attempt["result"] = result
+            last_attempt["status"] = "cancelled"
+            last_attempt["failure_reason"] = marker
+        flush_attempt_records()
         raise StageCancelledError(f"Stage {stage.stage_id} cancelled due to parallel stage failure.")
+
+    flush_attempt_records()
 
     if result.returncode != 0:
         raise SubstepExecutionError(
@@ -2862,17 +2902,6 @@ def run_extract_claims(
     if claim_output.is_file():
         transition_post_processing_status(run_dir, state, "claim_extraction", "completed")
         save_state(state_path, state)
-        append_manual_stage_usage_record(
-            run_dir=run_dir,
-            scope="post_processing",
-            stage_id="claim-extraction",
-            status="completed",
-            provider_key="system",
-            adapter="system",
-            model=None,
-            started_at=started_at,
-            finished_at=utc_now_iso(),
-        )
         reporter.complete("system", "claim-extraction")
         return
 
@@ -2993,17 +3022,6 @@ def run_final_artifact(
     if final_output.is_file():
         transition_post_processing_status(run_dir, state, "final_artifact", "completed")
         save_state(state_path, state)
-        append_manual_stage_usage_record(
-            run_dir=run_dir,
-            scope="post_processing",
-            stage_id="final-artifact",
-            status="completed",
-            provider_key="system",
-            adapter="system",
-            model=None,
-            started_at=started_at,
-            finished_at=utc_now_iso(),
-        )
         reporter.complete("system", "final-artifact")
         return
 

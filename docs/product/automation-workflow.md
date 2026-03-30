@@ -195,6 +195,8 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - records execution usage telemetry for stage attempts, structured substages, and post-processing steps for both successful and failed runs
 - records qualification probe usage separately from execution usage so preflight overhead can be inspected without corrupting workflow-stage totals
 - treats token counts as opportunistic exact telemetry rather than universal truth: when a CLI does not expose token usage, the record is kept with `usage_status: unavailable`
+- does not append synthetic claim-extraction or final-artifact usage records when those outputs already exist on resume
+- records sibling-interrupted structured substeps as `cancelled` in usage telemetry instead of inflating failure counts
 - executes intake as:
   - source declaration
   - direct fact-lineage extraction
