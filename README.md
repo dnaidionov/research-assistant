@@ -142,6 +142,12 @@ This creates:
 - `runs/run-001/audit/`
 - `runs/run-001/logs/`
 
+The automated execution path now also writes structured usage telemetry under:
+
+- `runs/run-001/audit/usage/usage-records.json`
+- `runs/run-001/audit/usage/qualification-usage-records.json`
+- `runs/run-001/audit/usage/usage-summary.json`
+
 ### 4. Execute the six scaffolded stages
 
 This section describes the manual path. If you use the automated CLI-adapter runner, skip ahead to step 7.
@@ -217,6 +223,9 @@ Example:
 - decomposed structured stages now resume at substep granularity: a valid prior source-pass can be reused while only claim-pass and final rendering are rerun
 - workflow state is now journaled through append-only `events.jsonl`, and `workflow-state.json` is treated as a derived snapshot rather than the only source of truth
 - `scripts/rebuild_workflow_state.py --run-dir <run-dir>` can now reconstruct `workflow-state.json` from the event journal when the snapshot is missing or stale
+- automated runs now also persist stage, substage, and post-processing usage telemetry under `audit/usage/`
+- execution usage and qualification usage are tracked separately so provider-health overhead does not pollute workflow cost tuning
+- usage telemetry records duration, prompt size, stdout and stderr size, adapter, model, and token counts when the CLI exposes them; when exact token counts are not available, records are marked `usage_status: unavailable` instead of inventing fake numbers
 - provider runtime scorecards now live under `audit/provider-scorecards/` and persist qualification history, live-drift history, repair attempts, stage outcomes, and quarantine status
 - `workflow.execution.provider_runtime_policy` can quarantine repeated provider failures and reroute named stages through configured fallback providers
 - `scripts/provider_scorecards_report.py --job-dir <job-dir>` summarizes those scorecards
@@ -390,7 +399,7 @@ It also updates:
 Current adapter assumptions:
 
 - Codex is invoked via the `codex` CLI
-- Gemini is invoked via `gemini --model <model> -p <prompt> -y`
+- Gemini is invoked via `gemini --model <model> -p <prompt> -y --output-format text`
 - Claude is available as an alternate adapter via `claude -p --output-format text --permission-mode bypassPermissions`
 - Antigravity remains available as an optional adapter via `antigravity chat --mode agent --yes`
 - adapters must be able to read an instruction prompt and write the requested stage artifact without interactive editing
