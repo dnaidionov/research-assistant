@@ -19,20 +19,39 @@ export async function GET(req: Request, context: { params: Promise<{ jobId: stri
     let config = '';
     let brief = '';
     let runsPath = path.join(jobPath, 'runs');
-    let runs: string[] = [];
+    let runsData: any[] = [];
 
     try { config = await fs.readFile(path.join(jobPath, 'config.yaml'), 'utf8'); } catch (e) {}
     try { brief = await fs.readFile(path.join(jobPath, 'brief.md'), 'utf8'); } catch (e) {}
     try {
       const runDirs = await fs.readdir(runsPath, { withFileTypes: true });
-      runs = runDirs.filter(d => d.isDirectory()).map(d => d.name);
+      const runFolders = runDirs.filter(d => d.isDirectory()).map(d => d.name);
+      
+      for (const runId of runFolders) {
+        let runStatus = 'unknown';
+        let workflowState = null;
+        try {
+          const wsPath = path.join(runsPath, runId, 'workflow-state.json');
+          const wsContent = await fs.readFile(wsPath, 'utf8');
+          workflowState = JSON.parse(wsContent);
+          runStatus = workflowState.status || 'unknown';
+        } catch (e) {}
+        
+        runsData.push({
+          id: runId,
+          status: runStatus,
+          state: workflowState
+        });
+      }
+      // Sort runs descending by id (assuming run-XXX format)
+      runsData.sort((a, b) => b.id.localeCompare(a.id));
     } catch (e) {}
 
     return NextResponse.json({
       jobId,
       config,
       brief,
-      runs
+      runs: runsData
     });
   } catch (error) {
     console.error('Failed to get job:', error);

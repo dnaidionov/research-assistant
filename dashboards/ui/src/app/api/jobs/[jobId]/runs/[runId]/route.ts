@@ -57,12 +57,26 @@ export async function GET(req: Request, context: { params: Promise<{ jobId: stri
 
     let log = await fs.readFile(path.join(runPath, 'run.log'), 'utf8').catch(() => null);
 
+    let workflowState = null;
+    try {
+       const ws = await fs.readFile(path.join(runPath, 'workflow-state.json'), 'utf8');
+       workflowState = JSON.parse(ws);
+    } catch(e) {}
+
+    let executionConfig = null;
+    try {
+       const ec = await fs.readFile(path.join(runPath, 'audit', 'execution-config.json'), 'utf8');
+       executionConfig = JSON.parse(ec);
+    } catch(e) {}
+
     return NextResponse.json({
        runId,
        stageOutputs,
        promptPackets,
        htmlReport,
-       log
+       log,
+       workflowState,
+       executionConfig
     });
   } catch (error) {
     console.error('Failed to get run details:', error);
