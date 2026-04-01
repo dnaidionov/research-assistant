@@ -207,3 +207,25 @@ Status:
 - implemented in `scripts/execute_workflow.py`
 - Claude is now a supported adapter in the execution runner
 - adapter capability remains intentionally explicit: a configured model override is rejected for adapters that cannot honor it
+
+---
+
+## Decision 14: Next.js Web Dashboard as Orchestration Interface
+
+Reason:
+- pure CLI workflows create steep usability curves for managing multiple research boundaries
+- inspecting prompt packets, stage artifacts, and multi-step output logs requires rich visual density
+- keeping the interface as a separate web layer ensures the core Python runner logic stays unaffected and agnostic
+
+Decision:
+- built a Next.js App Router application under `dashboards/ui/`
+- the web backend acts solely as an intelligent proxy: it reads from the filesystem, triggers `python3 scripts/execute_workflow.py`, and streams `stdout` back to clients
+- the UI does not possess an internal database or local state configuration store; the local Git repository remains the absolute source of truth
+- all UI-based configuration saves and automated job runs natively invoke `git commit` inside the specific project folder
+
+Status:
+- implemented securely
+- job listings are parsed directly from the `jobs-index/` directory
+- configuration editing reads natively from `config.yaml` and `brief.md`
+- execution integrates real-time async streams from spawned child processes
+- UI artifacts inspection replaces text-heavy CLI output trees with proper UI modals and rendered HTML iFrames

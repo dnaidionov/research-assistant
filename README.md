@@ -51,12 +51,28 @@ Each job:
 - `scripts/` — automation utilities
 - `jobs-index/` — registry of research jobs (metadata only)
 - `docs/` — ideation, product design, decisions
-- `dashboards/` — Obsidian-friendly navigation
+- `dashboards/ui/` — React/Next.js UI layer for managing jobs and executions
 - `inbox/` - inbox for new ideas
 
 ---
 
 ## Usage
+
+You can use the native CLI tools or the **Dashboard UI** to manage your workflows.
+
+### Using the Dashboard
+
+Change into the `dashboards/ui` directory and start the Next.js application:
+
+```bash
+cd ~/Projects/research-hub/research-assistant/dashboards/ui
+npm install
+npm run dev
+```
+
+Visit `http://localhost:3000` to browse, create, edit, run, and inspect research jobs interactively.
+
+### Using the CLI
 
 1. Create a new job from template `scripts/create_job.sh`
 2. Register it in `jobs-index/`
@@ -65,13 +81,14 @@ Each job:
 
 For the current design assessment and forward plan, see:
 
+- [UI Product Spec](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/ui-spec.md)
 - [Product Spec](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/product-spec.md)
 - [Redesign Proposal](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/redesign-proposal.md)
 - [Operator Playbook](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/operator-playbook.md)
 
 ## Operator Quickstart
 
-This is the shortest direct path to using the framework as it exists today.
+This is the shortest direct path to using the framework as it exists today via CLI.
 
 ### 1. Create a job repo
 
