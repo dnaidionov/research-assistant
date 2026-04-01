@@ -144,7 +144,7 @@ Automated runs also persist a resolved execution snapshot under:
 
 - `audit/execution-config.json`
 
-That snapshot records the job-derived execution config, configured and resolved stage-provider assignments, provider models, required trust levels, and runtime policy for the specific run.
+That snapshot records the execution-relevant configuration for the specific run: the job-derived `workflow.execution` block when present, otherwise the fallback CLI adapter selection, plus configured and resolved stage-provider assignments, provider models, required trust levels, and runtime policy.
 
 The workflow script writes placeholder stage outputs as part of the scaffold so the run is auditable before any provider execution happens.
 
@@ -201,8 +201,8 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - records execution usage telemetry for stage attempts, structured substages, and post-processing steps for both successful and failed runs
 - records qualification probe usage separately from execution usage so preflight overhead can be inspected without corrupting workflow-stage totals
 - treats token counts as opportunistic exact telemetry rather than universal truth: when a CLI does not expose token usage, the record is kept with `usage_status: unavailable`
-- persists a run-start `audit/execution-config.json` snapshot so each run records exactly which providers, adapters, models, trust requirements, and runtime-policy reroutes were in effect
-- rejects resuming an existing run when the current resolved execution configuration no longer matches the saved run snapshot
+- persists a run-start `audit/execution-config.json` snapshot so each run records exactly which execution-relevant providers, adapters, models, trust requirements, and runtime-policy reroutes were in effect
+- rejects resuming an existing run when the current resolved execution configuration no longer matches the saved run snapshot, but does not fail on unrelated non-execution edits elsewhere in `config.yaml`
 - does not append synthetic claim-extraction or final-artifact usage records when those outputs already exist on resume
 - records sibling-interrupted structured substeps as `cancelled` in usage telemetry instead of inflating failure counts
 - executes intake as:

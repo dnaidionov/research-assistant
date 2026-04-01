@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -64,7 +65,7 @@ from _usage_telemetry import (
     utc_now_iso,
 )
 from _stage_validation import validate_structured_stage_artifact
-from _workflow_lib import sha256_file, write_json
+from _workflow_lib import write_json
 from _workflow_state import (
     append_workflow_event,
     derive_workflow_state_from_events,
@@ -707,6 +708,11 @@ def serialize_stage_selection(selection: StageAdapterSelection) -> dict[str, obj
     }
 
 
+def stable_payload_sha256(payload: object) -> str:
+    normalized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
 def build_execution_snapshot(
     *,
     job_dir: Path,
@@ -720,18 +726,13 @@ def build_execution_snapshot(
     runtime_policy: dict[str, object] | None,
 ) -> dict[str, object]:
     config_path = job_dir / "config.yaml"
-    return {
+    snapshot = {
         "schema_version": 1,
         "run_id": run_dir.name,
         "job_dir": str(job_dir.resolve()),
         "config_path": str(config_path.resolve()),
-        "config_sha256": sha256_file(config_path) if config_path.is_file() else None,
         "config_source": "job_config" if execution_config is not None else "fallback_cli",
         "execution_config": execution_config,
-        "fallback_cli_adapters": {
-            "primary_adapter": args.primary_adapter,
-            "secondary_adapter": args.secondary_adapter,
-        },
         "provider_catalog": {
             provider_key: serialize_stage_selection(selection)
             for provider_key, selection in sorted(provider_catalog.items())
@@ -747,6 +748,16 @@ def build_execution_snapshot(
         "stage_required_provider_trust": dict(sorted(stage_required_trust.items())),
         "provider_runtime_policy": runtime_policy,
     }
+    if execution_config is not None:
+        snapshot["execution_config_sha256"] = stable_payload_sha256(execution_config)
+    else:
+        fallback_cli_adapters = {
+            "primary_adapter": args.primary_adapter,
+            "secondary_adapter": args.secondary_adapter,
+        }
+        snapshot["fallback_cli_adapters"] = fallback_cli_adapters
+        snapshot["execution_config_sha256"] = stable_payload_sha256(fallback_cli_adapters)
+    return snapshot
 
 
 def persist_execution_snapshot(

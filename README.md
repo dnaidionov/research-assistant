@@ -247,7 +247,7 @@ Example:
 - automated runs now also persist stage, substage, and post-processing usage telemetry under `audit/usage/`
 - execution usage and qualification usage are tracked separately so provider-health overhead does not pollute workflow cost tuning
 - usage telemetry records duration, prompt size, stdout and stderr size, adapter, model, and token counts when the CLI exposes them; when exact token counts are not available, records are marked `usage_status: unavailable` instead of inventing fake numbers
-- automated runs now also persist a run-start execution snapshot under `audit/execution-config.json`, including the job-derived execution config, configured and resolved stage-provider assignments, provider models, trust requirements, and runtime policy
+- automated runs now also persist a run-start execution snapshot under `audit/execution-config.json`, including the execution-relevant config only: job-derived execution config when present, otherwise fallback CLI adapter selection, plus configured and resolved stage-provider assignments, provider models, trust requirements, and runtime policy
 - resuming an existing run under a different resolved provider/model configuration is now rejected instead of silently mixing execution configs within one run
 - resume fast-paths update workflow state without appending synthetic post-processing usage records for already-existing claim-extraction or final-artifact outputs
 - when a parallel sibling is interrupted after another stage fails, the interrupted substep usage record is persisted as `cancelled`, not misclassified as `failed`
