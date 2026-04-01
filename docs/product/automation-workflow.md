@@ -140,6 +140,12 @@ Automated runs now also write usage telemetry under `audit/usage/`:
 - `qualification-usage-records.json` for provider qualification probes
 - `usage-summary.json` for run-level totals and grouping by stage, provider, adapter, and model
 
+Automated runs also persist a resolved execution snapshot under:
+
+- `audit/execution-config.json`
+
+That snapshot records the job-derived execution config, configured and resolved stage-provider assignments, provider models, required trust levels, and runtime policy for the specific run.
+
 The workflow script writes placeholder stage outputs as part of the scaffold so the run is auditable before any provider execution happens.
 
 ## Job-Level Artifacts
@@ -195,6 +201,8 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - records execution usage telemetry for stage attempts, structured substages, and post-processing steps for both successful and failed runs
 - records qualification probe usage separately from execution usage so preflight overhead can be inspected without corrupting workflow-stage totals
 - treats token counts as opportunistic exact telemetry rather than universal truth: when a CLI does not expose token usage, the record is kept with `usage_status: unavailable`
+- persists a run-start `audit/execution-config.json` snapshot so each run records exactly which providers, adapters, models, trust requirements, and runtime-policy reroutes were in effect
+- rejects resuming an existing run when the current resolved execution configuration no longer matches the saved run snapshot
 - does not append synthetic claim-extraction or final-artifact usage records when those outputs already exist on resume
 - records sibling-interrupted structured substeps as `cancelled` in usage telemetry instead of inflating failure counts
 - executes intake as:

@@ -165,6 +165,10 @@ The automated execution path now also writes structured usage telemetry under:
 - `runs/run-001/audit/usage/qualification-usage-records.json`
 - `runs/run-001/audit/usage/usage-summary.json`
 
+And now also snapshots the resolved execution configuration for that run under:
+
+- `runs/run-001/audit/execution-config.json`
+
 ### 4. Execute the six scaffolded stages
 
 This section describes the manual path. If you use the automated CLI-adapter runner, skip ahead to step 7.
@@ -243,6 +247,8 @@ Example:
 - automated runs now also persist stage, substage, and post-processing usage telemetry under `audit/usage/`
 - execution usage and qualification usage are tracked separately so provider-health overhead does not pollute workflow cost tuning
 - usage telemetry records duration, prompt size, stdout and stderr size, adapter, model, and token counts when the CLI exposes them; when exact token counts are not available, records are marked `usage_status: unavailable` instead of inventing fake numbers
+- automated runs now also persist a run-start execution snapshot under `audit/execution-config.json`, including the job-derived execution config, configured and resolved stage-provider assignments, provider models, trust requirements, and runtime policy
+- resuming an existing run under a different resolved provider/model configuration is now rejected instead of silently mixing execution configs within one run
 - resume fast-paths update workflow state without appending synthetic post-processing usage records for already-existing claim-extraction or final-artifact outputs
 - when a parallel sibling is interrupted after another stage fails, the interrupted substep usage record is persisted as `cancelled`, not misclassified as `failed`
 - provider runtime scorecards now live under `audit/provider-scorecards/` and persist qualification history, live-drift history, repair attempts, stage outcomes, and quarantine status
