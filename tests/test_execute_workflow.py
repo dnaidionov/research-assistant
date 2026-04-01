@@ -2602,6 +2602,36 @@ class ExecuteWorkflowTests(unittest.TestCase):
         self.assertIn("CLAIM_PASS_COMMAND:\n" + str(self.claude_bin), research_b_log)
         self.assertIn("--model gemini-3.1-pro-preview", judge_log)
 
+        execution_snapshot = json.loads(
+            (self.job_dir / "runs" / "run-config-stage-routing" / "audit" / "execution-config.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(execution_snapshot["config_source"], "job_config")
+        self.assertNotIn("fallback_cli_adapters", execution_snapshot)
+        self.assertEqual(execution_snapshot["provider_catalog"]["claude_research"]["adapter"], "claude")
+        self.assertEqual(
+            execution_snapshot["resolved_stage_assignments"]["judge"],
+            {"provider_key": "gemini_judge", "adapter": "gemini", "model": "gemini-3.1-pro-preview"},
+        )
+        self.assertEqual(
+            execution_snapshot["resolved_stage_assignments"]["research-b"],
+            {"provider_key": "claude_research", "adapter": "claude", "model": None},
+        )
+        events = [
+            json.loads(line)
+            for line in (self.job_dir / "runs" / "run-config-stage-routing" / "events.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.strip()
+        ]
+        execution_events = [event for event in events if event["event_type"] == "execution_config_resolved"]
+        self.assertEqual(len(execution_events), 1)
+        self.assertEqual(
+            execution_events[0]["resolved_stage_assignments"]["judge"],
+            {"provider_key": "gemini_judge", "adapter": "gemini", "model": "gemini-3.1-pro-preview"},
+        )
+
     def test_rejects_model_override_for_adapter_without_model_support(self) -> None:
         (self.job_dir / "config.yaml").write_text(
             textwrap.dedent(
@@ -2635,6 +2665,135 @@ class ExecuteWorkflowTests(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("does not support explicit model selection", result.stderr.lower())
+
+    def test_resume_allows_irrelevant_cli_flags_for_job_config_driven_run(self) -> None:
+        self._write_fake_executor(self.claude_bin, "claude")
+        (self.job_dir / "config.yaml").write_text(
+            textwrap.dedent(
+                """\
+                topic: my-project-1
+                requirements:
+                  require_citations: true
+                workflow:
+                  execution:
+                    providers:
+                      codex_primary:
+                        adapter: codex
+                      claude_secondary:
+                        adapter: claude
+                        model: claude-sonnet-4-6
+                    stage_providers:
+                      intake: codex_primary
+                      research-a: codex_primary
+                      research-b: claude_secondary
+                      critique-a-on-b: codex_primary
+                      critique-b-on-a: claude_secondary
+                      judge: claude_secondary
+                """
+            ),
+            encoding="utf-8",
+        )
+        first = subprocess.run(
+            self._workflow_command("run-config-cli-flags"),
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(first.returncode, 0, first.stderr)
+
+        resumed = subprocess.run(
+            self._workflow_command(
+                "run-config-cli-flags",
+                "--primary-adapter",
+                "antigravity",
+                "--secondary-adapter",
+                "gemini",
+            ),
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            input="yes\n",
+        )
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertIn("already complete", resumed.stdout.lower())
+
+    def test_resume_allows_unrelated_config_yaml_changes_when_execution_config_is_unchanged(self) -> None:
+        first = subprocess.run(
+            self._workflow_command("run-config-unrelated-edit"),
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(first.returncode, 0, first.stderr)
+
+        (self.job_dir / "config.yaml").write_text(
+            textwrap.dedent(
+                """\
+                topic: renamed-topic
+                requirements:
+                  require_citations: true
+                quality_policy:
+                  enabled: false
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        resumed = subprocess.run(
+            self._workflow_command("run-config-unrelated-edit"),
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            input="yes\n",
+        )
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertIn("already complete", resumed.stdout.lower())
+
+    def test_rejects_resuming_existing_run_when_execution_config_changed(self) -> None:
+        first = subprocess.run(
+            self._workflow_command("run-config-drift"),
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(first.returncode, 0, first.stderr)
+
+        (self.job_dir / "config.yaml").write_text(
+            textwrap.dedent(
+                """\
+                topic: my-project-1
+                requirements:
+                  require_citations: true
+                workflow:
+                  execution:
+                    providers:
+                      codex_primary:
+                        adapter: codex
+                      claude_secondary:
+                        adapter: claude
+                        model: claude-sonnet-4-6
+                    stage_providers:
+                      intake: codex_primary
+                      research-a: codex_primary
+                      research-b: claude_secondary
+                      critique-a-on-b: codex_primary
+                      critique-b-on-a: claude_secondary
+                      judge: claude_secondary
+                """
+            ),
+            encoding="utf-8",
+        )
+        self._write_fake_executor(self.claude_bin, "claude")
+
+        resumed = subprocess.run(
+            self._workflow_command("run-config-drift"),
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            input="yes\n",
+        )
+        self.assertNotEqual(resumed.returncode, 0)
+        self.assertIn("execution configuration snapshot mismatch", resumed.stderr.lower())
 
     def test_marks_stage_failed_and_logs_output_status_when_adapter_leaves_placeholder(self) -> None:
         self._write_noop_executor(self.antigravity_bin, "warning: accepted command but did not write output")

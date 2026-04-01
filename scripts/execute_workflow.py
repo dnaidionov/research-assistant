@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -693,6 +694,89 @@ def append_manual_stage_usage_record(
             substep=substep,
         ),
     )
+
+
+def execution_snapshot_path(run_dir: Path) -> Path:
+    return run_dir / "audit" / "execution-config.json"
+
+
+def serialize_stage_selection(selection: StageAdapterSelection) -> dict[str, object]:
+    return {
+        "provider_key": selection.provider_name or selection.adapter_name,
+        "adapter": selection.adapter_name,
+        "model": selection.model,
+    }
+
+
+def stable_payload_sha256(payload: object) -> str:
+    normalized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def build_execution_snapshot(
+    *,
+    job_dir: Path,
+    run_dir: Path,
+    args: argparse.Namespace,
+    execution_config: dict[str, object] | None,
+    provider_catalog: dict[str, StageAdapterSelection],
+    configured_stage_assignments: dict[str, StageAdapterSelection],
+    resolved_stage_assignments: dict[str, StageAdapterSelection],
+    stage_required_trust: dict[str, str],
+    runtime_policy: dict[str, object] | None,
+) -> dict[str, object]:
+    config_path = job_dir / "config.yaml"
+    snapshot = {
+        "schema_version": 1,
+        "run_id": run_dir.name,
+        "job_dir": str(job_dir.resolve()),
+        "config_path": str(config_path.resolve()),
+        "config_source": "job_config" if execution_config is not None else "fallback_cli",
+        "execution_config": execution_config,
+        "provider_catalog": {
+            provider_key: serialize_stage_selection(selection)
+            for provider_key, selection in sorted(provider_catalog.items())
+        },
+        "configured_stage_assignments": {
+            stage_id: serialize_stage_selection(selection)
+            for stage_id, selection in sorted(configured_stage_assignments.items())
+        },
+        "resolved_stage_assignments": {
+            stage_id: serialize_stage_selection(selection)
+            for stage_id, selection in sorted(resolved_stage_assignments.items())
+        },
+        "stage_required_provider_trust": dict(sorted(stage_required_trust.items())),
+        "provider_runtime_policy": runtime_policy,
+    }
+    if execution_config is not None:
+        snapshot["execution_config_sha256"] = stable_payload_sha256(execution_config)
+    else:
+        fallback_cli_adapters = {
+            "primary_adapter": args.primary_adapter,
+            "secondary_adapter": args.secondary_adapter,
+        }
+        snapshot["fallback_cli_adapters"] = fallback_cli_adapters
+        snapshot["execution_config_sha256"] = stable_payload_sha256(fallback_cli_adapters)
+    return snapshot
+
+
+def persist_execution_snapshot(
+    *,
+    run_dir: Path,
+    snapshot: dict[str, object],
+) -> dict[str, object]:
+    path = execution_snapshot_path(run_dir)
+    if path.is_file():
+        existing = json.loads(path.read_text(encoding="utf-8"))
+        if existing != snapshot:
+            raise ValueError(
+                "Execution configuration snapshot mismatch for existing run. "
+                "This run was already started with a different resolved provider/model configuration."
+            )
+        return existing
+    write_json(path, snapshot)
+    append_workflow_event(run_dir, "execution_config_resolved", snapshot_path=str(path.relative_to(run_dir)), **snapshot)
+    return snapshot
 
 
 def transition_stage_status(run_dir: Path, state: dict[str, object], stage_id: str, status: str) -> None:
@@ -3154,16 +3238,18 @@ def main() -> int:
             jobs_root=Path(args.jobs_root).expanduser(),
             jobs_index_root=Path(args.jobs_index_root).expanduser(),
         )
-        stage_assignments = resolve_stage_assignments(args, job_dir)
+        execution_config = load_execution_config(job_dir)
+        configured_stage_assignments = resolve_stage_assignments(args, job_dir)
         provider_catalog = load_provider_catalog_from_job_config(job_dir) or {
             selection.provider_name or selection.adapter_name: selection
-            for selection in stage_assignments.values()
+            for selection in configured_stage_assignments.values()
         }
+        runtime_policy = resolve_provider_runtime_policy(job_dir)
         stage_assignments = apply_provider_runtime_policy(
             job_dir,
-            stage_assignments,
+            configured_stage_assignments,
             provider_catalog,
-            resolve_provider_runtime_policy(job_dir),
+            runtime_policy,
         )
         stage_required_trust = resolve_stage_required_provider_trust(job_dir)
     except ValueError as exc:
@@ -3192,6 +3278,24 @@ def main() -> int:
     state = load_state(state_path)
     ensure_post_processing_state(state, claim_output, final_output)
     save_state(state_path, state)
+    try:
+        persist_execution_snapshot(
+            run_dir=run_dir,
+            snapshot=build_execution_snapshot(
+                job_dir=job_dir,
+                run_dir=run_dir,
+                args=args,
+                execution_config=execution_config,
+                provider_catalog=provider_catalog,
+                configured_stage_assignments=configured_stage_assignments,
+                resolved_stage_assignments=stage_assignments,
+                stage_required_trust=stage_required_trust,
+                runtime_policy=runtime_policy,
+            ),
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     already_complete = all(
         is_stage_output_complete(stage_output_path(run_dir, stage["expected_output_target"].split("/")[-1]))
         for stage in state["stages"]
