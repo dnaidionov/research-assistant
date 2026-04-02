@@ -48,14 +48,15 @@ def load_repo_path_config(*, repo_root: Path | None = None) -> RepoPathConfig:
 
     assistant_root = _expand_path(document.get("assistant_root"), DEFAULT_ASSISTANT_ROOT)
     jobs_root = _expand_path(document.get("jobs_root"), DEFAULT_JOBS_ROOT)
-    if assistant_root.resolve() != root:
+    resolved_assistant_root = assistant_root.resolve()
+    if resolved_assistant_root != root and resolved_assistant_root != DEFAULT_ASSISTANT_ROOT.resolve():
         raise ValueError(
             f"Configured assistant_root {assistant_root} does not match the actual assistant repo path {root}. "
-            "Update config/paths.yaml or move the repo so the documented assistant root matches reality."
+            "Update config/paths.yaml or move the repo so a custom assistant_root matches reality."
         )
     return RepoPathConfig(
         repo_root=root,
-        assistant_root=assistant_root.resolve(),
+        assistant_root=root,
         jobs_root=jobs_root,
         jobs_index_root=root / "jobs-index",
         config_path=config_path,

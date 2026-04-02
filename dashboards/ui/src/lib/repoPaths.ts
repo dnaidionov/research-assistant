@@ -28,7 +28,8 @@ export function loadRepoPaths() {
   }
 
   const resolvedAssistantRoot = path.resolve(expandHome(assistantRoot));
-  if (resolvedAssistantRoot !== assistantRepoRoot) {
+  const resolvedDefaultAssistantRoot = path.resolve(expandHome(DEFAULT_ASSISTANT_ROOT));
+  if (resolvedAssistantRoot !== assistantRepoRoot && resolvedAssistantRoot !== resolvedDefaultAssistantRoot) {
     throw new Error(`Configured assistant_root ${resolvedAssistantRoot} does not match actual repo root ${assistantRepoRoot}.`);
   }
 

@@ -32,9 +32,11 @@ Behavior:
 
 - `jobs_root` is configurable
 - `jobs-index/` remains fixed inside the assistant repo
-- local scripts validate that `assistant_root` matches the actual repo location
+- local scripts always use the real repo location at runtime
+- a custom `assistant_root` is validated against the actual repo location
+- the shipped default `assistant_root` is treated as a documented default and does not block CI or non-default checkouts
 
-That validation exists for a reason. The assistant repo can derive its own true location at runtime. If the documented `assistant_root` disagrees with reality, the safer behavior is to fail clearly rather than let path assumptions drift silently.
+That distinction exists for a reason. The assistant repo can derive its own true location at runtime. The shipped `~/Projects/...` value is a default, not a contract. But if you customize `assistant_root`, the safer behavior is still to fail clearly when that custom path no longer matches reality.
 
 ## Basic Local Setup
 

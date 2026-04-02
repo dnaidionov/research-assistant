@@ -88,6 +88,7 @@ By default it uses:
 - `jobs_root: ~/Projects/research-hub/jobs`
 
 If your install layout is different, edit that file before using the scripts.
+The shipped `assistant_root` is a documented default; local scripts still use the repo’s actual runtime location and only enforce mismatches when you set a custom assistant path.
 
 3. Authenticate the tools you actually plan to use.
 
