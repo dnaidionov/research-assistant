@@ -1,305 +1,225 @@
 # Research Assistant Framework
 
-This repository contains the orchestration framework for structured, multi-LLM research workflows.
+Research Assistant is a framework for running structured, auditable research workflows across multiple LLMs without mixing framework code and research data.
 
-## Architecture
+The assistant repository contains the orchestration system: prompts, schemas, scripts, templates, dashboard, and documentation. Actual research work lives in separate job repositories, one repo per research case. This separation is deliberate. It keeps the framework reusable, keeps research artifacts isolated, and makes each job independently versioned and shareable.
 
-The system is split into two layers:
-- Assistant = orchestration layer
-- Jobs = independent research cases
+## Purpose
 
-Jobs are linked via metadata, not embedded
+The product exists to make multi-stage research work more reliable than ordinary single-prompt LLM usage.
 
-### 1. Assistant (this repo)
-- prompts
-- schemas
-- scripts
-- templates
-- documentation
+Instead of asking one model for one final answer, the framework breaks research into explicit stages such as intake, independent research passes, adversarial critique, judgment, claim extraction, and final artifact generation. Each stage produces auditable files. Disagreement is preserved rather than erased, factual claims are expected to carry citations, and the system records which providers and models were actually used for a specific run.
 
-Contains **no research data**
+## Why Use It
 
-### 2. Jobs (separate repos)
-Located at:
+Use this framework when you need research outputs that are:
 
-~/Projects/research-hub/jobs/
+- more traceable than chat transcripts
+- more reproducible than ad hoc prompting
+- safer than a single-model answer
+- organized as durable job artifacts rather than scattered notes
 
-Each job:
-- is its own Git repository
-- contains full research lifecycle artifacts
-- can be shared independently
+It is especially useful when the output matters enough that you want to inspect:
 
----
+- what sources were used
+- where models disagreed
+- how a recommendation was formed
+- which provider or model produced which stage
+- what changed from run to run
 
-## Key Principles
+## Best-Fit Research Types
 
-- jobs are fully isolated (one repo per job)
-- strict separation between system and data
-- this repo contains no research data
-- no uncited factual claims
-- claim-level traceability
-- adversarial validation
-- reproducibility over convenience
+This model is best suited to research tasks where comparison, evidence quality, and explicit tradeoffs matter more than raw speed.
 
----
+Examples:
 
-## Structure
+- vendor or tool selection
+- product, platform, or architecture tradeoff analysis
+- policy or regulatory impact analysis
+- hardware, infrastructure, or procurement comparisons
+- strategic option evaluation with competing recommendations
+- decision memos where confidence, uncertainty, and disagreement should remain visible
 
-- `templates/` — job templates
-- `shared/` — reusable prompts, policies, rubrics
-- `schemas/` — validation schemas
-- `scripts/` — automation utilities
-- `jobs-index/` — registry of research jobs (metadata only)
-- `docs/` — ideation, product design, decisions
-- `dashboards/ui/` — React/Next.js UI layer for managing jobs and executions
-- `inbox/` - inbox for new ideas
+The framework is intentionally adaptable across research domains. Fixture families let qualification, drift checks, and benchmark workflows exercise different research shapes without hardcoding the system to a single domain. Later, the docs should also include at least one concrete example job so the system is demonstrated on a real end-to-end case rather than only described abstractly.
 
----
+## Core Operating Model
 
-## Usage
+The system has two strict boundaries:
 
-You can use the native CLI tools or the **Dashboard UI** to manage your workflows.
+- Assistant repo: framework only
+  Contains prompts, scripts, schemas, templates, dashboard code, and product and architecture docs.
+- Job repos: research only
+  Contain briefs, run artifacts, evidence, outputs, logs, and audit trails for a single research case.
 
-### Using the Dashboard
+This boundary is not cosmetic. It is one of the core architecture rules of the product.
 
-Change into the `dashboards/ui` directory and start the Next.js application:
+## Typical Workflow
+
+1. Create a job repo for a specific research case.
+2. Write the brief and configuration in that job repo.
+3. Scaffold a run directory for that job.
+4. Execute stages either manually, through supported CLI adapters, or through the dashboard.
+5. Preserve stage outputs, claims, evidence, and audit records inside the job repo.
+6. Generate a final report from the judged synthesis and validated claims.
+
+There are two main control surfaces:
+
+- CLI: for direct scripting, controlled manual operation, and automation
+- Dashboard UI: for inspecting jobs, creating jobs, launching runs, and reviewing execution artifacts interactively
+
+The dashboard is browser-based but runs locally on the user’s machine. It is not a hosted service. It works against local job repositories and the local assistant repo.
+
+## Quick Setup
+
+This is the shortest path to a usable local setup.
+
+1. Clone the assistant repo into the default assistant path or update the path config later:
 
 ```bash
-cd ~/Projects/research-hub/research-assistant/dashboards/ui
-npm install
-npm run dev
+git clone <your-fork-or-origin> ~/Projects/research-hub/research-assistant
+cd ~/Projects/research-hub/research-assistant
 ```
 
-Visit `http://localhost:3000` to browse, create, edit, run, and inspect research jobs interactively.
+2. Review `config/paths.yaml`.
 
-### Using the CLI
+By default it uses:
 
-1. Create a new job from template `scripts/create_job.sh`
-2. Register it in `jobs-index/`
-3. Run research workflow
-4. Store all outputs inside the job repo
+- `assistant_root: ~/Projects/research-hub/research-assistant`
+- `jobs_root: ~/Projects/research-hub/jobs`
 
-For the current design assessment and forward plan, see:
+If your install layout is different, edit that file before using the scripts.
+The shipped `assistant_root` is a documented default; local scripts still use the repo’s actual runtime location and only enforce mismatches when you set a custom assistant path.
 
-- [UI Product Spec](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/ui-spec.md)
-- [Product Spec](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/product-spec.md)
-- [Redesign Proposal](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/redesign-proposal.md)
-- [Operator Playbook](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/operator-playbook.md)
+3. Authenticate the tools you actually plan to use.
 
-## Operator Quickstart
+- GitHub auth is needed for repo creation, sync, PR workflows, and some dashboard-backed git operations.
+- LLM provider auth is needed for provider qualification, manual stage launching, and automated execution.
 
-This is the shortest direct path to using the framework as it exists today via CLI.
-
-### 1. Create a job repo
-
-Create a new job under `~/Projects/research-hub/jobs/` and initialize it as its own git repo.
+4. Create a job repo.
 
 ```bash
-cd ~/Projects/research-hub/research-assistant
 ./scripts/create_job.sh my-project-1
 ```
 
-Then fill in:
+5. Fill in:
 
 - `~/Projects/research-hub/jobs/my-project-1/brief.md`
 - `~/Projects/research-hub/jobs/my-project-1/config.yaml`
 
-If you want name-based lookup via `run_workflow.py`, also register the job in `jobs-index/`.
-
-### 2. Validate the job structure
-
-Run:
+6. Validate the job:
 
 ```bash
-cd ~/Projects/research-hub/research-assistant
 python3 scripts/validate_job.py --job-dir ~/Projects/research-hub/jobs/my-project-1
 ```
 
-JSON output is available if you want machine-readable checks:
+7. Scaffold a run:
 
 ```bash
-python3 scripts/validate_job.py --job-dir ~/Projects/research-hub/jobs/my-project-1 --json
+python3 scripts/run_workflow.py --job-path ~/Projects/research-hub/jobs/my-project-1 --run-id run-001
 ```
 
-### 3. Scaffold a workflow run
+8. Choose execution mode:
 
-You can target a job by explicit path:
+- Manual: run stages yourself from `prompt-packets/`, then record the attempted provider/model with `scripts/record_manual_stage.py`
+- Single-stage launcher: use `scripts/run_stage.py` for one stage at a time, with optional per-step provider/model override
+- Automated runner: use `scripts/execute_workflow.py` for the full configured workflow
+
+9. When judge output is ready, downstream scripts can extract claims and generate the final artifact automatically.
+
+## Manual Stage Execution
+
+The scaffold covers these six execution stages:
+
+1. `intake`
+2. `research-a`
+3. `research-b`
+4. `critique-a-on-b`
+5. `critique-b-on-a`
+6. `judge`
+
+Manual execution still writes into the run directory:
+
+- prompt packets live under `runs/<run-id>/prompt-packets/`
+- final stage outputs live under `runs/<run-id>/stage-outputs/`
+- structured stage JSON lives under `runs/<run-id>/stage-outputs/*.json`
+
+When a stage depends on an earlier stage, use the prior stage output artifact from `stage-outputs/`, not the prior prompt packet.
+
+After a manual stage attempt, record what was actually used:
 
 ```bash
-python3 scripts/run_workflow.py \
+python3 scripts/record_manual_stage.py \
+  --run-dir ~/Projects/research-hub/jobs/my-project-1/runs/run-001 \
+  --stage research-b \
+  --status completed \
+  --provider-key claude_research \
+  --adapter claude \
+  --model claude-sonnet-4-6
+```
+
+`started`, `completed`, `failed`, and `cancelled` all preserve the attempted provider/model. `completed` requires the expected stage artifact to exist. `failed` and `cancelled` do not.
+
+## Single-Stage Launching
+
+If you want the framework to execute one stage for you without running the whole workflow, use:
+
+```bash
+python3 scripts/run_stage.py \
+  --job-path ~/Projects/research-hub/jobs/my-project-1 \
+  --run-id run-001 \
+  --stage research-b
+```
+
+By default, the stage uses the provider/model resolved from the job config. You can override that for the launched step only:
+
+```bash
+python3 scripts/run_stage.py \
+  --job-path ~/Projects/research-hub/jobs/my-project-1 \
+  --run-id run-001 \
+  --stage research-b \
+  --adapter claude \
+  --model claude-sonnet-4-6 \
+  --provider-key manual_claude_override
+```
+
+Override precedence for a launched step is:
+
+1. explicit step override flags
+2. stage provider/model from `config.yaml`
+3. fallback CLI split only when no job execution config exists
+
+The underlying job config is not mutated. The run audit records both the configured assignment and the actual attempted assignment if they differ.
+
+## Automated Workflow Execution
+
+Run the current 2-pass workflow end to end with:
+
+```bash
+python3 scripts/execute_workflow.py \
   --job-path ~/Projects/research-hub/jobs/my-project-1 \
   --run-id run-001
 ```
 
-Or by job name if it exists in `jobs-index/`:
+The fallback default split is:
 
-```bash
-python3 scripts/run_workflow.py \
-  --job-name my-project-1 \
-  --run-id run-001
-```
+1. `intake` in Codex
+2. `research-a` in Codex and `research-b` in Gemini in parallel
+3. `critique-a-on-b` in Codex and `critique-b-on-a` in Gemini in parallel
+4. `judge` in Gemini
+5. claim extraction
+6. final artifact generation
 
-Or by job id if it is registered in `jobs-index/active/*.yaml`:
+That split is only the fallback. Prefer job-level execution config in `config.yaml` for durable stage routing and model pinning.
 
-```bash
-python3 scripts/run_workflow.py \
-  --job-id my-project-1 \
-  --run-id run-001
-```
+Automated runs persist:
 
-This creates:
+- workflow state in `runs/<run-id>/workflow-state.json`
+- usage telemetry in `runs/<run-id>/audit/usage/`
+- configured and actual execution records in `runs/<run-id>/audit/execution-config.json`
 
-- `runs/run-001/prompt-packets/`
-- `runs/run-001/stage-outputs/`
-- `runs/run-001/stage-claims/`
-- `runs/run-001/sources.json`
-- `runs/run-001/events.jsonl`
-- `runs/run-001/workflow-state.json`
-- `runs/run-001/WORK_ORDER.md`
-- `runs/run-001/audit/`
-- `runs/run-001/logs/`
+## Claim Extraction and Final Artifact
 
-The automated execution path now also writes structured usage telemetry under:
-
-- `runs/run-001/audit/usage/usage-records.json`
-- `runs/run-001/audit/usage/qualification-usage-records.json`
-- `runs/run-001/audit/usage/usage-summary.json`
-
-And now also snapshots the resolved execution configuration for that run under:
-
-- `runs/run-001/audit/execution-config.json`
-
-### 4. Execute the six scaffolded stages
-
-This section describes the manual path. If you use the automated CLI-adapter runner, skip ahead to step 7.
-
-Open the rendered prompt packets under:
-
-`~/Projects/research-hub/jobs/my-project-1/runs/run-001/prompt-packets/`
-
-The scaffold currently covers these stages:
-
-1. intake
-2. research-a
-3. research-b
-4. critique-a-on-b
-5. critique-b-on-a
-6. judge
-
-Put the actual outputs into:
-
-`~/Projects/research-hub/jobs/my-project-1/runs/run-001/stage-outputs/`
-
-The current structured-contract rollout also expects authoritative JSON artifacts for:
-
-- `research-a` at `stage-outputs/02-research-a.json`
-- `research-b` at `stage-outputs/03-research-b.json`
-- `critique-a-on-b` at `stage-outputs/04-critique-a-on-b.json`
-- `critique-b-on-a` at `stage-outputs/05-critique-b-on-a.json`
-- `judge` at `stage-outputs/06-judge.json`
-
-The run-level source registry lives at:
-
-`~/Projects/research-hub/jobs/my-project-1/runs/run-001/sources.json`
-
-That registry now normalizes source records into explicit source classes such as `external_evidence`, `job_input`, and `recovered_provisional`.
-It now also carries first-pass evidence-policy metadata such as `authority_tier`, `evidence_kind`, `freshness_status`, `supports_world_claims`, `supports_process_claims`, `policy_outcome`, and `policy_notes`.
-
-Structured research, critique, and judge JSON may also carry typed `support_links` on claim-like items. These links distinguish semantic roles such as `evidence`, `context`, `challenge`, and `provenance` instead of relying only on flat citation lists. When a later claim depends on an earlier local claim or fact, that dependency should be recorded separately in `claim_dependencies` rather than mixed into source support. `job_input` sources remain admissible evidence when they directly state current-system facts, requirements, or constraints under analysis.
-
-Validated claim sidecars for `research-a`, `research-b`, both critiques, and `judge` are written into:
-
-`~/Projects/research-hub/jobs/my-project-1/runs/run-001/stage-claims/`
-
-When a stage depends on an earlier stage, use the prior stage output artifact from `stage-outputs/`, not the prior prompt packet from `prompt-packets/`.
-
-Example:
-
-- `research-a` and `research-b` should consume `stage-outputs/01-intake.json`
-- critiques should consume the relevant research outputs from `stage-outputs/`
-- `judge` should consume the critique outputs from `stage-outputs/`
-- `research-a`, `research-b`, both critiques, and `judge` must produce valid structured JSON and pass source-aware citation validation before downstream workflow stages continue
-- structured stages are no longer allowed to backfill authoritative JSON from markdown and no longer recover authoritative JSON from stdout; they must write JSON directly to the requested structured artifact path
-- before execution, the runner now qualifies each configured provider and records the report under `runs/<run-id>/audit/adapter-qualification/`; qualification now probes intake JSON, structured source-pass JSON, structured claim-pass JSON, and markdown materialization, and intake plus all structured stages require a `structured_safe` provider classification
-- the stronger `workflow-regression` qualification profile now uses sanitized prompt-packet-derived probes for intake, research, critique, and judge instead of only toy fixture strings, so regression checks exercise real template structure as well as artifact transport
-- qualification now also exposes trust tiers rather than only coarse classes:
-  - `structured_safe_smoke`
-  - `structured_safe_regression`
-  - `structured_safe_realistic`
-- jobs may now require stronger provider trust through `workflow.execution.required_provider_trust` or `workflow.execution.stage_required_provider_trust`
-- realistic qualification packets and reference jobs now live in named fixture families under:
-  - `fixtures/adapter-qualification/families/`
-  - `fixtures/reference-job/families/`
-- `neutral` is the default family
-- domain-shaped families such as `hardware-tradeoff` and `policy-analysis` are explicit extensions rather than hidden defaults
-- if a new research area does not fit an existing family, use the neutral family first, then add a new family and customize it instead of mutating the neutral baseline
-- `scripts/create_fixture_family.py <new-family>` scaffolds a new family by copying the neutral baseline into both fixture roots
-- `scripts/run_live_drift_check.py` can execute the real workflow against one of those stable sanitized reference-job families to detect provider drift outside the normal execution path
-- every fact and world-claim inference must carry explicit evidence on that exact item; nearby citations do not satisfy the requirement
-- intake is now also executed internally as source declaration, direct fact-lineage extraction, normalization, and final merge before `01-intake.json` is accepted
-- structured stages are now executed internally as source-pass JSON, claim-pass JSON, and deterministic markdown rendering from the validated structured payload
-- source-pass and claim-pass are now strict contracts rather than soft hints: source-pass may emit only `stage` and `sources`, while claim-pass must omit `sources` and emit only the stage claim payload
-- structured substeps now write any adapter-facing scratch markdown under `runs/<run-id>/audit/substeps/`; the final `stage-outputs/*.md` artifact is runner-owned and written only after the structured stage passes validation
-- bounded repair now applies only to structurally close but invalid structured JSON; missing or unreadable structured output is treated as a hard failure rather than spending another repair call
-- decomposed structured stages now resume at substep granularity: a valid prior source-pass can be reused while only claim-pass and final rendering are rerun
-- workflow state is now journaled through append-only `events.jsonl`, and `workflow-state.json` is treated as a derived snapshot rather than the only source of truth
-- `scripts/rebuild_workflow_state.py --run-dir <run-dir>` can now reconstruct `workflow-state.json` from the event journal when the snapshot is missing or stale
-- automated runs now also persist stage, substage, and post-processing usage telemetry under `audit/usage/`
-- execution usage and qualification usage are tracked separately so provider-health overhead does not pollute workflow cost tuning
-- usage telemetry records duration, prompt size, stdout and stderr size, adapter, model, and token counts when the CLI exposes them; when exact token counts are not available, records are marked `usage_status: unavailable` instead of inventing fake numbers
-- automated runs now also persist a run-start execution snapshot under `audit/execution-config.json`, including the execution-relevant config only: job-derived execution config when present, otherwise fallback CLI adapter selection, plus configured and resolved stage-provider assignments, provider models, trust requirements, and runtime policy
-- resuming an existing run under a different resolved provider/model configuration is now rejected instead of silently mixing execution configs within one run
-- resume fast-paths update workflow state without appending synthetic post-processing usage records for already-existing claim-extraction or final-artifact outputs
-- when a parallel sibling is interrupted after another stage fails, the interrupted substep usage record is persisted as `cancelled`, not misclassified as `failed`
-- provider runtime scorecards now live under `audit/provider-scorecards/` and persist qualification history, live-drift history, repair attempts, stage outcomes, and quarantine status
-- `workflow.execution.provider_runtime_policy` can quarantine repeated provider failures and reroute named stages through configured fallback providers
-- `scripts/provider_scorecards_report.py --job-dir <job-dir>` summarizes those scorecards
-- `quality_policy` now participates in final-artifact readiness/publication checks, and `scripts/run_quality_benchmarks.py --family neutral` runs stable benchmark fixtures under `fixtures/benchmarks/families/`
-
-The rendered prompt packets and `WORK_ORDER.md` now state these upstream artifact paths explicitly.
-
-Important:
-
-- the framework does not call provider APIs yet
-- stage execution can be manual or handled by an external adapter or CLI-based orchestrator
-- all factual claims must remain cited
-- facts and inference must stay separated where possible
-- unresolved disagreement must remain visible through the judge stage
-
-### Example execution mapping
-
-This is an example, not a hard requirement. The framework stays provider-agnostic.
-
-- `intake`: `ChatGPT` or `Codex`
-- `research-a`: `ChatGPT`
-- `research-b`: `Gemini`
-- `critique-a-on-b`: same model family used for `research-a`
-- `critique-b-on-a`: same model family used for `research-b`
-- `judge`: the strongest reasoning model you trust most
-
-Why this example is reasonable:
-
-- using different models for `research-a` and `research-b` increases useful disagreement
-- keeping each critique with its original research perspective preserves adversarial pressure
-- using the strongest model for `judge` improves synthesis quality when evidence is mixed
-
-Recommended operator pattern:
-
-- use `Codex` to scaffold runs, manage files, and keep the repo state clean
-- use model UIs or APIs such as `ChatGPT` and `Gemini` to execute the prompt packets
-- write each stage result back into the matching file under `stage-outputs/`
-
-### 5. Extract a claim register from a markdown report
-
-For any markdown report, generate a JSON claim register like this:
-
-```bash
-python3 scripts/extract_claims.py \
-  --input ~/Projects/research-hub/jobs/my-project-1/runs/run-001/stage-outputs/06-judge.md \
-  --output ~/Projects/research-hub/jobs/my-project-1/evidence/claims-run-001.json
-```
-
-Strict mode fails if extracted fact or inference claims have no external evidence sources:
+Extract claims from a markdown report with:
 
 ```bash
 python3 scripts/extract_claims.py \
@@ -308,238 +228,74 @@ python3 scripts/extract_claims.py \
   --strict
 ```
 
-The claim register now separates:
-
-- `provenance` = internal workflow artifacts that asserted or preserved a claim
-- `evidence_sources` = external sources that support a claim about the world
-- `unclassified_markers` = markers that could not be safely classified
-
-It also now preserves richer claim classes such as `recommendation`, `assumption`, `decision`, `open_question`, and `evidence_gap`. Final publication currently truth-gates only `fact`, `inference`, `decision`, and `recommendation`; evaluative framing remains non-gating because the current pipeline still uses it for confidence and disagreement summaries.
-
-For final outputs, provenance is useful for audit, but it is not enough evidence on its own.
-
-### 6. Generate the final artifact
-
-Once the judge artifact and claim register are ready, generate the final user-facing artifact like this:
+Generate the final artifact with:
 
 ```bash
 python3 scripts/generate_final_artifact.py \
   --judge-input ~/Projects/research-hub/jobs/my-project-1/runs/run-001/stage-outputs/06-judge.md \
+  --judge-structured-input ~/Projects/research-hub/jobs/my-project-1/runs/run-001/stage-outputs/06-judge.json \
   --claim-register ~/Projects/research-hub/jobs/my-project-1/evidence/claims-run-001.json \
-  --output ~/Projects/research-hub/jobs/my-project-1/outputs/final-run-001.md
+  --output ~/Projects/research-hub/jobs/my-project-1/outputs/final-run-001.md \
+  --config ~/Projects/research-hub/jobs/my-project-1/config.yaml
 ```
 
-This script will fail if the claim register still contains:
+The final artifact remains operator-reviewed output, not autonomous truth certification.
 
-- uncited facts
-- uncited inferences where strict validation applies
-- uncited truth-gated claims such as unsupported decisions or recommendations
-- unsupported recommendations that carry evidence but no explicit rationale or risk accounting
-- provenance-only supported facts
-- unclassified markers
+## Local Dashboard
 
-It will also fail if structured source records show that a referenced source is blocked by source policy.
-
-The final artifact includes:
-
-- executive summary
-- options comparison
-- recommendation
-- confidence and uncertainty
-- references
-- open questions
-
-Important:
-
-- the references section is for external sources only
-- internal workflow provenance stays in audit artifacts, not in the user-facing references list
-
-### 7. Automate the CLI split
-
-The runner is adapter-based. Today the fallback default configuration is:
-
-- `intake` in Codex
-- `research-a` in Codex
-- `research-b` in Gemini
-- `critique-a-on-b` in Codex
-- `critique-b-on-a` in Gemini
-- `judge` in Gemini
-
-Then the runner will also perform:
-
-- `extract_claims.py --strict`
-- `validate_job.py --final-artifact-ready`
-- `generate_final_artifact.py`
-
-Use:
+Start the dashboard with:
 
 ```bash
-python3 scripts/execute_workflow.py \
-  --job-path ~/Projects/research-hub/jobs/my-project-1
+cd ~/Projects/research-hub/research-assistant/dashboards/ui
+npm install
+npm run dev
 ```
 
-If the job is registered in `jobs-index/`, you can use either of these instead:
+Then visit `http://localhost:3000`.
 
-```bash
-python3 scripts/execute_workflow.py \
-  --job-name my-project-1
-```
+The dashboard can:
 
-```bash
-python3 scripts/execute_workflow.py \
-  --job-id my-project-1
-```
+- inspect jobs and runs
+- create jobs from the template
+- edit `brief.md` and `config.yaml`
+- launch scaffold or automated runs
+- inspect run artifacts and execution config snapshots
 
-If `--run-id` is omitted, the executor now chooses the next incremental run id in the job repo, such as `run-001`, `run-002`, and so on. Explicit `--run-id` is still supported when you want a fixed identifier. If you explicitly target a run id that already exists, the executor now asks for confirmation before continuing that run instead of silently resuming it.
+## Authentication and Costs
 
-This runner will:
+Two practical points should be explicit:
 
-- scaffold the run if it does not already exist
-- execute the six workflow stages in the required order
-- run `research-a` and `research-b` in parallel
-- run `critique-a-on-b` and `critique-b-on-a` in parallel
-- wait for both critiques before running `judge`
-- extract claims from the structured judge artifact when available
-- validate final-artifact readiness before generation
-- generate the final artifact after readiness checks pass
-- resume safely if a prior run already completed some stages
-- report stage progress while it runs
+- GitHub auth is required for features that create repos, sync branches, open PRs, or depend on git-backed UI workflows.
+- Provider auth is required for qualification and any real stage execution through Codex, Claude, Gemini, or other adapters.
 
-In an interactive terminal, the runner redraws the current status in place. In non-interactive output capture, it emits ordered event lines such as:
+Running the workflow can incur real provider costs. Multi-pass research, critique, and judge stages are intentionally more expensive than one-shot prompting because they buy you auditability and adversarial structure.
 
-- `codex: intake started`
-- `codex: intake completed`
-- `codex: research-a started`
-- `gemini: research-b started`
-- `system: claim-extraction completed`
+## Detailed Setup and Configuration
 
-It writes stage execution logs into:
+For installation, configuration, authentication, path layout, and secrets guidance, use:
 
-- `runs/<run-id>/logs/`
+- [Installation and Configuration](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/installation-and-configuration.md)
+- [Automation Workflow](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/automation-workflow.md)
+- [Operator Playbook](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/operator-playbook.md)
+- [Product Spec](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/product-spec.md)
+- [UI Product Spec](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/ui-spec.md)
 
-It also updates:
+## Structure
 
-- `runs/<run-id>/workflow-state.json`
+- `templates/` — job templates
+- `shared/` — reusable prompts, policies, rubrics
+- `schemas/` — validation schemas
+- `scripts/` — orchestration and validation utilities
+- `jobs-index/` — registry of research jobs, fixed inside the assistant repo
+- `docs/` — product, architecture, and decision records
+- `dashboards/ui/` — local browser UI for managing jobs and runs
+- `inbox/` — project ideas and incoming notes
 
-Current adapter assumptions:
-
-- Codex is invoked via the `codex` CLI
-- Gemini is invoked via `gemini --model <model> -p <prompt> -y --output-format text`
-- Claude is available as an alternate adapter via `claude -p --output-format text --permission-mode bypassPermissions`
-- Antigravity remains available as an optional adapter via `antigravity chat --mode agent --yes`
-- adapters must be able to read an instruction prompt and write the requested stage artifact without interactive editing
-
-You can override the binaries or the selected adapters if needed:
-
-```bash
-python3 scripts/execute_workflow.py \
-  --job-path ~/Projects/research-hub/jobs/my-project-1 \
-  --run-id run-001 \
-  --codex-bin /path/to/codex \
-  --gemini-bin /path/to/gemini \
-  --antigravity-bin /path/to/antigravity \
-  --claude-bin /path/to/claude
-```
-
-To switch the secondary execution role back to Antigravity:
-
-```bash
-python3 scripts/execute_workflow.py \
-  --job-path ~/Projects/research-hub/jobs/my-project-1 \
-  --run-id run-001 \
-  --secondary-adapter antigravity
-```
-
-For durable provider selection, prefer job-level execution config in `config.yaml` instead of CLI role flags. The runner now supports named providers under `workflow.execution.providers` and per-stage assignment through `workflow.execution.stage_providers`, with model selection configured on the provider entry when the adapter supports it.
-Jobs may also declare `workflow.execution.provider_runtime_policy` to quarantine providers after repeated failures or live-drift regressions and reroute specific stages through named fallbacks.
-
-The automated runner uses this fixed stage order:
-
-1. `intake` in Codex
-2. `research-a` in the primary adapter and `research-b` in the secondary adapter in parallel
-3. `critique-a-on-b` in the primary adapter and `critique-b-on-a` in the secondary adapter in parallel
-4. `judge` in the secondary adapter
-5. `extract_claims.py --strict`
-6. `validate_job.py --final-artifact-ready`
-7. `generate_final_artifact.py`
-
-This is intentionally file-driven rather than provider-integrated. The runner passes each adapter the stage id, prompt-packet path, markdown output path, structured-output path where required, and the run-level source registry path. It waits for the expected artifact to exist and no longer contain placeholder content. For structured stages, it validates the JSON contract and cited source IDs before downstream execution continues. It no longer recovers authoritative artifacts out of stdout. Instead, adapter executors must materialize the requested file deterministically, and structured stages only run through providers that first qualify as `structured_safe`.
-
-You can probe an adapter directly with:
-
-```bash
-python3 scripts/qualify_adapters.py \
-  --adapter gemini \
-  --adapter-bin "$(command -v gemini)" \
-  --job-dir ~/Projects/research-hub/jobs/my-project-1
-```
-
-For the stronger stage-like regression profile, use:
-
-```bash
-python3 scripts/qualify_adapters.py \
-  --adapter gemini \
-  --adapter-bin "$(command -v gemini)" \
-  --job-dir ~/Projects/research-hub/jobs/my-project-1 \
-  --profile workflow-regression \
-  --run-dir ~/Projects/research-hub/jobs/my-project-1/runs/run-001 \
-  --provider-key gemini_judge \
-  --only-if-stale
-```
-
-`--only-if-stale` reruns regression qualification when watched inputs change, including:
-- `shared/prompts/`
-- `schemas/`
-- `scripts/`
-- the job's `config.yaml`
-
-The repo also now includes a GitHub Actions workflow at [.github/workflows/adapter-regression.yml](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/.github/workflows/adapter-regression.yml) that reruns the regression guard tests when prompts, schemas, scripts, tests, or the workflow itself change.
-
-### 8. What is still manual
-
-If you use the current automated runner for the supported Codex/Gemini default split, these are still manual:
-
-- source retrieval
-- citation verification against source content
-- promotion of accepted outputs into final job-level deliverables
-- configuring or replacing external execution adapters if your local CLI setup differs from the current adapter assumptions
-
-### 9. What the framework gives you now
-
-- independent job repos
-- auditable run scaffolding
-- automated adapter-driven execution for the current 2-pass workflow shape
-- strict prompt packets
-- workflow state and work order files
-- placeholder output targets
-- claim extraction from markdown
-- final artifact generation from judge output plus claim register
-- structure validation
-
----
-
-## Workflow
-
-1. Intake → structured brief
-2. Research A/B → independent parallel outputs
-3. Critique A on B and B on A → adversarial cross-examination
-4. Judge → resolution and synthesis
-5. Claim extraction and artifact writing → downstream structured outputs
-
----
-
-## Execution Model
-
-- ChatGPT → design & reasoning
-- Codex → implementation & execution
-- Scripts → orchestration layer
-- Jobs → persistent storage
-
----
-
-## Important
+## Hard Constraint
 
 This repo must never contain:
+
 - real research data
-- client/project names
-- sensitive sources
+- client or project source material
+- sensitive source content
+- job-specific outputs

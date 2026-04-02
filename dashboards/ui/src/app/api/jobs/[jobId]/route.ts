@@ -3,9 +3,10 @@ import fs from 'fs/promises';
 import path from 'path';
 import { exec } from 'child_process';
 import util from 'util';
+import { loadRepoPaths } from '@/lib/repoPaths';
 
 const execAsync = util.promisify(exec);
-const JOBS_DIR = path.resolve(process.cwd(), '../../../jobs');
+const { jobsRoot: JOBS_DIR } = loadRepoPaths();
 
 export async function GET(req: Request, context: { params: Promise<{ jobId: string }> }) {
   try {

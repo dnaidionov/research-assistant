@@ -11,10 +11,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from _repo_paths import load_repo_path_config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ASSISTANT_REPO_NAME = "research-assistant"
-DEFAULT_JOB_ROOT = Path.home() / "Projects" / "research-hub" / "jobs"
+DEFAULT_JOB_ROOT = load_repo_path_config(repo_root=REPO_ROOT).jobs_root
 
 STAGES: list[dict[str, object]] = [
     {

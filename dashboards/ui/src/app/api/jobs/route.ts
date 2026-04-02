@@ -2,8 +2,9 @@ import { NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
 import yaml from 'yaml';
+import { loadRepoPaths } from '@/lib/repoPaths';
 
-const JOBS_INDEX_DIR = path.resolve(process.cwd(), '../../jobs-index');
+const { jobsIndexDir: JOBS_INDEX_DIR, jobsRoot: JOBS_DIR, templateDir: TEMPLATE_DIR } = loadRepoPaths();
 
 export async function GET() {
   try {
@@ -64,9 +65,6 @@ import { exec } from 'child_process';
 import util from 'util';
 const execAsync = util.promisify(exec);
 
-const JOBS_DIR = path.resolve(process.cwd(), '../../../jobs');
-const TEMPLATE_DIR = path.resolve(process.cwd(), '../../templates/job-template');
-
 export async function POST(req: Request) {
   try {
     const body = await req.json();
@@ -109,7 +107,7 @@ export async function POST(req: Request) {
     const indexData = {
       job_id,
       display_name: name,
-      local_path: `../../../jobs/${job_id}`,
+      local_path: path.relative(path.join(JOBS_INDEX_DIR, 'active'), jobPath),
       visibility: visibility || 'private',
       status: 'active',
       tags: tags || [],
@@ -125,4 +123,3 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }
 }
-

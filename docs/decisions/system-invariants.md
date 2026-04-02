@@ -5,7 +5,7 @@ These rules must not be violated by future changes.
 ## Repo boundaries
 - The `research-assistant` repo contains framework logic, prompts, templates, schemas, scripts, and documentation only.
 - The `research-assistant` repo must never contain real research data.
-- Each research job lives in its own independent repo under `~/Projects/research-hub/jobs/`.
+- Each research job lives in its own independent repo under the configured jobs root. The default is `~/Projects/research-hub/jobs/`.
 - The `jobs/` directory is only a container, not a git repo.
 
 ## Workflow

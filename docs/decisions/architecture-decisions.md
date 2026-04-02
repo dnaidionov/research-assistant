@@ -225,7 +225,7 @@ Decision:
 
 Status:
 - implemented securely
-- job listings are parsed directly from the `jobs-index/` directory
+- job listings are parsed directly from the assistant-repo `jobs-index/` directory, while the jobs root itself remains configurable through `config/paths.yaml`
 - configuration editing reads natively from `config.yaml` and `brief.md`
 - execution integrates real-time async streams from spawned child processes
 - UI artifacts inspection replaces text-heavy CLI output trees with proper UI modals and rendered HTML iFrames

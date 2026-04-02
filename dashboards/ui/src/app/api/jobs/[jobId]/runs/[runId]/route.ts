@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
+import { loadRepoPaths } from '@/lib/repoPaths';
 
-const JOBS_DIR = path.resolve(process.cwd(), '../../../jobs');
+const { jobsRoot: JOBS_DIR } = loadRepoPaths();
 
 async function getFiles(dir: string, baseDir: string = ''): Promise<{path: string, content: string, type: string}[]> {
   try {

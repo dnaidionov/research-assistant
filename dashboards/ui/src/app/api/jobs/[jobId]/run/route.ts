@@ -2,9 +2,10 @@ import { NextResponse } from 'next/server';
 import { spawn, exec } from 'child_process';
 import path from 'path';
 import util from 'util';
+import { loadRepoPaths } from '@/lib/repoPaths';
 
 const execAsync = util.promisify(exec);
-const JOBS_DIR = path.resolve(process.cwd(), '../../../jobs');
+const { jobsRoot: JOBS_DIR } = loadRepoPaths();
 const SCRIPTS_DIR = path.resolve(process.cwd(), '../../scripts');
 
 export const dynamic = 'force-dynamic';
@@ -21,9 +22,12 @@ export async function POST(req: Request, context: { params: Promise<{ jobId: str
         // We first commit any unsaved changes if the frontend didn't already
         // But the frontend explicitly fires a save beforehand as per requirements.
         
-        const scriptPath = path.join(SCRIPTS_DIR, 'execute_workflow.py');
+        const url = new URL(req.url);
+        const mode = url.searchParams.get('mode') || 'auto';
+        const scriptFile = mode === 'scaffold' ? 'run_workflow.py' : 'execute_workflow.py';
+        const scriptPath = path.join(SCRIPTS_DIR, scriptFile);
         
-        controller.enqueue(encoder.encode(`Starting run for job: ${jobId}\n`));
+        controller.enqueue(encoder.encode(`Starting run for job: ${jobId} (${mode} mode)\n`));
         controller.enqueue(encoder.encode(`Executing: python3 ${scriptPath} --job-path ${jobPath}\n\n`));
 
         const child = spawn('python3', [scriptPath, '--job-path', jobPath], {

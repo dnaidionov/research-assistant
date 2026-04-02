@@ -4,6 +4,42 @@
 
 This is the shortest control-plane reference for running and debugging the workflow as it exists today.
 
+## Path Layout
+
+Default local paths are:
+
+- assistant repo: `~/Projects/research-hub/research-assistant`
+- jobs root: `~/Projects/research-hub/jobs`
+
+Those are defaults only. `jobs_root` is configured in `config/paths.yaml`. `jobs-index/` remains fixed inside the assistant repo.
+
+## Manual Stage Recording
+
+If you execute a stage manually, record what you actually attempted:
+
+```bash
+python3 scripts/record_manual_stage.py \
+  --run-dir ~/Projects/research-hub/jobs/my-project-1/runs/run-001 \
+  --stage judge \
+  --status failed \
+  --provider-key claude_research \
+  --adapter claude \
+  --model claude-sonnet-4-6
+```
+
+This is not optional bookkeeping. Failed and cancelled attempts still need provider/model attribution or the audit trail becomes misleading.
+
+If you want the framework to launch only one stage, use:
+
+```bash
+python3 scripts/run_stage.py \
+  --job-path ~/Projects/research-hub/jobs/my-project-1 \
+  --run-id run-001 \
+  --stage research-b
+```
+
+Per-step overrides are supported through `--provider-key`, `--adapter`, and `--model`.
+
 ## Provider Trust
 
 Trust tiers:
