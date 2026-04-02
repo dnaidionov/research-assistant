@@ -274,11 +274,11 @@ Running the workflow can incur real provider costs. Multi-pass research, critiqu
 
 For installation, configuration, authentication, path layout, and secrets guidance, use:
 
-- [Installation and Configuration](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/installation-and-configuration.md)
-- [Automation Workflow](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/automation-workflow.md)
-- [Operator Playbook](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/operator-playbook.md)
-- [Product Spec](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/product-spec.md)
-- [UI Product Spec](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/ui-spec.md)
+- [Installation and Configuration](docs/product/installation-and-configuration.md)
+- [Automation Workflow](docs/product/automation-workflow.md)
+- [Operator Playbook](docs/product/operator-playbook.md)
+- [Product Spec](docs/product/product-spec.md)
+- [UI Product Spec](docs/product/ui-spec.md)
 
 ## Structure
 

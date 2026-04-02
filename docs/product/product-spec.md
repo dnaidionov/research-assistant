@@ -274,7 +274,7 @@ Priority order for the next iteration:
 5. extend the new semantic support-link model beyond the structured path so markdown compatibility layers and publication logic no longer fall back to marker-only provenance/evidence classification
 6. decide whether intake should eventually emit richer fact-level provenance such as precise machine-readable spans now that source-backed facts, excerpts, and anchors exist
 
-The concrete redesign path that operationalizes those priorities is documented in [redesign-proposal.md](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/docs/product/redesign-proposal.md).
+The concrete redesign path that operationalizes those priorities is documented in [redesign-proposal.md](redesign-proposal.md).
 
 ## Constraints
 

@@ -171,7 +171,7 @@ But qualification usage must remain separate from stage execution usage.
 
 1. Extend command execution result model
 
-- File: [`scripts/execute_workflow.py`](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/scripts/execute_workflow.py)
+- File: [`scripts/execute_workflow.py`](../../scripts/execute_workflow.py)
 - Ensure adapter executor returns:
   - timestamps
   - duration
@@ -196,7 +196,7 @@ But qualification usage must remain separate from stage execution usage.
 
 4. Record qualification separately
 
-- File: [`scripts/_adapter_qualification.py`](/Users/Dmitry_Naidionov/Projects/research-hub/research-assistant/scripts/_adapter_qualification.py)
+- File: [`scripts/_adapter_qualification.py`](../../scripts/_adapter_qualification.py)
 - capture usage per probe
 - persist under qualification usage artifacts
 - do not merge into stage totals
@@ -325,4 +325,3 @@ This is one of the main reasons to build the telemetry layer.
 - reported token counts appear where available
 - missing token data is explicit, not hidden
 - docs match implementation
-
