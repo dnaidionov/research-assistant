@@ -2,10 +2,15 @@
 
 ## Root
 
+Default local layout:
+
 ~/Projects/research-hub/
 
 ├── research-assistant/
 └── jobs/
+
+These paths are defaults, not hard requirements. `jobs_root` is configurable through `config/paths.yaml`.
+`jobs-index/` is not. It remains inside the assistant repo.
 
 ---
 

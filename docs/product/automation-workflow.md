@@ -2,9 +2,16 @@
 
 ## Overview
 
-The v1 workflow is a file-based orchestration pipeline executed by scripts and operated manually, semi-manually, or through a CLI-driven adapter runner.
+The workflow is a file-based orchestration pipeline executed by scripts and operated manually, stage-by-stage, or through a CLI-driven adapter runner.
 
 The orchestration layer remains provider-agnostic. It prepares prompt packets, state files, work orders, and audit artifacts. It does not perform provider API calls in v1.
+
+Default local paths are:
+
+- assistant repo: `~/Projects/research-hub/research-assistant`
+- jobs root: `~/Projects/research-hub/jobs`
+
+Those are defaults, not hard requirements. `jobs_root` is configured through `config/paths.yaml`. `jobs-index/` remains fixed inside the assistant repo.
 
 ## Canonical Research Lifecycle
 
@@ -140,11 +147,17 @@ Automated runs now also write usage telemetry under `audit/usage/`:
 - `qualification-usage-records.json` for provider qualification probes
 - `usage-summary.json` for run-level totals and grouping by stage, provider, adapter, and model
 
-Automated runs also persist a resolved execution snapshot under:
+Automated and manual-stage runs persist execution state under:
 
 - `audit/execution-config.json`
 
-That snapshot records the execution-relevant configuration for the specific run: the job-derived `workflow.execution` block when present, otherwise the fallback CLI adapter selection, plus configured and resolved stage-provider assignments, provider models, required trust levels, and runtime policy.
+That snapshot records:
+
+- execution-relevant configured state for the run
+- resolved stage assignments
+- actual attempted stage assignments as stages are launched or recorded
+
+Configured and actual assignments are preserved separately. A per-step override must not rewrite the configured plan.
 
 The workflow script writes placeholder stage outputs as part of the scaffold so the run is auditable before any provider execution happens.
 
@@ -202,6 +215,7 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - records qualification probe usage separately from execution usage so preflight overhead can be inspected without corrupting workflow-stage totals
 - treats token counts as opportunistic exact telemetry rather than universal truth: when a CLI does not expose token usage, the record is kept with `usage_status: unavailable`
 - persists a run-start `audit/execution-config.json` snapshot so each run records exactly which execution-relevant providers, adapters, models, trust requirements, and runtime-policy reroutes were in effect
+- records `actual_stage_assignments` in that snapshot as stages are actually attempted, including failed and cancelled attempts
 - rejects resuming an existing run when the current resolved execution configuration no longer matches the saved run snapshot, but does not fail on unrelated non-execution edits elsewhere in `config.yaml`
 - does not append synthetic claim-extraction or final-artifact usage records when those outputs already exist on resume
 - records sibling-interrupted structured substeps as `cancelled` in usage telemetry instead of inflating failure counts
@@ -257,6 +271,27 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - records provider qualification, stage outcomes, repair attempts, and live-drift history into `audit/provider-scorecards/`
 - applies `workflow.execution.provider_runtime_policy` to quarantine repeatedly failing providers and reroute stages through named fallbacks when configured
 - forwards `quality_policy` into final-artifact readiness and publication validation
+
+### `scripts/run_stage.py`
+- executes one stage for an existing run
+- uses the configured stage provider/model by default
+- accepts per-step overrides through:
+  - `--provider-key`
+  - `--adapter`
+  - `--model`
+- treats explicit per-step overrides as higher precedence than job config for that launched step only
+- records the actual attempted provider/model in `audit/execution-config.json`
+
+### `scripts/record_manual_stage.py`
+- records manual stage attempts for existing runs
+- supports `started`, `completed`, `failed`, and `cancelled`
+- requires the expected stage artifact only for `completed`
+- records attempted provider/model even for failed and cancelled stages
+- updates:
+  - `events.jsonl`
+  - `workflow-state.json`
+  - `audit/execution-config.json`
+  - usage telemetry
 
 ### `scripts/qualify_adapters.py`
 - probes a concrete adapter binary against deterministic markdown plus multiple stage-like structured fixture prompts

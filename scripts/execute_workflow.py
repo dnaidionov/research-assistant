@@ -71,6 +71,7 @@ from _workflow_state import (
     derive_workflow_state_from_events,
     initial_stage_substeps,
 )
+from _repo_paths import load_repo_path_config, resolve_jobs_root
 from run_workflow import RUN_STAGES, resolve_job_path, scaffold_run
 
 
@@ -79,7 +80,6 @@ DEFAULT_GEMINI_BIN = "gemini"
 DEFAULT_ANTIGRAVITY_BIN = "antigravity"
 DEFAULT_CLAUDE_BIN = "claude"
 DEFAULT_GEMINI_MODEL = "gemini-3.1-pro-preview"
-DEFAULT_JOBS_INDEX_ROOT = Path(__file__).resolve().parents[1] / "jobs-index"
 STAGE_CLAIM_STAGE_IDS = {"research-a", "research-b", "critique-a-on-b", "critique-b-on-a", "judge"}
 INCREMENTAL_RUN_ID_PATTERN = re.compile(r"^run-(\d+)$")
 DEFAULT_REQUIRED_PROVIDER_TRUST = "structured_safe_smoke"
@@ -105,6 +105,11 @@ EXECUTION_PLAN = [
     ],
     [StageExecution("judge", "secondary", "06-judge.md", "06-judge.md")],
 ]
+EXECUTION_BY_STAGE_ID = {
+    stage.stage_id: stage
+    for group in EXECUTION_PLAN
+    for stage in group
+}
 
 GREEN = "\x1b[32m"
 RED = "\x1b[31m"
@@ -342,8 +347,8 @@ def parse_args() -> argparse.Namespace:
     target.add_argument("--job-id", help="Job id to resolve via jobs-index metadata or jobs root.")
     target.add_argument("--job-path", help="Explicit path to the target job repository.")
     parser.add_argument("--run-id", help="Run identifier to execute or create. Defaults to the next incremental run id such as run-001.")
-    parser.add_argument("--jobs-root", default=str(Path.home() / "Projects" / "research-hub" / "jobs"))
-    parser.add_argument("--jobs-index-root", default=str(DEFAULT_JOBS_INDEX_ROOT))
+    parser.add_argument("--jobs-root", help="Optional override for the root directory containing job repositories.")
+    parser.add_argument("--jobs-index-root", help=argparse.SUPPRESS)
     parser.add_argument("--primary-adapter", default="codex", help="Adapter name for the primary execution role.")
     parser.add_argument("--secondary-adapter", default="gemini", help="Adapter name for the secondary execution role.")
     parser.add_argument("--codex-bin", default=DEFAULT_CODEX_BIN, help="Path to the Codex CLI.")
@@ -747,6 +752,7 @@ def build_execution_snapshot(
         },
         "stage_required_provider_trust": dict(sorted(stage_required_trust.items())),
         "provider_runtime_policy": runtime_policy,
+        "actual_stage_assignments": {},
     }
     if execution_config is not None:
         snapshot["execution_config_sha256"] = stable_payload_sha256(execution_config)
@@ -760,6 +766,33 @@ def build_execution_snapshot(
     return snapshot
 
 
+def update_execution_snapshot_actual_assignment(
+    run_dir: Path,
+    stage_id: str,
+    selection: StageAdapterSelection,
+    status: str,
+) -> dict[str, object]:
+    path = execution_snapshot_path(run_dir)
+    if not path.is_file():
+        return {}
+    snapshot = json.loads(path.read_text(encoding="utf-8"))
+    assignments = snapshot.setdefault("actual_stage_assignments", {})
+    assignments[stage_id] = {
+        "provider_key": selection.provider_name or selection.adapter_name,
+        "adapter": selection.adapter_name,
+        "model": selection.model,
+        "status": status,
+    }
+    write_json(path, snapshot)
+    append_workflow_event(
+        run_dir,
+        "actual_stage_assignment_recorded",
+        stage_id=stage_id,
+        assignment=assignments[stage_id],
+    )
+    return snapshot
+
+
 def persist_execution_snapshot(
     *,
     run_dir: Path,
@@ -768,7 +801,11 @@ def persist_execution_snapshot(
     path = execution_snapshot_path(run_dir)
     if path.is_file():
         existing = json.loads(path.read_text(encoding="utf-8"))
-        if existing != snapshot:
+        existing_semantics = dict(existing)
+        snapshot_semantics = dict(snapshot)
+        existing_semantics.pop("actual_stage_assignments", None)
+        snapshot_semantics.pop("actual_stage_assignments", None)
+        if existing_semantics != snapshot_semantics:
             raise ValueError(
                 "Execution configuration snapshot mismatch for existing run. "
                 "This run was already started with a different resolved provider/model configuration."
@@ -2152,6 +2189,14 @@ def build_default_stage_assignments(args: argparse.Namespace) -> dict[str, Stage
     }
 
 
+def stage_execution_for_id(stage_id: str) -> StageExecution:
+    stage = EXECUTION_BY_STAGE_ID.get(stage_id)
+    if stage is None:
+        known = ", ".join(sorted(EXECUTION_BY_STAGE_ID))
+        raise ValueError(f"Unknown stage '{stage_id}'. Known stages: {known}.")
+    return stage
+
+
 def load_provider_catalog_from_job_config(job_dir: Path) -> dict[str, StageAdapterSelection] | None:
     execution = load_execution_config(job_dir)
     if execution is None:
@@ -2222,6 +2267,41 @@ def resolve_stage_assignments(args: argparse.Namespace, job_dir: Path) -> dict[s
     if configured is not None:
         return configured
     return build_default_stage_assignments(args)
+
+
+def resolve_stage_selection_override(
+    *,
+    base_selection: StageAdapterSelection,
+    provider_catalog: dict[str, StageAdapterSelection] | None,
+    provider_key_override: str | None = None,
+    adapter_override: str | None = None,
+    model_override: str | None = None,
+) -> StageAdapterSelection:
+    selection = base_selection
+    if provider_key_override and not adapter_override and model_override is None:
+        if provider_catalog is None or provider_key_override not in provider_catalog:
+            raise ValueError(
+                f"--provider-key {provider_key_override} does not match a configured provider and no explicit adapter override was provided."
+            )
+        selection = provider_catalog[provider_key_override]
+
+    adapter_name = adapter_override or selection.adapter_name
+    adapter = resolve_adapter(adapter_name)
+    if model_override is not None and not adapter.supports_model_selection:
+        raise ValueError(f"Adapter '{adapter_name}' does not support explicit model overrides.")
+
+    model = model_override if model_override is not None else selection.model
+    if provider_key_override:
+        provider_name = provider_key_override
+    elif adapter_override and adapter_override != selection.adapter_name:
+        provider_name = adapter_name
+    else:
+        provider_name = selection.provider_name or adapter_name
+    return StageAdapterSelection(
+        adapter_name=adapter_name,
+        model=model,
+        provider_name=provider_name,
+    )
 
 
 def resolve_provider_runtime_policy(job_dir: Path) -> dict[str, object] | None:
@@ -2860,12 +2940,14 @@ def run_stage_group(
         else:
             runnable.append(stage)
     for stage in runnable:
+        selection = stage_assignments[stage.stage_id]
         apply_state_update(
             state_lock,
             state_path,
             state,
             lambda stage_id=stage.stage_id: transition_stage_status(run_dir, state, stage_id, "started"),
         )
+        update_execution_snapshot_actual_assignment(run_dir, stage.stage_id, selection, "started")
 
     if not runnable:
         return
@@ -2901,6 +2983,7 @@ def run_stage_group(
                     state,
                     lambda: transition_stage_status(run_dir, state, stage_id, status),
                 )
+                update_execution_snapshot_actual_assignment(run_dir, stage_id, selection, status)
                 record_provider_stage_result(
                     job_dir,
                     provider_key,
@@ -2934,6 +3017,7 @@ def run_stage_group(
                         else None,
                     ),
                 )
+                update_execution_snapshot_actual_assignment(run_dir, stage.stage_id, selection, "cancelled")
                 record_provider_stage_result(
                     job_dir,
                     provider_key,
@@ -2957,6 +3041,7 @@ def run_stage_group(
                         else None,
                     ),
                 )
+                update_execution_snapshot_actual_assignment(run_dir, stage.stage_id, selection, "failed")
                 record_provider_stage_result(
                     job_dir,
                     provider_key,
@@ -3231,12 +3316,17 @@ def main() -> int:
     reporter = ProgressReporter(sys.stdout)
     try:
         adapter_bins = build_adapter_bin_map(args)
+        repo_root = Path(__file__).resolve().parents[1]
+        repo_paths = load_repo_path_config(repo_root=repo_root)
         job_name, job_dir = resolve_job_path(
             job_name=args.job_name,
             job_id=args.job_id,
             job_path=args.job_path,
-            jobs_root=Path(args.jobs_root).expanduser(),
-            jobs_index_root=Path(args.jobs_index_root).expanduser(),
+            jobs_root=resolve_jobs_root(
+                repo_root=repo_root,
+                cli_jobs_root=Path(args.jobs_root) if args.jobs_root else None,
+            ),
+            jobs_index_root=Path(args.jobs_index_root).expanduser() if args.jobs_index_root else repo_paths.jobs_index_root,
         )
         execution_config = load_execution_config(job_dir)
         configured_stage_assignments = resolve_stage_assignments(args, job_dir)

@@ -86,7 +86,7 @@ Implemented today:
 - scaffolded structured JSON stage outputs for research A, research B, both critique stages, and judge
 - run-level usage telemetry under `runs/<run-id>/audit/usage/`, with execution attempts and qualification probes tracked separately
 - usage telemetry now records duration, prompt size, stdout/stderr size, adapter, model, and token counts when a CLI exposes them; otherwise token fields remain null and the record is marked `usage_status: unavailable`
-- run-level execution snapshots under `runs/<run-id>/audit/execution-config.json`, so execution-relevant provider/model selection, configured-vs-resolved stage assignments, trust requirements, and runtime-policy reroutes are preserved per run
+- run-level execution snapshots under `runs/<run-id>/audit/execution-config.json`, so execution-relevant provider/model selection, configured-vs-resolved stage assignments, trust requirements, runtime-policy reroutes, and actual attempted stage assignments are preserved per run
 - existing runs now reject resumed execution when the current resolved execution config no longer matches the saved run snapshot, but unrelated non-execution changes elsewhere in `config.yaml` do not trigger that guard
 - usage telemetry resume paths do not append synthetic post-processing completion records when claim-extraction or final-artifact outputs already exist
 - usage telemetry records sibling-interrupted structured substeps as `cancelled` rather than `failed`
@@ -167,6 +167,10 @@ Implemented today:
 - stage-claim extraction now logs internal failures explicitly instead of failing silently before emitting a driver log
 - workflow-state now advances to terminal run-level statuses such as `completed` and `failed` during execution rather than remaining stuck at the scaffold status
 - standalone claim extraction can now consume structured stage JSON directly instead of always falling back to lexical markdown parsing
+- **Interactive Family Training**: Users can promote job brief/config templates to the `fixtures/reference-job/families/` register through a dual-pane comparison and editing modal.
+- **Deterministic Scaffolding Mode**: The dashboard now supports a "Just scaffold" execution option that invokes `run_workflow.py` to prepare a job without running LLM agents.
+- **Selective Sync Logic**: API-backed file selection for "Train Family" allows partial updates to fixture defaults.
+- **Horizontal Raw-Text Management**: UI components for configs and briefs now support non-wrapping monospace viewports to preserve delicate indentation in YAML and Markdown.
 
 Known limitations in the current repo:
 

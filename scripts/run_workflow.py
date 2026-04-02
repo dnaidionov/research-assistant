@@ -25,6 +25,7 @@ from _workflow_lib import (
     write_json,
     write_text,
 )
+from _repo_paths import load_repo_path_config, resolve_jobs_root
 
 STAGE_CLAIM_STAGE_IDS = {"research-a", "research-b", "critique-a-on-b", "critique-b-on-a", "judge"}
 
@@ -454,21 +455,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-id", help="Stable run identifier. If omitted, a UTC timestamp is used.")
     parser.add_argument(
         "--jobs-root",
-        default=str(DEFAULT_JOB_ROOT),
-        help="Root directory containing job repos. Used when resolving --job-name or --job-id.",
+        help="Optional override for the root directory containing job repos. Used when resolving --job-name or --job-id.",
     )
-    parser.add_argument(
-        "--jobs-index-root",
-        default=str(REPO_ROOT / "jobs-index"),
-        help="Root directory containing jobs-index metadata. Used when resolving --job-name or --job-id.",
-    )
+    parser.add_argument("--jobs-index-root", help=argparse.SUPPRESS)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    jobs_root = Path(args.jobs_root).expanduser()
-    jobs_index_root = Path(args.jobs_index_root).expanduser()
+    repo_paths = load_repo_path_config(repo_root=REPO_ROOT)
+    jobs_root = resolve_jobs_root(repo_root=REPO_ROOT, cli_jobs_root=Path(args.jobs_root) if args.jobs_root else None)
+    jobs_index_root = Path(args.jobs_index_root).expanduser() if args.jobs_index_root else repo_paths.jobs_index_root
 
     try:
         job_name, job_dir = resolve_job_path(

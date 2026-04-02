@@ -1,6 +1,12 @@
 # Job Template
 
-This directory is copied into a new job repo under `~/Projects/research-hub/jobs/<job-name>/`.
+This directory is copied into a new job repo under the configured jobs root.
+
+Default path:
+
+- `~/Projects/research-hub/jobs/<job-name>/`
+
+That is only the default. The actual jobs root is configured in the assistant repo via `config/paths.yaml`.
 
 ## Required Files
 
