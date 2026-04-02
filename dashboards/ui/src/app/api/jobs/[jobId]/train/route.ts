@@ -5,6 +5,19 @@ import { loadRepoPaths } from '@/lib/repoPaths';
 
 const { jobsRoot: JOBS_DIR, fixturesDir: FIXTURES_DIR } = loadRepoPaths();
 
+function resolveFixtureFamilyPath(family: string): string {
+  const trimmed = family.trim();
+  if (!trimmed) {
+    throw new Error('Family is required');
+  }
+  const resolved = path.resolve(FIXTURES_DIR, trimmed);
+  const relative = path.relative(FIXTURES_DIR, resolved);
+  if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
+    return resolved;
+  }
+  throw new Error('Invalid family path');
+}
+
 export async function GET(req: Request, context: { params: Promise<{ jobId: string }> }) {
   try {
     const { jobId } = await context.params;
@@ -16,7 +29,7 @@ export async function GET(req: Request, context: { params: Promise<{ jobId: stri
     }
 
     const jobPath = path.join(JOBS_DIR, jobId);
-    const fixturePath = path.join(FIXTURES_DIR, family);
+    const fixturePath = resolveFixtureFamilyPath(family);
 
     const jobBrief = await fs.readFile(path.join(jobPath, 'brief.md'), 'utf8').catch(() => '');
     const jobConfig = await fs.readFile(path.join(jobPath, 'config.yaml'), 'utf8').catch(() => '');
@@ -36,7 +49,9 @@ export async function GET(req: Request, context: { params: Promise<{ jobId: stri
     });
   } catch (error) {
     console.error('Failed to get train suggestions:', error);
-    return NextResponse.json({ error: String(error) }, { status: 500 });
+    const message = error instanceof Error ? error.message : String(error);
+    const status = message === 'Invalid family path' ? 400 : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 }
 
@@ -49,7 +64,7 @@ export async function POST(req: Request, context: { params: Promise<{ jobId: str
       return NextResponse.json({ error: 'Family is required' }, { status: 400 });
     }
 
-    const fixturePath = path.join(FIXTURES_DIR, family);
+    const fixturePath = resolveFixtureFamilyPath(family);
     
     // Ensure dir exists if training a brand new family alias
     await fs.mkdir(fixturePath, { recursive: true });
@@ -65,6 +80,8 @@ export async function POST(req: Request, context: { params: Promise<{ jobId: str
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Failed to save train suggestions:', error);
-    return NextResponse.json({ error: String(error) }, { status: 500 });
+    const message = error instanceof Error ? error.message : String(error);
+    const status = message === 'Invalid family path' ? 400 : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 }
