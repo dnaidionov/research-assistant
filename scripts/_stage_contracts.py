@@ -1234,12 +1234,16 @@ def _validate_unsupported_claims(items: object, errors: list[str]) -> None:
         if not isinstance(item, dict):
             errors.append(f"unsupported_claims[{position}] must be a string or object.")
             continue
-        if any(key in item for key in ("target_claim", "reason", "needed_evidence")):
-            _require_string(item.get("target_claim"), f"unsupported_claims[{position}].target_claim", errors)
-            _require_string(item.get("reason"), f"unsupported_claims[{position}].reason", errors)
-            _require_string(item.get("needed_evidence"), f"unsupported_claims[{position}].needed_evidence", errors)
+        target_claim = item.get("target_claim", item.get("claim_text"))
+        reason = item.get("reason", item.get("why_inadequate", item.get("why_defect")))
+        needed_evidence = item.get("needed_evidence", item.get("evidence_needed"))
+        if target_claim is not None or reason is not None or needed_evidence is not None:
+            _require_string(target_claim, f"unsupported_claims[{position}].target_claim", errors)
+            _require_string(reason, f"unsupported_claims[{position}].reason", errors)
+            _require_string(needed_evidence, f"unsupported_claims[{position}].needed_evidence", errors)
             continue
-        _require_string(item.get("text"), f"unsupported_claims[{position}].text", errors)
+        text = item.get("text", item.get("claim_text"))
+        _require_string(text, f"unsupported_claims[{position}].text", errors)
 
 
 def _validate_semantic_links(
@@ -1308,7 +1312,12 @@ def _validate_flexible_object_list(
         if not isinstance(item, dict):
             errors.append(f"{field_name}[{position}] must be a string or object.")
             continue
-        if not any(isinstance(item.get(key), str) and item.get(key).strip() for key in accepted_text_keys):
+        extended_keys = set(accepted_text_keys) | {
+            "text", "claim_text", "target_claim", "description", "gap", "disagreement", "summary",
+            "point", "topic", "issue", "reason", "impact", "reduction_strategy", "what_would_reduce_it",
+            "notes", "assessment", "limitation", "quality", "title"
+        }
+        if not any(isinstance(item.get(key), str) and item.get(key).strip() for key in extended_keys):
             accepted = ", ".join(accepted_text_keys)
             errors.append(f"{field_name}[{position}] must include one of: {accepted}.")
         claim_deps = item.get("claim_dependencies")
@@ -1580,8 +1589,17 @@ def _entry_text(item: object) -> str:
     if isinstance(item, dict):
         for key in (
             "text",
+            "claim_text",
             "target_claim",
             "needed_evidence",
+            "evidence_needed",
+            "why_inadequate",
+            "why_defect",
+            "defect_type",
+            "defect_description",
+            "description",
+            "gap",
+            "disagreement",
             "summary",
             "point",
             "topic",

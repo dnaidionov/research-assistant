@@ -5,7 +5,7 @@ import re
 import threading
 import time
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +14,7 @@ _USAGE_LOCK = threading.RLock()
 
 
 def utc_now_iso() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def usage_records_path(run_dir: Path) -> Path:
@@ -128,6 +128,20 @@ def append_usage_record(run_dir: Path, record: dict[str, Any], *, qualification:
         refresh_usage_summary(run_dir)
 
 
+def extract_reported_model_name(stdout: str, stderr: str) -> str | None:
+    combined = "\n".join(part for part in (stdout, stderr) if part)
+    patterns = [
+        r'"model"\s*:\s*"([^"]+)"',
+        r"\bmodel\s*=\s*([^\s,]+)",
+        r"Model\s*Name\s*:\s*([^\n,]+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, combined, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).strip().strip('"').strip("'")
+    return None
+
+
 def extract_reported_token_counts(stdout: str, stderr: str) -> tuple[str, int | None, int | None, int | None]:
     combined = "\n".join(part for part in (stdout, stderr) if part)
     patterns = {
@@ -189,6 +203,7 @@ def build_usage_record(
     final_input_tokens = input_tokens if input_tokens is not None else derived_input
     final_output_tokens = output_tokens if output_tokens is not None else derived_output
     final_total_tokens = total_tokens if total_tokens is not None else derived_total
+    final_model = model or extract_reported_model_name(stdout, stderr)
     prompt_bytes = len((prompt_text or "").encode("utf-8"))
     prompt_chars = len(prompt_text or "")
     return {
@@ -199,7 +214,7 @@ def build_usage_record(
         "profile": profile,
         "provider_key": provider_key,
         "adapter": adapter,
-        "model": model,
+        "model": final_model,
         "status": status,
         "usage_status": final_usage_status,
         "started_at": started_at,

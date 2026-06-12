@@ -114,7 +114,7 @@ class ExecuteWorkflowTests(unittest.TestCase):
 
         self.assertEqual(
             cmd,
-            ["gemini", "--model", "gemini-3.1-pro-preview", "-p", "prompt text", "-y", "--output-format", "text"],
+            ["gemini", "--model", "pro", "-p", "prompt text", "-y", "--output-format", "text"],
         )
 
     def test_build_adapter_executor_rejects_unknown_artifact_kind(self) -> None:
@@ -1743,6 +1743,7 @@ class ExecuteWorkflowTests(unittest.TestCase):
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
+            stdin=subprocess.DEVNULL,
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)

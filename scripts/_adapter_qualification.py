@@ -203,27 +203,32 @@ def build_qualification_prompt(
     reference_packet: str | None = None,
 ) -> str:
     lines = [
-        "ADAPTER_QUALIFICATION=1",
+        "This is an adapter qualification check (ADAPTER_QUALIFICATION=1).",
+        "Please run this test with:",
         f"QUALIFICATION_PROBE={probe_name}",
         f"QUALIFICATION_PROFILE={qualification_profile}",
         f"STAGE_ID={stage_id}",
-        f"OUTPUT_PATH={output_path}",
-        f"QUALIFY_ARTIFACT_KIND={artifact_kind}",
-        "",
     ]
     if substep is not None:
-        lines.insert(3, f"SUBSTEP={substep}")
+        lines.append(f"SUBSTEP={substep}")
+    lines.extend(
+        [
+            f"OUTPUT_PATH={output_path}",
+            f"QUALIFY_ARTIFACT_KIND={artifact_kind}",
+            "",
+        ]
+    )
     if artifact_kind == "structured_json":
         lines.extend(
             [
-                "Return exact JSON only and nothing else.",
+                "Instruction: Return exact JSON only and nothing else.",
                 'Required payload: {"stage": "adapter-qualification", "status": "ok"}',
             ]
         )
     else:
         lines.extend(
             [
-                "Write markdown only and nothing else.",
+                "Instruction: Write markdown only and nothing else.",
                 "Required content: # Adapter qualification markdown",
             ]
         )

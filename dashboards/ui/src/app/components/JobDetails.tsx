@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Edit2, Save, X, Play, BrainCircuit, AlertTriangle, FileText, Settings, Rocket, Activity, ChevronRight, CheckCircle2, ChevronDown, ArchiveX, Clock, Eye } from "lucide-react";
+import { Edit2, Save, X, Play, BrainCircuit, AlertTriangle, FileText, Settings, Rocket, Activity, ChevronRight, CheckCircle2, ChevronDown, ArchiveX, Clock, Eye, Loader2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import RunInspector from "./RunInspector";
@@ -48,6 +48,41 @@ export default function JobDetails({ jobId, onClose, onRunLaunch, family }: JobD
   
   const [selectedRun, setSelectedRun] = useState<string | null>(null);
   const [isBriefCollapsed, setIsBriefCollapsed] = useState(false);
+
+  const [showTrainModal, setShowTrainModal] = useState(false);
+  const [trainData, setTrainData] = useState<any>(null);
+  const [isLoadingTrain, setIsLoadingTrain] = useState(false);
+  const [isSavingTrain, setIsSavingTrain] = useState(false);
+  const [trainDraft, setTrainDraft] = useState({brief: '', config: ''});
+  const [trainSelected, setTrainSelected] = useState({brief: true, config: true});
+  const [isRunDropdownOpen, setIsRunDropdownOpen] = useState(false);
+  const runDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (runDropdownRef.current && !runDropdownRef.current.contains(event.target as Node)) {
+        setIsRunDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const handleTrainFamily = async () => {
+    if (!family) return;
+    setIsLoadingTrain(true);
+    setShowTrainModal(true);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/train?family=${family}`);
+      if (res.ok) {
+        const payload = await res.json();
+        setTrainData(payload);
+        setTrainDraft({ brief: payload.suggested?.brief || '', config: payload.suggested?.config || '' });
+        setTrainSelected({ brief: true, config: true });
+      }
+    } catch (e) {}
+    setIsLoadingTrain(false);
+  };
 
   const fetchDetails = async () => {
     try {
@@ -153,7 +188,8 @@ export default function JobDetails({ jobId, onClose, onRunLaunch, family }: JobD
     }
   };
 
-  const handleRun = async () => {
+  const handleRun = async (mode: 'auto' | 'scaffold' = 'auto') => {
+    setIsRunDropdownOpen(false);
     if (isEditingBrief && dirtyFields) {
       await handleSaveBrief(true);
     }
@@ -163,7 +199,7 @@ export default function JobDetails({ jobId, onClose, onRunLaunch, family }: JobD
     setRunLogs("");
     
     try {
-      const res = await fetch(`/api/jobs/${jobId}/run`, { method: "POST" });
+      const res = await fetch(`/api/jobs/${jobId}/run?mode=${mode}`, { method: "POST" });
       if (res.body) {
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
@@ -216,7 +252,10 @@ export default function JobDetails({ jobId, onClose, onRunLaunch, family }: JobD
           </button>
 
           {data.runs?.length > 0 && family && family.toLowerCase() !== 'neutral' && (
-             <button className="flex items-center gap-2 px-4 py-2 bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 rounded-xl transition-colors border border-purple-500/20 text-sm font-medium">
+             <button 
+               onClick={handleTrainFamily}
+               className="flex items-center gap-2 px-4 py-2 bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 rounded-xl transition-colors border border-purple-500/20 text-sm font-medium"
+             >
                <Rocket className="w-4 h-4" /> Train {family}
              </button>
           )}
@@ -259,13 +298,61 @@ export default function JobDetails({ jobId, onClose, onRunLaunch, family }: JobD
 
           <div className="w-px h-6 bg-slate-800 mx-1" />
 
-          <button 
-            onClick={handleRun}
-            disabled={isRunning}
-            className="flex items-center gap-2 px-6 py-2 bg-gradient-to-r from-brand-600 to-brand-500 hover:from-brand-500 hover:to-brand-400 text-white rounded-xl shadow-lg shadow-brand-500/20 disabled:from-slate-700 disabled:to-slate-800 disabled:text-slate-500 disabled:shadow-none transition-all font-medium"
-          >
-            <Play className="w-4 h-4" /> Launch Run
-          </button>
+          <div className="relative flex items-stretch" ref={runDropdownRef}>
+            <button 
+              onClick={() => handleRun('auto')}
+              disabled={isRunning}
+              className="flex items-center gap-2 px-5 py-2 bg-gradient-to-r from-brand-600 to-brand-500 hover:from-brand-500 hover:to-brand-400 text-white rounded-l-xl border-r border-brand-400/20 shadow-lg shadow-brand-500/20 disabled:from-slate-700 disabled:to-slate-800 disabled:text-slate-500 disabled:shadow-none transition-all font-medium whitespace-nowrap"
+            >
+              <Play className="w-4 h-4" /> Launch Run
+            </button>
+            <button
+               onClick={() => setIsRunDropdownOpen(!isRunDropdownOpen)}
+               disabled={isRunning}
+               className="px-2 bg-gradient-to-r from-brand-500 to-brand-500 hover:from-brand-500 hover:to-brand-400 text-white rounded-r-xl shadow-lg shadow-brand-500/20 disabled:from-slate-700 disabled:to-slate-800 disabled:text-slate-500 disabled:shadow-none transition-all border-l border-brand-600/20"
+            >
+               <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${isRunDropdownOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            <AnimatePresence>
+              {isRunDropdownOpen && (
+                <motion.div 
+                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                  className="absolute right-0 top-full mt-2 w-64 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl overflow-hidden z-50 p-1"
+                >
+                   <div className="px-3 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest border-b border-slate-800 mb-1">
+                     Run Options
+                   </div>
+                   <button
+                     onClick={() => handleRun('auto')}
+                     className="w-full flex items-start gap-3 p-3 hover:bg-brand-500/10 text-left rounded-lg group transition-colors tabular-nums"
+                   >
+                     <div className="p-2 bg-brand-500/10 rounded-lg group-hover:bg-brand-500/20 transition-colors">
+                       <Rocket className="w-4 h-4 text-brand-400" />
+                     </div>
+                     <div>
+                       <div className="text-sm font-medium text-slate-200">Run everything (auto)</div>
+                       <div className="text-[11px] text-slate-500 leading-tight">Executes the full automated workflow pipeline</div>
+                     </div>
+                   </button>
+                   <button
+                     onClick={() => handleRun('scaffold')}
+                     className="w-full flex items-start gap-3 p-3 hover:bg-slate-800 text-left rounded-lg group transition-colors"
+                   >
+                     <div className="p-2 bg-slate-800 rounded-lg group-hover:bg-slate-700 transition-colors">
+                       <Loader2 className="w-4 h-4 text-slate-400" />
+                     </div>
+                     <div>
+                       <div className="text-sm font-medium text-slate-200">Just scaffold (manual run)</div>
+                       <div className="text-[11px] text-slate-500 leading-tight">Prepares the run environment without launching agents</div>
+                     </div>
+                   </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
         </div>
       </header>
 
@@ -430,6 +517,137 @@ export default function JobDetails({ jobId, onClose, onRunLaunch, family }: JobD
               </motion.div>
            </div>
          )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showTrainModal && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} 
+              onClick={() => setShowTrainModal(false)}
+              className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm"
+            />
+            
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-6xl bg-slate-900 border border-slate-700 shadow-2xl rounded-2xl flex flex-col max-h-[90vh] overflow-hidden"
+            >
+              <div className="flex items-center justify-between p-6 border-b border-slate-800 bg-slate-900">
+                <h2 className="text-xl font-semibold flex items-center gap-2">
+                  <Rocket className="w-5 h-5 text-purple-400" />
+                  Train Family "<span className="text-purple-400">{family}</span>"
+                </h2>
+                <button 
+                  onClick={() => setShowTrainModal(false)}
+                  className="p-2 hover:bg-slate-800 rounded-lg transition-colors text-slate-400 hover:text-slate-200"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-8 bg-slate-950/50">
+                {isLoadingTrain ? (
+                  <div className="flex items-center justify-center py-20 text-slate-400 gap-2">
+                    <Loader2 className="w-5 h-5 animate-spin"/> Loading fixture data...
+                  </div>
+                ) : trainData ? (
+                  <div className="flex flex-col gap-8">
+                    {/* Brief Section */}
+                    <div className="flex flex-col gap-3">
+                       <h3 className="text-sm font-medium text-emerald-400 uppercase tracking-wider flex items-center gap-2"><FileText className="w-4 h-4" /> brief.md</h3>
+                       <div className="grid grid-cols-2 gap-4 h-64">
+                          <div className="flex flex-col border border-slate-800 rounded-xl overflow-hidden bg-slate-900/50">
+                            <div className="px-4 py-2 bg-slate-800/50 border-b border-slate-800 text-xs text-slate-400 font-medium">Current Fixture Defaults</div>
+                            <pre className="p-4 text-xs font-mono text-slate-500 overflow-auto whitespace-pre flex-1">{trainData.current.brief || "(Empty)"}</pre>
+                          </div>
+                          <div className={`flex flex-col border rounded-xl overflow-hidden transition-all ${trainSelected.brief ? 'border-emerald-500/30 bg-slate-900 shadow-[0_0_15px_rgba(16,185,129,0.05)]' : 'border-slate-800 bg-slate-900/40 opacity-70'}`}>
+                            <div className={`px-4 py-2 border-b text-xs font-medium flex justify-between items-center transition-colors ${trainSelected.brief ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-slate-800/30 border-slate-800 text-slate-500'}`}>
+                               <label className="flex items-center gap-2 cursor-pointer">
+                                 <input type="checkbox" className="w-3.5 h-3.5 rounded border-slate-700 bg-slate-900 text-emerald-500 focus:ring-emerald-500/30 cursor-pointer" checked={trainSelected.brief} onChange={e => setTrainSelected({...trainSelected, brief: e.target.checked})} />
+                                 Include Suggested Overrides
+                               </label>
+                               {trainSelected.brief && <span className="text-[10px] bg-emerald-500/20 px-2 py-0.5 rounded-full text-emerald-300">Editable</span>}
+                            </div>
+                            <textarea 
+                              className={`p-4 text-xs font-mono overflow-auto whitespace-pre flex-1 bg-transparent resize-none focus:outline-none focus:ring-1 focus:ring-emerald-500/50 transition-all leading-relaxed ${trainSelected.brief ? 'text-slate-300' : 'text-slate-500 cursor-default'}`}
+                              value={trainDraft.brief}
+                              onChange={e => setTrainDraft({...trainDraft, brief: e.target.value})}
+                              readOnly={!trainSelected.brief}
+                            />
+                          </div>
+                       </div>
+                    </div>
+
+                    {/* Config Section */}
+                    <div className="flex flex-col gap-3">
+                       <h3 className="text-sm font-medium text-emerald-400 uppercase tracking-wider flex items-center gap-2"><Settings className="w-4 h-4" /> config.yaml</h3>
+                       <div className="grid grid-cols-2 gap-4 h-64">
+                          <div className="flex flex-col border border-slate-800 rounded-xl overflow-hidden bg-slate-900/50">
+                            <div className="px-4 py-2 bg-slate-800/50 border-b border-slate-800 text-xs text-slate-400 font-medium">Current Fixture Defaults</div>
+                            <pre className="p-4 text-xs font-mono text-slate-500 overflow-auto whitespace-pre flex-1">{trainData.current.config || "(Empty)"}</pre>
+                          </div>
+                          <div className={`flex flex-col border rounded-xl overflow-hidden transition-all ${trainSelected.config ? 'border-emerald-500/30 bg-slate-900 shadow-[0_0_15px_rgba(16,185,129,0.05)]' : 'border-slate-800 bg-slate-900/40 opacity-70'}`}>
+                            <div className={`px-4 py-2 border-b text-xs font-medium flex justify-between items-center transition-colors ${trainSelected.config ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-slate-800/30 border-slate-800 text-slate-500'}`}>
+                               <label className="flex items-center gap-2 cursor-pointer">
+                                 <input type="checkbox" className="w-3.5 h-3.5 rounded border-slate-700 bg-slate-900 text-emerald-500 focus:ring-emerald-500/30 cursor-pointer" checked={trainSelected.config} onChange={e => setTrainSelected({...trainSelected, config: e.target.checked})} />
+                                 Include Suggested Overrides
+                               </label>
+                               {trainSelected.config && <span className="text-[10px] bg-emerald-500/20 px-2 py-0.5 rounded-full text-emerald-300">Editable</span>}
+                            </div>
+                            <textarea 
+                              className={`p-4 text-xs font-mono overflow-auto whitespace-pre flex-1 bg-transparent resize-none focus:outline-none focus:ring-1 focus:ring-emerald-500/50 transition-all leading-relaxed ${trainSelected.config ? 'text-slate-300' : 'text-slate-500 cursor-default'}`}
+                              value={trainDraft.config}
+                              onChange={e => setTrainDraft({...trainDraft, config: e.target.value})}
+                              readOnly={!trainSelected.config}
+                            />
+                          </div>
+                       </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center py-20 text-slate-500">
+                    Failed to load fixture data.
+                  </div>
+                )}
+              </div>
+
+              <div className="p-6 border-t border-slate-800 bg-slate-900 flex justify-end gap-3 shrink-0">
+                <button 
+                  onClick={() => setShowTrainModal(false)}
+                  className="px-5 py-2.5 rounded-xl font-medium text-sm text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button 
+                   onClick={async () => {
+                     setIsSavingTrain(true);
+                     try {
+                       const res = await fetch(`/api/jobs/${jobId}/train`, {
+                          method: 'POST',
+                          body: JSON.stringify({ 
+                            family, 
+                            brief: trainSelected.brief ? trainDraft.brief : undefined, 
+                            config: trainSelected.config ? trainDraft.config : undefined 
+                          })
+                       });
+                       if (res.ok) {
+                          setShowTrainModal(false);
+                       }
+                     } catch (e) {}
+                     setIsSavingTrain(false);
+                   }}
+                   disabled={isSavingTrain || isLoadingTrain || (!trainSelected.brief && !trainSelected.config)}
+                   className="px-5 py-2.5 rounded-xl font-medium text-sm bg-purple-600 hover:bg-purple-500 text-white shadow-lg shadow-purple-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {isSavingTrain ? <><Loader2 className="w-4 h-4 animate-spin"/> Saving...</> : 'Approve & Save'}
+                </button>
+              </div>
+
+            </motion.div>
+          </div>
+        )}
       </AnimatePresence>
 
       <AnimatePresence>
