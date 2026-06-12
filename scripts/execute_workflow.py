@@ -64,7 +64,10 @@ from _usage_telemetry import (
     timed_operation_bounds,
     utc_now_iso,
 )
-from _stage_validation import validate_structured_stage_artifact
+from _stage_validation import (
+    validate_stage_markdown_contract,
+    validate_structured_stage_artifact,
+)
 from _workflow_lib import write_json
 from _workflow_state import (
     append_workflow_event,
@@ -79,7 +82,7 @@ DEFAULT_CODEX_BIN = "codex"
 DEFAULT_GEMINI_BIN = "gemini"
 DEFAULT_ANTIGRAVITY_BIN = "antigravity"
 DEFAULT_CLAUDE_BIN = "claude"
-DEFAULT_GEMINI_MODEL = "gemini-3.1-pro-preview"
+DEFAULT_GEMINI_MODEL = "pro"
 STAGE_CLAIM_STAGE_IDS = {"research-a", "research-b", "critique-a-on-b", "critique-b-on-a", "judge"}
 INCREMENTAL_RUN_ID_PATTERN = re.compile(r"^run-(\d+)$")
 DEFAULT_REQUIRED_PROVIDER_TRUST = "structured_safe_smoke"
@@ -229,7 +232,11 @@ def build_gemini_command(binary: str, job_dir: Path, prompt: str, model: str | N
 
 
 def build_antigravity_command(binary: str, job_dir: Path, prompt: str, model: str | None = None) -> list[str]:
-    return [binary, "chat", "--mode", "agent", "--yes", prompt]
+    command = [binary, "chat", "--mode", "agent", "--yes"]
+    if model:
+        command.extend(["--model", model])
+    command.append(prompt)
+    return command
 
 
 def build_claude_command(binary: str, job_dir: Path, prompt: str, model: str | None = None) -> list[str]:
@@ -252,6 +259,7 @@ CLI_ADAPTERS: dict[str, CLIAdapter] = {
         name="antigravity",
         command_builder=build_antigravity_command,
         stdout_materialization={"markdown", "structured_json"},
+        supports_model_selection=True,
     ),
     "claude": CLIAdapter(
         name="claude",
@@ -3186,9 +3194,12 @@ def run_final_artifact(
     state: dict[str, object],
     state_path: Path,
     reporter: ProgressReporter,
+    stage_assignments: dict[str, StageAdapterSelection],
+    adapter_bins: dict[str, str],
 ) -> None:
     _started_monotonic, started_at = timed_operation_bounds()
-    if final_output.is_file():
+    custom_output = run_dir / "stage-outputs" / "07-final-report.md"
+    if final_output.is_file() and custom_output.is_file():
         transition_post_processing_status(run_dir, state, "final_artifact", "completed")
         save_state(state_path, state)
         reporter.complete("system", "final-artifact")
@@ -3306,6 +3317,75 @@ def run_final_artifact(
         status="completed",
         prompt_text=" ".join(cmd),
     )
+
+    # Generate the custom 14-section final report based on the judge's recommended structure
+    judge_selection = stage_assignments["judge"]
+    judge_adapter = resolve_adapter(judge_selection.adapter_name)
+    judge_bin = adapter_bins[judge_adapter.name]
+
+    custom_report_cmd = [
+        sys.executable,
+        str(Path(__file__).resolve().parents[1] / "scripts" / "generate_final_report.py"),
+        "--run-dir",
+        str(run_dir),
+        "--job-dir",
+        str(job_dir),
+        "--adapter-name",
+        judge_adapter.name,
+        "--adapter-bin",
+        str(judge_bin),
+        "--model",
+        judge_selection.model or "",
+        "--output",
+        str(custom_output),
+    ]
+    completed_custom = subprocess.run(custom_report_cmd, cwd=job_dir, capture_output=True, text=True)
+    if completed_custom.returncode != 0:
+        transition_post_processing_status(run_dir, state, "final_artifact", "failed")
+        save_state(state_path, state)
+        finished_at_custom = utc_now_iso()
+        append_command_usage_record(
+            run_dir=run_dir,
+            scope="post_processing",
+            stage_id="final-artifact",
+            provider_key="system",
+            adapter="system",
+            model=None,
+            result=CommandResult(
+                completed_custom.returncode,
+                completed_custom.stdout,
+                completed_custom.stderr,
+                started_at=started_at,
+                finished_at=finished_at_custom,
+                duration_ms=0,
+            ),
+            status="failed",
+            prompt_text=" ".join(custom_report_cmd),
+            failure_reason=completed_custom.stderr.strip() or "custom final report generation failed",
+        )
+        reporter.fail("system", "final-artifact")
+        raise RuntimeError(f"Custom final report generation failed: {completed_custom.stderr.strip()}")
+
+    finished_at_custom = utc_now_iso()
+    append_command_usage_record(
+        run_dir=run_dir,
+        scope="post_processing",
+        stage_id="final-report",
+        provider_key=judge_selection.provider_name or "system",
+        adapter=judge_adapter.name,
+        model=judge_selection.model,
+        result=CommandResult(
+            completed_custom.returncode,
+            completed_custom.stdout,
+            completed_custom.stderr,
+            started_at=started_at,
+            finished_at=finished_at_custom,
+            duration_ms=0,
+        ),
+        status="completed",
+        prompt_text=" ".join(custom_report_cmd),
+    )
+
     transition_post_processing_status(run_dir, state, "final_artifact", "completed")
     save_state(state_path, state)
     reporter.complete("system", "final-artifact")
@@ -3403,7 +3483,17 @@ def main() -> int:
             run_stage_group(group, run_dir, job_dir, state_path, state, stage_assignments, adapter_bins, reporter)
 
         run_extract_claims(run_dir, job_dir, run_id, claim_output, state, state_path, reporter)
-        run_final_artifact(run_dir, job_dir, claim_output, final_output, state, state_path, reporter)
+        run_final_artifact(
+            run_dir,
+            job_dir,
+            claim_output,
+            final_output,
+            state,
+            state_path,
+            reporter,
+            stage_assignments,
+            adapter_bins,
+        )
     except Exception as exc:
         print(str(exc), file=sys.stderr)
         return 1

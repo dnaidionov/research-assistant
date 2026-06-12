@@ -31,13 +31,23 @@ The Research Assistant UI is a web-based dashboard designed to manage research j
 - Saving immediately writes to the filesystem and performs a `git add . && git commit` routine in the background.
 
 ### 4. Execution & Monitoring
-- **Launch Run**: Initiates the Python backend (`execute_workflow.py`) via async `child_process` spawning.
+- **Launch Run**: Initiates the workflow via async `child_process` spawning. It features a dropdown selection:
+  - **Run everything (auto)**: Executes the full `execute_workflow.py` pipeline (default).
+  - **Just scaffold (manual run)**: Uses `run_workflow.py` to create the structure without launching agents.
 - **Run Console**: A dedicated modal captures real-time `stdout` and `stderr` streams directly from the executed pipeline, rendering it visually.
 - **Automated Post-Run Integrations**: Whether successful or failed, the backend automatically performs git commits and pushes to origin upon termination.
-- **Train Family**: An action visible after an initial run, reserved for utilizing job knowledge to populate the fixtures of an underlying Research Family.
+- **Train Family**: Promotes job knowledge back to the underlying Research Family fixtures (`fixtures/reference-job/families/`).
+  - **Interactive Comparison**: A dual-pane modal surfaces "Current Fixture Defaults" alongside "Suggested Overrides" (from the current job brief/config).
+  - **Selective Training**: Users can toggle which files (`brief.md` or `config.yaml`) to update via checkboxes before saving.
+  - **Non-Wrapping Monospace**: All textareas support horizontal scrolling to preserve raw content structure during manual generalization.
 
 ### 5. Run Inspection
 - **Hierarchical Artifact Viewer**: Inspect structured JSON prompt packets, intermediate stage outputs, and running logs through a file navigator.
+- **Run Status Indicators**:
+  - `completed`: Emerald (Green) - Full auto run finished with code 0.
+  - `failed`: Red - Process terminated with error.
+  - `running`: Amber (Yellow) - Active execution.
+  - `scaffolded`: Slate (Gray) - Manual scaffold prepared, no execution yet.
 - **Embedded Reports**: Parses and injects the standalone `final_report.html` into a secure iFrame `srcDoc` for immediate consumption.
 - **Export Paths**: Buttons allow researchers to easily copy HTML content to their keyboards or open raw API data directly.
 
