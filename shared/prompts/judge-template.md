@@ -23,6 +23,7 @@ Synthesize research pass A, research pass B, and both critiques into a judge rep
 - Keep a traceable path from synthesis back to the research passes and critiques.
 - Where evidence is mixed, preserve the disagreement instead of pretending the stronger narrative won by default.
 - If neither side is adequately supported, say so directly.
+- When adjudicating candidate options, weigh maturity explicitly: an announced or unreleased option may be recommended only with its availability risk stated inline, and an established option preferred purely for maturity should say so rather than implying the newer option was inferior on the merits.
 
 ## Output Contract
 
@@ -118,6 +119,8 @@ Rules:
 - Every supported conclusion and every synthesis judgment that asserts a world claim must carry explicit evidence on that exact item. Nearby or previous citations do not satisfy the requirement.
 - When possible, add `support_links` to supported conclusions and synthesis judgments as a typed list of `{{ "source_id", "role" }}` objects.
 - If a synthesis judgment depends on earlier local conclusion IDs, record those under `claim_dependencies` instead of placing them in `support_links.source_id`.
+- When a supported conclusion or synthesis judgment states a recommended course of action, set `claim_class: "recommendation"` on that item so downstream quality gates can identify it.
+- A recommendation that rests on a single evidence source must either gain corroborating evidence or carry `single_source_acknowledged`: one sentence naming the single-source limitation (for example, only one vendor benchmark exists). An acknowledged single-source recommendation stays publishable; an unacknowledged one can be blocked by the job's quality policy.
 - Do not use local claim IDs such as `F-001`, `I-001`, or `C-001` inside `support_links.source_id`.
 - `support_links.role` must be one of: `evidence`, `context`, `challenge`, `provenance`.
 - Use `evidence` for external support that justifies the conclusion.

@@ -13,7 +13,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -24,7 +24,71 @@ from _adapter_qualification import (
     profile_for_required_trust,
     trust_satisfies,
 )
-from _job_config import load_execution_config, load_yaml_document
+from _cli_adapters import (
+    CLI_ADAPTERS,
+    CLIAdapter,
+    DEFAULT_ANTIGRAVITY_BIN,
+    DEFAULT_CLAUDE_BIN,
+    DEFAULT_CODEX_BIN,
+    DEFAULT_GEMINI_BIN,
+    DEFAULT_GEMINI_MODEL,
+    build_antigravity_command,
+    build_claude_command,
+    build_codex_command,
+    build_gemini_command,
+)
+from _execution_guards import (
+    ensure_job_input_snapshot,
+    final_report_protected_paths,
+    protected_stage_paths,
+    refresh_run_manifest,
+    restore_protected_files,
+    snapshot_protected_files,
+)
+from _execution_plan import (
+    EXECUTION_BY_STAGE_ID,
+    EXECUTION_PLAN,
+    STAGE_CLAIM_STAGE_IDS,
+    StageExecution,
+    expected_first_heading,
+    stage_claim_output_path,
+    stage_execution_for_id,
+    stage_output_path,
+    stage_packet_path,
+    stage_substep_markdown_path,
+    stage_substep_output_path,
+)
+from _run_state import (
+    apply_state_update,
+    ensure_post_processing_state,
+    load_state,
+    recompute_run_status,
+    save_state,
+    set_post_processing_status,
+    set_stage_claim_status,
+    set_stage_status,
+    set_stage_substep_status,
+    transition_post_processing_status,
+    transition_stage_status,
+    transition_substep_status,
+)
+from _workflow_prompts import (
+    build_agent_prompt,
+    build_claim_pass_prompt,
+    build_intake_fact_prompt,
+    build_intake_normalization_prompt,
+    build_intake_source_prompt,
+    build_repair_prompt,
+    build_source_pass_prompt,
+    build_substep_repair_prompt,
+    intake_source_materials,
+)
+from _job_config import (
+    load_execution_config,
+    load_freshness_max_days,
+    load_requirement_flag,
+    load_yaml_document,
+)
 from _provider_runtime import (
     apply_provider_runtime_policy,
     record_provider_qualification,
@@ -33,6 +97,7 @@ from _provider_runtime import (
 )
 from _stage_contracts import (
     build_claim_map_from_stage_json,
+    configure_freshness_max_days,
     is_structured_stage,
     load_json as load_contract_json,
     merge_stage_substep_payloads,
@@ -65,67 +130,24 @@ from _usage_telemetry import (
     utc_now_iso,
 )
 from _stage_validation import (
+    configure_excerpt_requirement,
     validate_stage_markdown_contract,
     validate_structured_stage_artifact,
 )
 from _workflow_lib import write_json
-from _workflow_state import (
-    append_workflow_event,
-    derive_workflow_state_from_events,
-    initial_stage_substeps,
-)
+from _workflow_state import append_workflow_event
 from _repo_paths import load_repo_path_config, resolve_jobs_root
 from run_workflow import RUN_STAGES, resolve_job_path, scaffold_run
 
 
-DEFAULT_CODEX_BIN = "codex"
-DEFAULT_GEMINI_BIN = "gemini"
-DEFAULT_ANTIGRAVITY_BIN = "antigravity"
-DEFAULT_CLAUDE_BIN = "claude"
-DEFAULT_GEMINI_MODEL = "pro"
-STAGE_CLAIM_STAGE_IDS = {"research-a", "research-b", "critique-a-on-b", "critique-b-on-a", "judge"}
 INCREMENTAL_RUN_ID_PATTERN = re.compile(r"^run-(\d+)$")
 DEFAULT_REQUIRED_PROVIDER_TRUST = "structured_safe_smoke"
 
-
-@dataclass(frozen=True)
-class StageExecution:
-    stage_id: str
-    agent_role: str
-    packet_name: str
-    output_name: str
-
-
-EXECUTION_PLAN = [
-    [StageExecution("intake", "primary", "01-intake.md", "01-intake.json")],
-    [
-        StageExecution("research-a", "primary", "02-research-a.md", "02-research-a.md"),
-        StageExecution("research-b", "secondary", "03-research-b.md", "03-research-b.md"),
-    ],
-    [
-        StageExecution("critique-a-on-b", "primary", "04-critique-a-on-b.md", "04-critique-a-on-b.md"),
-        StageExecution("critique-b-on-a", "secondary", "05-critique-b-on-a.md", "05-critique-b-on-a.md"),
-    ],
-    [StageExecution("judge", "secondary", "06-judge.md", "06-judge.md")],
-]
-EXECUTION_BY_STAGE_ID = {
-    stage.stage_id: stage
-    for group in EXECUTION_PLAN
-    for stage in group
-}
 
 GREEN = "\x1b[32m"
 RED = "\x1b[31m"
 YELLOW = "\x1b[33m"
 RESET = "\x1b[0m"
-
-
-@dataclass(frozen=True)
-class CLIAdapter:
-    name: str
-    command_builder: Callable[[str, Path, str, str | None], list[str]]
-    stdout_materialization: set[str] = field(default_factory=set)
-    supports_model_selection: bool = False
 
 
 @dataclass(frozen=True)
@@ -221,53 +243,6 @@ class StageProcessController:
                     os.killpg(process.pid, signal.SIGKILL)
                 except (ProcessLookupError, PermissionError):
                     continue
-
-
-def build_codex_command(binary: str, job_dir: Path, prompt: str, model: str | None = None) -> list[str]:
-    return [binary, "exec", "--full-auto", "-C", str(job_dir), prompt]
-
-
-def build_gemini_command(binary: str, job_dir: Path, prompt: str, model: str | None = None) -> list[str]:
-    return [binary, "--model", model or DEFAULT_GEMINI_MODEL, "-p", prompt, "-y", "--output-format", "text"]
-
-
-def build_antigravity_command(binary: str, job_dir: Path, prompt: str, model: str | None = None) -> list[str]:
-    command = [binary, "chat", "--mode", "agent", "--yes"]
-    if model:
-        command.extend(["--model", model])
-    command.append(prompt)
-    return command
-
-
-def build_claude_command(binary: str, job_dir: Path, prompt: str, model: str | None = None) -> list[str]:
-    command = [binary]
-    if model:
-        command.extend(["--model", model])
-    command.extend(["-p", "--output-format", "text", "--permission-mode", "bypassPermissions", prompt])
-    return command
-
-
-CLI_ADAPTERS: dict[str, CLIAdapter] = {
-    "codex": CLIAdapter(name="codex", command_builder=build_codex_command),
-    "gemini": CLIAdapter(
-        name="gemini",
-        command_builder=build_gemini_command,
-        stdout_materialization={"markdown", "structured_json"},
-        supports_model_selection=True,
-    ),
-    "antigravity": CLIAdapter(
-        name="antigravity",
-        command_builder=build_antigravity_command,
-        stdout_materialization={"markdown", "structured_json"},
-        supports_model_selection=True,
-    ),
-    "claude": CLIAdapter(
-        name="claude",
-        command_builder=build_claude_command,
-        stdout_materialization={"markdown", "structured_json"},
-        supports_model_selection=True,
-    ),
-}
 
 
 class ProgressReporter:
@@ -374,10 +349,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_state(path: Path) -> dict[str, object]:
-    if path.is_file():
-        return json.loads(path.read_text(encoding="utf-8"))
-    return derive_workflow_state_from_events(path.parent)
+def apply_job_validation_policies(job_dir: Path) -> None:
+    """Configure process-wide validation policy from the job config: freshness window and excerpt strictness."""
+    configure_freshness_max_days(load_freshness_max_days(job_dir))
+    configure_excerpt_requirement(load_requirement_flag(job_dir, "require_evidence_excerpts"))
 
 
 def next_incremental_run_id(job_dir: Path) -> str:
@@ -401,48 +376,6 @@ def confirm_existing_run(run_id: str, run_dir: Path, input_stream: object = sys.
         raise ValueError(f"Confirmation required to continue existing run {run_id}.")
     if response.strip().lower() not in {"y", "yes"}:
         raise ValueError(f"Aborted by user for existing run {run_id}.")
-
-
-def recompute_run_status(state: dict[str, object]) -> str:
-    stage_statuses = [str(stage.get("status", "pending")) for stage in state.get("stages", []) if isinstance(stage, dict)]
-    post_processing = state.get("post_processing", {})
-    post_statuses: list[str] = []
-    if isinstance(post_processing, dict):
-        for key, value in post_processing.items():
-            if key == "stage_claims" and isinstance(value, dict):
-                for stage_claim in value.values():
-                    if isinstance(stage_claim, dict):
-                        post_statuses.append(str(stage_claim.get("status", "pending")))
-            elif isinstance(value, dict):
-                post_statuses.append(str(value.get("status", "pending")))
-
-    all_statuses = stage_statuses + post_statuses
-    if any(status in {"failed", "cancelled"} for status in all_statuses):
-        return "failed"
-    if any(status == "running" for status in all_statuses):
-        return "running"
-    if all_statuses and all(status == "completed" for status in all_statuses):
-        return "completed"
-    if any(status == "completed" for status in all_statuses):
-        return "running"
-    return "scaffolded"
-
-
-def save_state(path: Path, payload: dict[str, object]) -> None:
-    payload["status"] = recompute_run_status(payload)
-    write_json(path, payload)
-    append_workflow_event(path.parent, "state_checkpoint", state=payload)
-
-
-def apply_state_update(
-    state_lock: threading.RLock,
-    state_path: Path,
-    state: dict[str, object],
-    update_fn: Callable[[], None],
-) -> None:
-    with state_lock:
-        update_fn()
-        save_state(state_path, state)
 
 
 def is_placeholder_content(content: str) -> bool:
@@ -478,16 +411,6 @@ def is_json_artifact_complete(path: Path) -> bool:
     if not path.is_file():
         return False
     return not is_placeholder_content(path.read_text(encoding="utf-8"))
-
-
-def expected_first_heading(stage_id: str) -> str | None:
-    return {
-        "research-a": "# Executive Summary",
-        "research-b": "# Executive Summary",
-        "critique-a-on-b": "# Claims That Survive Review",
-        "critique-b-on-a": "# Claims That Survive Review",
-        "judge": "# Supported Conclusions",
-    }.get(stage_id)
 
 
 def build_adapter_executor(adapter_name: str, adapter_bin: Path | str, artifact_kind: str) -> Callable[..., CommandResult]:
@@ -535,34 +458,6 @@ def build_adapter_executor(adapter_name: str, adapter_bin: Path | str, artifact_
     return executor
 
 
-def stage_output_path(run_dir: Path, output_name: str) -> Path:
-    return run_dir / "stage-outputs" / output_name
-
-
-def stage_packet_path(run_dir: Path, packet_name: str) -> Path:
-    return run_dir / "prompt-packets" / packet_name
-
-
-def stage_claim_output_path(run_dir: Path, stage_id: str) -> Path:
-    output_name_by_stage = {
-        str(stage["id"]): Path(str(stage["output"])).stem
-        for stage in RUN_STAGES
-    }
-    return run_dir / "stage-claims" / f"{output_name_by_stage[stage_id]}.claims.json"
-
-
-def stage_substep_output_path(run_dir: Path, stage_id: str, substep: str) -> Path:
-    substeps_dir = run_dir / "audit" / "substeps"
-    substeps_dir.mkdir(parents=True, exist_ok=True)
-    return substeps_dir / f"{stage_id}.{substep}.json"
-
-
-def stage_substep_markdown_path(run_dir: Path, stage_id: str, substep: str) -> Path:
-    substeps_dir = run_dir / "audit" / "substeps"
-    substeps_dir.mkdir(parents=True, exist_ok=True)
-    return substeps_dir / f"{stage_id}.{substep}.md"
-
-
 def dependency_structured_payloads(stage_id: str, run_dir: Path) -> list[dict[str, object]]:
     payloads: list[dict[str, object]] = []
     stage_map = {str(stage["id"]): stage for stage in RUN_STAGES}
@@ -592,48 +487,6 @@ def merge_intake_sources_into_registry(run_dir: Path) -> None:
     intake_payload = load_contract_json(stage_output_path(run_dir, "01-intake.json"))
     merged = merge_source_registry(source_registry, list(intake_payload.get("sources", [])))
     persist_source_registry(source_path, merged)
-
-
-def set_stage_status(state: dict[str, object], stage_id: str, status: str) -> None:
-    for stage in state["stages"]:
-        if stage["id"] == stage_id:
-            stage["status"] = status
-            return
-    raise KeyError(f"Unknown stage id: {stage_id}")
-
-
-def set_stage_substep_status(state: dict[str, object], stage_id: str, substep: str, status: str) -> None:
-    for stage in state["stages"]:
-        if stage["id"] == stage_id:
-            substeps = stage.setdefault("substeps", initial_stage_substeps(stage_id))
-            if not isinstance(substeps, dict):
-                substeps = initial_stage_substeps(stage_id)
-                stage["substeps"] = substeps
-            entry = substeps.setdefault(substep, {"status": "pending"})
-            entry["status"] = status
-            return
-    raise KeyError(f"Unknown stage id: {stage_id}")
-
-
-def ensure_post_processing_state(state: dict[str, object], claim_output: Path, final_output: Path) -> None:
-    post_processing = state.setdefault("post_processing", {})
-    stage_claims = post_processing.setdefault("stage_claims", {})
-    run_dir = Path(str(state["run_dir"]))
-    for stage_id in STAGE_CLAIM_STAGE_IDS:
-        stage_claims.setdefault(
-            stage_id,
-            {"output_path": str(stage_claim_output_path(run_dir, stage_id)), "status": "pending"},
-        )
-    post_processing.setdefault("claim_extraction", {"output_path": str(claim_output), "status": "pending"})
-    post_processing.setdefault("final_artifact", {"output_path": str(final_output), "status": "pending"})
-
-
-def set_post_processing_status(state: dict[str, object], key: str, status: str) -> None:
-    state["post_processing"][key]["status"] = status
-
-
-def set_stage_claim_status(state: dict[str, object], stage_id: str, status: str) -> None:
-    state["post_processing"]["stage_claims"][stage_id]["status"] = status
 
 
 def append_command_usage_record(
@@ -822,313 +675,6 @@ def persist_execution_snapshot(
     write_json(path, snapshot)
     append_workflow_event(run_dir, "execution_config_resolved", snapshot_path=str(path.relative_to(run_dir)), **snapshot)
     return snapshot
-
-
-def transition_stage_status(run_dir: Path, state: dict[str, object], stage_id: str, status: str) -> None:
-    state_status = "running" if status == "started" else status
-    for stage in state["stages"]:
-        if stage["id"] == stage_id and stage.get("status") == state_status:
-            return
-    set_stage_status(state, stage_id, state_status)
-    append_workflow_event(run_dir, f"stage_{status}", stage_id=stage_id)
-
-
-def transition_substep_status(run_dir: Path, state: dict[str, object], stage_id: str, substep: str, status: str) -> None:
-    state_status = "running" if status == "started" else status
-    for stage in state["stages"]:
-        if stage["id"] == stage_id:
-            substeps = stage.setdefault("substeps", initial_stage_substeps(stage_id))
-            if isinstance(substeps, dict) and isinstance(substeps.get(substep), dict) and substeps[substep].get("status") == state_status:
-                return
-    set_stage_substep_status(state, stage_id, substep, state_status)
-    append_workflow_event(run_dir, f"substep_{status}", stage_id=stage_id, substep=substep)
-
-
-def transition_post_processing_status(
-    run_dir: Path,
-    state: dict[str, object],
-    key: str,
-    status: str,
-    *,
-    stage_id: str | None = None,
-) -> None:
-    state_status = "running" if status == "started" else status
-    if key == "stage_claims":
-        if state["post_processing"]["stage_claims"].get(stage_id or "", {}).get("status") == state_status:
-            return
-    elif state["post_processing"].get(key, {}).get("status") == state_status:
-        return
-    if key == "stage_claims":
-        set_stage_claim_status(state, stage_id or "", state_status)
-    else:
-        set_post_processing_status(state, key, state_status)
-    payload: dict[str, object] = {"key": key}
-    if stage_id is not None:
-        payload["stage_id"] = stage_id
-    append_workflow_event(run_dir, f"post_processing_{status}", **payload)
-
-
-def build_agent_prompt(stage: StageExecution, run_dir: Path) -> str:
-    packet_path = stage_packet_path(run_dir, stage.packet_name)
-    output_path = stage_output_path(run_dir, stage.output_name)
-    json_output_path = stage_structured_output_path(run_dir, stage.stage_id) if is_structured_stage(stage.stage_id) else None
-    sources_path = source_registry_path(run_dir)
-    return "\n".join(
-        [
-            f"STAGE_ID={stage.stage_id}",
-            f"OUTPUT_PATH={output_path}",
-            f"OUTPUT_JSON_PATH={json_output_path}" if json_output_path is not None else "OUTPUT_JSON_PATH=not_applicable",
-            f"SOURCE_REGISTRY_PATH={sources_path}",
-            f"PROMPT_PACKET={packet_path}",
-            "",
-            f"Execute workflow stage `{stage.stage_id}`.",
-            f"Read the stage instructions from `{packet_path}`.",
-            f"Write the completed stage output to `{output_path}`.",
-            (
-                f"Write the completed structured JSON output to `{json_output_path}`."
-                if json_output_path is not None
-                else "This stage does not require a structured JSON artifact."
-            ),
-            f"Use `{sources_path}` as the run-level source registry reference only. Do not modify that file directly.",
-            "Do not leave placeholder content in the output file.",
-            "Use upstream stage output artifacts when the prompt packet references them.",
-            "Evidence is never obvious. Every fact and world-claim inference must carry explicit evidence support on that exact item; nearby citations do not count.",
-        ]
-    )
-
-
-def intake_source_materials(job_dir: Path) -> tuple[str, str]:
-    brief_path = job_dir / "brief.md"
-    config_path = job_dir / "config.yaml"
-    brief_text = brief_path.read_text(encoding="utf-8") if brief_path.is_file() else ""
-    config_text = config_path.read_text(encoding="utf-8") if config_path.is_file() else ""
-    return brief_text, config_text
-
-
-def build_intake_source_prompt(job_dir: Path, run_dir: Path, output_json_path: Path, scratch_markdown_path: Path) -> str:
-    brief_text, config_text = intake_source_materials(job_dir)
-    return "\n".join(
-        [
-            "STAGE_ID=intake",
-            "SUBSTEP=source-pass",
-            f"OUTPUT_PATH={output_json_path}",
-            f"OUTPUT_JSON_PATH={output_json_path}",
-            "",
-            "Execute only the source declaration pass for intake.",
-            "Return JSON only.",
-            'Allowed JSON shape: {"stage": "intake", "sources": [...]}',
-            "Define only canonical job_input sources for the provided materials you actually used.",
-            "Do not emit facts, inferences, or normalization fields.",
-            "",
-            "SOURCE MATERIALS:",
-            "### brief.md",
-            brief_text,
-            "",
-            "### config.yaml",
-            config_text,
-        ]
-    )
-
-
-def build_intake_fact_prompt(
-    job_dir: Path,
-    run_dir: Path,
-    source_output_path: Path,
-    output_json_path: Path,
-    scratch_markdown_path: Path,
-) -> str:
-    brief_text, config_text = intake_source_materials(job_dir)
-    return "\n".join(
-        [
-            "STAGE_ID=intake",
-            "SUBSTEP=fact-lineage",
-            f"OUTPUT_PATH={output_json_path}",
-            f"OUTPUT_JSON_PATH={output_json_path}",
-            f"SOURCE_PASS_PATH={source_output_path}",
-            "",
-            "Execute only the direct fact-lineage pass for intake.",
-            "Return JSON only.",
-            'Allowed JSON shape: {"stage": "intake", "known_facts": [...]}',
-            "Use only the source IDs defined in SOURCE_PASS_PATH.",
-            "known_facts must contain only directly stated brief/config facts with source_ids, source_excerpt, and source_anchor.",
-            "Do not emit assumptions, constraints, missing information, or working inferences.",
-            "",
-            "SOURCE MATERIALS:",
-            "### brief.md",
-            brief_text,
-            "",
-            "### config.yaml",
-            config_text,
-        ]
-    )
-
-
-def build_intake_normalization_prompt(
-    job_dir: Path,
-    run_dir: Path,
-    fact_output_path: Path,
-    output_json_path: Path,
-    scratch_markdown_path: Path,
-) -> str:
-    brief_text, config_text = intake_source_materials(job_dir)
-    return "\n".join(
-        [
-            "STAGE_ID=intake",
-            "SUBSTEP=normalization",
-            f"OUTPUT_PATH={output_json_path}",
-            f"OUTPUT_JSON_PATH={output_json_path}",
-            f"FACT_LINEAGE_PATH={fact_output_path}",
-            "",
-            "Execute only the intake normalization pass.",
-            "Return JSON only.",
-            'Allowed JSON shape: {"stage": "intake", "question": ..., "scope": [...], "constraints": [...], "assumptions": [...], "missing_information": [...], "required_artifacts": [...], "notes_for_researchers": [...], "working_inferences": [...], "uncertainty_notes": [...]}',
-            "Do not repeat known_facts here. Use FACT_LINEAGE_PATH only to avoid restating direct facts as working_inferences.",
-            "Keep assumptions, missing information, and working inferences separate from direct facts.",
-            "",
-            "SOURCE MATERIALS:",
-            "### brief.md",
-            brief_text,
-            "",
-            "### config.yaml",
-            config_text,
-        ]
-    )
-
-
-def build_source_pass_prompt(stage: StageExecution, run_dir: Path, source_output_path: Path, scratch_markdown_path: Path) -> str:
-    packet_path = stage_packet_path(run_dir, stage.packet_name)
-    sources_path = source_registry_path(run_dir)
-    return "\n".join(
-        [
-            f"STAGE_ID={stage.stage_id}",
-            "SUBSTEP=source-pass",
-            f"OUTPUT_PATH={scratch_markdown_path}",
-            f"OUTPUT_JSON_PATH={source_output_path}",
-            f"SOURCE_REGISTRY_PATH={sources_path}",
-            f"PROMPT_PACKET={packet_path}",
-            "",
-            f"Execute only the source pass for workflow stage `{stage.stage_id}`.",
-            f"Read the full stage instructions from `{packet_path}`.",
-            f"Write JSON to `{source_output_path}`.",
-            "Return only the structured source payload for this stage.",
-            "Required JSON shape:",
-            '{"stage": "<stage-id>", "sources": [...]}',
-            "Do not write claims, summaries, conclusions, or markdown in the authoritative JSON output for this substep.",
-            "Retain exact source locators. Evidence is never obvious.",
-        ]
-    )
-
-
-def build_claim_pass_prompt(
-    stage: StageExecution,
-    run_dir: Path,
-    source_output_path: Path,
-    claim_output_path: Path,
-    scratch_markdown_path: Path,
-) -> str:
-    packet_path = stage_packet_path(run_dir, stage.packet_name)
-    sources_path = source_registry_path(run_dir)
-    return "\n".join(
-        [
-            f"STAGE_ID={stage.stage_id}",
-            "SUBSTEP=claim-pass",
-            f"OUTPUT_PATH={scratch_markdown_path}",
-            f"OUTPUT_JSON_PATH={claim_output_path}",
-            f"SOURCE_PASS_PATH={source_output_path}",
-            f"SOURCE_REGISTRY_PATH={sources_path}",
-            f"PROMPT_PACKET={packet_path}",
-            "",
-            f"Execute only the claim pass for workflow stage `{stage.stage_id}`.",
-            f"Read the full stage instructions from `{packet_path}`.",
-            f"Read the validated stage-local sources from `{source_output_path}` and use only those source IDs.",
-            f"Write JSON to `{claim_output_path}`.",
-            "Return the structured claim payload for this stage without a sources list; the runner will attach validated sources separately.",
-            "Evidence is never obvious. Every fact and world-claim inference must carry explicit evidence on that exact item; nearby citations do not count.",
-        ]
-    )
-
-
-def build_substep_repair_prompt(
-    stage: StageExecution,
-    *,
-    run_dir: Path,
-    substep: str,
-    output_json_path: Path,
-    validation_errors: list[str],
-    scratch_markdown_path: Path,
-    source_output_path: Path | None = None,
-) -> str:
-    packet_path = stage_packet_path(run_dir, stage.packet_name)
-    sources_path = source_registry_path(run_dir)
-    current_json = output_json_path.read_text(encoding="utf-8") if output_json_path.is_file() else "<missing>"
-    prompt_lines = [
-        f"STAGE_ID={stage.stage_id}",
-        f"SUBSTEP={substep}",
-        "REPAIR_ATTEMPT=1",
-        f"OUTPUT_PATH={scratch_markdown_path}",
-        f"OUTPUT_JSON_PATH={output_json_path}",
-        f"SOURCE_REGISTRY_PATH={sources_path}",
-        f"PROMPT_PACKET={packet_path}",
-        "",
-        f"Repair only the `{substep}` output for workflow stage `{stage.stage_id}`.",
-        "Do not perform fresh research. Fix structure and support only.",
-        "Evidence is never obvious. Nearby citations do not count.",
-    ]
-    if source_output_path is not None:
-        prompt_lines.append(f"SOURCE_PASS_PATH={source_output_path}")
-    prompt_lines.extend(
-        [
-            "",
-            "VALIDATION_ERRORS:",
-            *validation_errors,
-            "",
-            "CURRENT_STRUCTURED_OUTPUT:",
-            current_json,
-        ]
-    )
-    return "\n".join(prompt_lines)
-
-
-def build_repair_prompt(
-    stage: StageExecution,
-    run_dir: Path,
-    validation_errors: list[str],
-) -> str:
-    packet_path = stage_packet_path(run_dir, stage.packet_name)
-    output_path = stage_output_path(run_dir, stage.output_name)
-    json_output_path = stage_structured_output_path(run_dir, stage.stage_id) if is_structured_stage(stage.stage_id) else None
-    sources_path = source_registry_path(run_dir)
-    markdown_content = output_path.read_text(encoding="utf-8") if output_path.is_file() else "<missing>"
-    json_content = (
-        json_output_path.read_text(encoding="utf-8")
-        if json_output_path is not None and json_output_path.is_file()
-        else "<missing>"
-    )
-    return "\n".join(
-        [
-            f"STAGE_ID={stage.stage_id}",
-            "REPAIR_ATTEMPT=1",
-            f"OUTPUT_PATH={output_path}",
-            f"OUTPUT_JSON_PATH={json_output_path}" if json_output_path is not None else "OUTPUT_JSON_PATH=not_applicable",
-            f"SOURCE_REGISTRY_PATH={sources_path}",
-            f"PROMPT_PACKET={packet_path}",
-            "",
-            f"Repair workflow stage `{stage.stage_id}`.",
-            "Do not perform new research or reinterpret the task.",
-            "Repair only the existing stage artifacts so they satisfy the contract.",
-            "Evidence is never obvious. Every fact and world-claim inference must carry explicit evidence support on that exact item; nearby citations do not count.",
-            "Keep source IDs canonical and keep local claim references only in claim_dependencies.",
-            "",
-            "VALIDATION_ERRORS:",
-            *validation_errors,
-            "",
-            "CURRENT_MARKDOWN_ARTIFACT:",
-            markdown_content,
-            "",
-            "CURRENT_STRUCTURED_ARTIFACT:",
-            json_content,
-        ]
-    )
 
 
 def execute_adapter_command(
@@ -1833,7 +1379,14 @@ def run_structured_stage(
                 state,
                 lambda: transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "started"),
             )
-            claim_prompt = build_claim_pass_prompt(stage, run_dir, source_output_path, claim_output_path, claim_scratch_path)
+            claim_prompt = build_claim_pass_prompt(
+                stage,
+                run_dir,
+                source_output_path,
+                claim_output_path,
+                claim_scratch_path,
+                source_scratch_path=source_scratch_path if source_scratch_path.is_file() else None,
+            )
             try:
                 claim_result, _claim_payload, claim_repair_attempted, claim_repair_result, _ = execute_json_substep(
                     stage=stage,
@@ -2197,14 +1750,6 @@ def build_default_stage_assignments(args: argparse.Namespace) -> dict[str, Stage
     }
 
 
-def stage_execution_for_id(stage_id: str) -> StageExecution:
-    stage = EXECUTION_BY_STAGE_ID.get(stage_id)
-    if stage is None:
-        known = ", ".join(sorted(EXECUTION_BY_STAGE_ID))
-        raise ValueError(f"Unknown stage '{stage_id}'. Known stages: {known}.")
-    return stage
-
-
 def load_provider_catalog_from_job_config(job_dir: Path) -> dict[str, StageAdapterSelection] | None:
     execution = load_execution_config(job_dir)
     if execution is None:
@@ -2419,6 +1964,37 @@ def qualify_stage_adapters(
 
 
 def run_agent_stage(
+    stage: StageExecution,
+    run_dir: Path,
+    job_dir: Path,
+    state: dict[str, object],
+    state_path: Path,
+    state_lock: threading.RLock,
+    stage_assignments: dict[str, StageAdapterSelection],
+    adapter_bins: dict[str, str],
+    reporter: ProgressReporter,
+    process_controller: StageProcessController | None = None,
+) -> tuple[str, str]:
+    snapshot = snapshot_protected_files(protected_stage_paths(stage, run_dir, job_dir))
+    try:
+        return _execute_agent_stage(
+            stage,
+            run_dir,
+            job_dir,
+            state,
+            state_path,
+            state_lock,
+            stage_assignments,
+            adapter_bins,
+            reporter,
+            process_controller,
+        )
+    finally:
+        restore_protected_files(run_dir, stage.stage_id, snapshot)
+        refresh_run_manifest(run_dir)
+
+
+def _execute_agent_stage(
     stage: StageExecution,
     run_dir: Path,
     job_dir: Path,
@@ -3339,7 +2915,29 @@ def run_final_artifact(
         "--output",
         str(custom_output),
     ]
-    completed_custom = subprocess.run(custom_report_cmd, cwd=job_dir, capture_output=True, text=True)
+    # The synthesis step launches a full LLM agent with filesystem access, so it
+    # gets the same protected-input guard as every stage.
+    protected_paths = final_report_protected_paths(
+        run_dir,
+        job_dir,
+        claim_register_path=claim_output,
+        report_output_path=custom_output,
+    )
+    if final_output.is_file():
+        protected_paths.append(final_output)
+    protected_snapshot = snapshot_protected_files(protected_paths)
+    try:
+        completed_custom = subprocess.run(custom_report_cmd, cwd=job_dir, capture_output=True, text=True)
+    finally:
+        restore_protected_files(run_dir, "final-report", protected_snapshot)
+        refresh_run_manifest(run_dir)
+    synthesis_prompt_path = run_dir / "logs" / "final-report-generation.prompt.md"
+    try:
+        # generate_final_report.py persists the real synthesis prompt (judge
+        # record + claim register) so token estimates reflect the actual cost.
+        synthesis_prompt_text = synthesis_prompt_path.read_text(encoding="utf-8")
+    except OSError:
+        synthesis_prompt_text = " ".join(custom_report_cmd)
     if completed_custom.returncode != 0:
         transition_post_processing_status(run_dir, state, "final_artifact", "failed")
         save_state(state_path, state)
@@ -3360,7 +2958,7 @@ def run_final_artifact(
                 duration_ms=0,
             ),
             status="failed",
-            prompt_text=" ".join(custom_report_cmd),
+            prompt_text=synthesis_prompt_text,
             failure_reason=completed_custom.stderr.strip() or "custom final report generation failed",
         )
         reporter.fail("system", "final-artifact")
@@ -3383,7 +2981,7 @@ def run_final_artifact(
             duration_ms=0,
         ),
         status="completed",
-        prompt_text=" ".join(custom_report_cmd),
+        prompt_text=synthesis_prompt_text,
     )
 
     transition_post_processing_status(run_dir, state, "final_artifact", "completed")
@@ -3408,6 +3006,7 @@ def main() -> int:
             ),
             jobs_index_root=Path(args.jobs_index_root).expanduser() if args.jobs_index_root else repo_paths.jobs_index_root,
         )
+        apply_job_validation_policies(job_dir)
         execution_config = load_execution_config(job_dir)
         configured_stage_assignments = resolve_stage_assignments(args, job_dir)
         provider_catalog = load_provider_catalog_from_job_config(job_dir) or {
@@ -3434,6 +3033,12 @@ def main() -> int:
             confirm_existing_run(run_id, run_dir)
     else:
         scaffold_run(job_name, job_dir, run_id)
+
+    try:
+        ensure_job_input_snapshot(run_dir, job_dir)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
 
     source_path = source_registry_path(run_dir)
     if not source_path.exists():
@@ -3494,6 +3099,7 @@ def main() -> int:
             stage_assignments,
             adapter_bins,
         )
+        refresh_run_manifest(run_dir)
     except Exception as exc:
         print(str(exc), file=sys.stderr)
         return 1

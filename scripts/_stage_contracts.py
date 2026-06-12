@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from copy import deepcopy
+from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -86,10 +87,15 @@ STAGE_JSON_KEYS: dict[str, tuple[str, ...]] = {
 }
 
 OPTIONAL_STAGE_JSON_KEYS: dict[str, tuple[str, ...]] = {
+    "research-a": ("candidates",),
+    "research-b": ("candidates",),
     "judge": ("brief_improvements",),
 }
 
 SOURCE_PASS_KEYS = ("stage", "sources")
+
+CANDIDATE_MATURITY_LEVELS = {"ga", "recent_release", "announced_unreleased", "roadmap_signal"}
+UNRELEASED_CANDIDATE_MATURITY_LEVELS = {"announced_unreleased", "roadmap_signal"}
 
 
 def is_structured_stage(stage_id: str) -> bool:
@@ -295,6 +301,8 @@ def _infer_evidence_kind(source: dict[str, object]) -> str:
         return "recovered_artifact"
     if "marketing" in source_type:
         return "marketing"
+    if any(token in source_type for token in ("announcement", "press release", "product launch", "launch post", "roadmap")):
+        return "vendor_announcement"
     if any(token in source_type for token in ("official documentation", "datasheet", "specification", "spec sheet")):
         return "official_documentation"
     if any(token in source_type for token in ("technical note", "technical report", "benchmark", "paper", "report")):
@@ -314,6 +322,8 @@ def _infer_authority_tier(source: dict[str, object]) -> str:
         return "provisional_recovery"
     if evidence_kind == "marketing":
         return "vendor_marketing"
+    if evidence_kind == "vendor_announcement":
+        return "vendor_announcement"
     if evidence_kind == "official_documentation":
         return "primary_vendor"
     if evidence_kind == "technical_report" and authority == "vendor":
@@ -321,12 +331,55 @@ def _infer_authority_tier(source: dict[str, object]) -> str:
     return "unknown"
 
 
+DEFAULT_FRESHNESS_MAX_DAYS = 365
+_active_freshness_max_days = DEFAULT_FRESHNESS_MAX_DAYS
+
+
+def configure_freshness_max_days(days: object) -> None:
+    """Set the process-wide freshness window, typically from the job config's freshness.max_days."""
+    global _active_freshness_max_days
+    if days is None:
+        _active_freshness_max_days = DEFAULT_FRESHNESS_MAX_DAYS
+        return
+    try:
+        value = int(days)
+    except (TypeError, ValueError):
+        return
+    if value > 0:
+        _active_freshness_max_days = value
+
+
+def active_freshness_max_days() -> int:
+    return _active_freshness_max_days
+
+
+def _parse_publication_date(raw: str) -> date | None:
+    value = raw.strip()
+    for pattern, fmt in (
+        (r"^\d{4}-\d{2}-\d{2}$", "%Y-%m-%d"),
+        (r"^\d{4}-\d{2}$", "%Y-%m"),
+        (r"^\d{4}$", "%Y"),
+    ):
+        if re.match(pattern, value):
+            try:
+                return datetime.strptime(value, fmt).date()
+            except ValueError:
+                return None
+    return None
+
+
 def _infer_freshness_status(source: dict[str, object]) -> str:
     freshness_status = str(source.get("freshness_status") or "").strip()
     if freshness_status:
         return freshness_status
     publication_date = str(source.get("publication_date") or source.get("freshness_date") or "").strip()
-    return "undated" if publication_date else "unknown"
+    if not publication_date:
+        return "undated"
+    parsed = _parse_publication_date(publication_date)
+    if parsed is None:
+        return "unknown"
+    age_days = (datetime.now(timezone.utc).date() - parsed).days
+    return "stale" if age_days > active_freshness_max_days() else "fresh"
 
 
 def _infer_support_flags(source: dict[str, object]) -> dict[str, bool]:
@@ -354,6 +407,8 @@ def _infer_policy_outcome(source: dict[str, object]) -> str:
         return "blocked"
     if evidence_kind == "marketing":
         return "disfavored"
+    if evidence_kind == "vendor_announcement":
+        return "allowed_with_warning"
     if freshness_status == "stale":
         return "allowed_with_warning"
     return "allowed"
@@ -374,6 +429,11 @@ def _infer_policy_notes(source: dict[str, object]) -> list[str]:
         return ["Recovered provisional source is not publication-safe evidence."]
     if evidence_kind == "marketing":
         return ["Marketing-only source is disfavored for final publication."]
+    if evidence_kind == "vendor_announcement":
+        return [
+            "Vendor announcement supports existence and vendor-claim statements only; "
+            "treat performance, availability, and pricing as inference with explicit availability risk."
+        ]
     if freshness_status == "stale":
         return ["Source is stale and should be corroborated by fresher evidence."]
     return []
@@ -427,6 +487,14 @@ def source_quality_warnings(payload: dict[str, object]) -> list[str]:
         if source_class == "job_input" and ("/prompt-packets/" in locator or locator == "__PROMPT_PACKET__"):
             warnings.append(
                 f"sources[{position}].locator points to a prompt packet; prefer the canonical job artifact such as brief.md or config.yaml."
+            )
+        if source_class == "external_evidence" and str(normalized_source.get("freshness_status") or "") == "undated":
+            warnings.append(
+                f"sources[{position}] ({source_id or 'unknown id'}) is undated external evidence; add publication_date when determinable so freshness can be audited."
+            )
+        if source_class == "external_evidence" and str(normalized_source.get("freshness_status") or "") == "stale":
+            warnings.append(
+                f"sources[{position}] ({source_id or 'unknown id'}) is stale per the freshness policy; corroborate with fresher evidence where the claim is load-bearing."
             )
     return warnings
 
@@ -494,15 +562,17 @@ def normalize_support_links(
                 continue
             if not isinstance(role, str) or role not in SUPPORT_LINK_ROLES:
                 continue
+            excerpt = link.get("excerpt")
+            extra = {"excerpt": excerpt.strip()} if isinstance(excerpt, str) and excerpt.strip() else {}
             if local_reference_map and source_id in local_reference_map:
                 for resolved_source_id in local_reference_map[source_id]:
-                    normalized_link = {"source_id": resolved_source_id, "role": role}
+                    normalized_link = {"source_id": resolved_source_id, "role": role, **extra}
                     if normalized_link not in normalized_links:
                         normalized_links.append(normalized_link)
                 continue
             if not SOURCE_ID_PATTERN.match(source_id):
                 continue
-            normalized_links.append({"source_id": source_id, "role": role})
+            normalized_links.append({"source_id": source_id, "role": role, **extra})
         if normalized_links:
             return normalized_links
 
@@ -557,6 +627,62 @@ def semantic_world_support_sources(
             if link["source_id"] not in sources:
                 sources.append(link["source_id"])
     return sources
+
+
+def evidence_excerpt_findings(
+    stage_id: str,
+    payload: dict[str, object],
+    source_registry: dict[str, object],
+) -> list[str]:
+    """Flag research facts/inferences that cite external evidence without any quoted excerpt on an evidence support link.
+
+    Excerpts make external support auditable without re-fetching the source. By
+    default these findings are warnings; requirements.require_evidence_excerpts
+    turns them into validation errors.
+    """
+    if stage_id not in {"research-a", "research-b"}:
+        return []
+
+    source_classes: dict[str, str] = {}
+    for source in [*source_registry.get("sources", []), *payload.get("sources", [])]:
+        if not isinstance(source, dict):
+            continue
+        normalized = normalize_source_record(source)
+        source_id = normalized.get("id")
+        if isinstance(source_id, str):
+            source_classes[source_id] = str(normalized.get("source_class") or "")
+
+    findings: list[str] = []
+    for field_name in ("facts", "inferences"):
+        items = payload.get(field_name)
+        if not isinstance(items, list):
+            continue
+        for position, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                continue
+            external_ids = {
+                source_id
+                for source_id in item.get("evidence_sources", [])
+                if isinstance(source_id, str) and source_classes.get(source_id) == "external_evidence"
+            }
+            if not external_ids:
+                continue
+            support_links = item.get("support_links")
+            has_excerpt = isinstance(support_links, list) and any(
+                isinstance(link, dict)
+                and link.get("role") == "evidence"
+                and link.get("source_id") in external_ids
+                and isinstance(link.get("excerpt"), str)
+                and link["excerpt"].strip()
+                for link in support_links
+            )
+            if not has_excerpt:
+                item_id = str(item.get("id") or f"{field_name}[{position}]")
+                findings.append(
+                    f"{field_name}[{position}] ({item_id}) cites external evidence without a quoted excerpt on an evidence support link; "
+                    "add a short excerpt so the support can be audited without re-fetching the source."
+                )
+    return findings
 
 
 def claim_dependencies(item: dict[str, object], local_reference_map: dict[str, list[str]] | None = None) -> list[str]:
@@ -967,6 +1093,21 @@ def render_stage_markdown_from_json(stage_id: str, payload: dict[str, object]) -
         else:
             for item in summary_items or []:
                 lines.append(_entry_text(item) + _format_evidence_sources(_entry_sources(item)))
+        candidates = payload.get("candidates")
+        if isinstance(candidates, list) and candidates:
+            lines.extend(["", "# Candidate Landscape", ""])
+            for index, item in enumerate(candidates, start=1):
+                if not isinstance(item, dict):
+                    continue
+                parts = [f"{index}. {item.get('name', '')} ({item.get('maturity', 'unknown maturity')})"]
+                fit_summary = str(item.get("fit_summary") or "").strip()
+                if fit_summary:
+                    parts.append(fit_summary)
+                availability_risk = str(item.get("availability_risk") or "").strip()
+                if availability_risk:
+                    parts.append(f"Availability risk: {availability_risk}")
+                evidence = _format_evidence_sources([source for source in item.get("evidence_sources", []) if isinstance(source, str)])
+                lines.append(" — ".join(parts) + evidence)
         lines.extend(["", "# Facts", ""])
         for index, item in enumerate(payload.get("facts", []), start=1):
             lines.append(f"{index}. {item['text']}{_format_evidence_sources(list(item.get('evidence_sources', [])))}")
@@ -1374,6 +1515,38 @@ def _validate_source_evaluation(items: object, errors: list[str]) -> None:
                 errors.append(f"source_evaluation[{position}].{key} must be a canonical external source ID.")
 
 
+def _validate_candidates(items: object, source_index: dict[str, dict[str, str]], errors: list[str]) -> None:
+    if items is None:
+        return
+    if not isinstance(items, list):
+        errors.append("candidates must be a list.")
+        return
+    for position, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            errors.append(f"candidates[{position}] must be an object.")
+            continue
+        _require_string(item.get("name"), f"candidates[{position}].name", errors)
+        _require_string(item.get("fit_summary"), f"candidates[{position}].fit_summary", errors)
+        maturity = item.get("maturity")
+        if not isinstance(maturity, str) or maturity not in CANDIDATE_MATURITY_LEVELS:
+            errors.append(
+                f"candidates[{position}].maturity must be one of {sorted(CANDIDATE_MATURITY_LEVELS)}."
+            )
+        elif maturity in UNRELEASED_CANDIDATE_MATURITY_LEVELS:
+            availability_risk = item.get("availability_risk")
+            if not isinstance(availability_risk, str) or not availability_risk.strip():
+                errors.append(
+                    f"candidates[{position}] has maturity {maturity} and must carry a non-empty availability_risk note."
+                )
+        evidence_sources = item.get("evidence_sources")
+        if not isinstance(evidence_sources, list) or not evidence_sources:
+            errors.append(f"candidates[{position}] must include at least one evidence source.")
+            continue
+        for source_id in evidence_sources:
+            if not isinstance(source_id, str) or source_id not in source_index:
+                errors.append(f"candidates[{position}] references unresolved source id {source_id}.")
+
+
 def validate_stage_json(stage_id: str, payload: dict[str, object], source_registry: dict[str, object]) -> list[str]:
     payload = normalize_stage_citations(stage_id, payload)
     errors: list[str] = []
@@ -1395,6 +1568,7 @@ def validate_stage_json(stage_id: str, payload: dict[str, object], source_regist
 
     if stage_id in {"research-a", "research-b"}:
         _validate_text_entry_list(payload.get("summary"), "summary", errors)
+        _validate_candidates(payload.get("candidates"), source_index, errors)
         _validate_claim_list(payload.get("facts"), "facts", source_index, errors, require_id=True, require_confidence=False)
         _validate_claim_list(
             payload.get("inferences"), "inferences", source_index, errors, require_id=True, require_confidence=True
@@ -1563,6 +1737,7 @@ def _append_claim(
     claim_dependencies: list[str] | None = None,
     confidence: str | None = None,
     section: str | None = None,
+    single_source_acknowledged: object = None,
 ) -> None:
     record: dict[str, object] = {
         "id": claim_id,
@@ -1580,6 +1755,10 @@ def _append_claim(
         record["confidence"] = confidence
     if section is not None:
         record["section"] = section
+    if single_source_acknowledged is True or (
+        isinstance(single_source_acknowledged, str) and single_source_acknowledged.strip()
+    ):
+        record["single_source_acknowledged"] = single_source_acknowledged
     claims.append(record)
 
 
@@ -1665,6 +1844,7 @@ def _append_semantic_claim(
         claim_dependencies=claim_dependencies(item, local_reference_map),
         confidence=confidence,
         section=section,
+        single_source_acknowledged=item.get("single_source_acknowledged"),
     )
 
 

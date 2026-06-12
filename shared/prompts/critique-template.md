@@ -23,6 +23,7 @@ Critique the target research pass adversarially. The goal is to find unsupported
 - If a claim is factually stated without citation support, call that out explicitly as a defect.
 - If a conclusion outruns the cited evidence, classify it as overreach rather than a simple disagreement.
 - Evidence is never obvious. Nearby or earlier citations do not count as support for a new critique item.
+- Do not read or use artifacts from other runs under `runs/`; critique only this run's record.
 
 ## Output Contract
 
@@ -63,6 +64,7 @@ Return markdown using exactly these top-level sections in this order:
 #### `# Omissions And Missing Alternatives`
 
 - Identify missing counterarguments, omitted explanations, or neglected evidence that could materially change the conclusion.
+- When the research selects or compares options, explicitly check candidate coverage: flag any failure to consider recently released solutions or credibly announced but unreleased solutions that could fit the research goal, and flag candidates evaluated without a maturity label.
 
 #### `# Overreach And Overconfident Inference`
 

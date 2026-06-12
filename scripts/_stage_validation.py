@@ -9,6 +9,7 @@ from _stage_contracts import (
     build_claim_map_from_stage_json,
     collect_numbered_items,
     collect_section_entries,
+    evidence_excerpt_findings,
     extract_evidence_sources,
     normalize_stage_citations,
     parse_markdown_sections,
@@ -19,6 +20,18 @@ from _stage_contracts import (
 
 
 CONFIDENCE_LABEL_PATTERN = re.compile(r"\bconfidence\s*:\s*(low|medium|high)\b", re.IGNORECASE)
+
+_require_evidence_excerpts = False
+
+
+def configure_excerpt_requirement(strict: object) -> None:
+    """When enabled (requirements.require_evidence_excerpts), missing evidence excerpts fail research-stage validation instead of warning."""
+    global _require_evidence_excerpts
+    _require_evidence_excerpts = strict is True
+
+
+def excerpt_requirement_is_strict() -> bool:
+    return _require_evidence_excerpts
 
 
 @dataclass(frozen=True)
@@ -122,6 +135,12 @@ def validate_structured_stage_artifact(
     normalized_payload = normalize_stage_citations(stage_id, payload)
     structured_errors = validate_stage_json(stage_id, normalized_payload, source_registry)
     structured_warnings = source_quality_warnings(normalized_payload)
+    excerpt_findings = evidence_excerpt_findings(stage_id, normalized_payload, source_registry)
+    if excerpt_findings:
+        if excerpt_requirement_is_strict():
+            structured_errors = [*structured_errors, *excerpt_findings]
+        else:
+            structured_warnings = [*structured_warnings, *excerpt_findings]
     original_markdown_errors = validate_stage_markdown_contract(stage_id, markdown)
     if structured_errors:
         return StageValidationResult(

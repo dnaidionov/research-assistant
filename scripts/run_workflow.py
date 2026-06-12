@@ -29,6 +29,19 @@ from _repo_paths import load_repo_path_config, resolve_jobs_root
 
 STAGE_CLAIM_STAGE_IDS = {"research-a", "research-b", "critique-a-on-b", "critique-b-on-a", "judge"}
 
+ESTABLISHED_RESEARCH_MANDATE = (
+    "Cover the full research question, with extra depth on established, proven solutions: "
+    "mature offerings with real deployment track records, documented limitations, and verifiable performance evidence. "
+    "Still apply the Candidate Coverage Rules in full; depth of vetting, not narrow coverage, is what distinguishes this pass."
+)
+
+HORIZON_RESEARCH_MANDATE = (
+    "Cover the full research question, with extra depth on the solution horizon: "
+    "recently released options and credibly announced but unreleased options that could fit the research goal and timeline. "
+    "Actively search vendor announcements, release notes, and roadmap signals from the recent past, label each candidate's maturity, "
+    "and keep availability risk explicit. Still apply the Candidate Coverage Rules in full; established options must not be ignored."
+)
+
 
 RUN_STAGES: list[dict[str, object]] = [
     {
@@ -49,6 +62,7 @@ RUN_STAGES: list[dict[str, object]] = [
         "depends_on": ["intake"],
         "description": "Produce the first independent research pass with explicit citations and uncertainty.",
         "researcher_label": "Research Pass A",
+        "research_mandate": ESTABLISHED_RESEARCH_MANDATE,
     },
     {
         "id": "research-b",
@@ -59,6 +73,7 @@ RUN_STAGES: list[dict[str, object]] = [
         "depends_on": ["intake"],
         "description": "Produce the second independent research pass without borrowing from pass A.",
         "researcher_label": "Research Pass B",
+        "research_mandate": HORIZON_RESEARCH_MANDATE,
     },
     {
         "id": "critique-a-on-b",
@@ -331,12 +346,21 @@ def scaffold_run(job_name: str, job_dir: Path, run_id: str) -> Path:
     stage_claim_dir = run_dir / "stage-claims"
     audit_dir = run_dir / "audit"
     log_dir = run_dir / "logs"
-    for directory in (prompt_dir, stage_dir, stage_claim_dir, audit_dir, log_dir):
+    job_inputs_dir = run_dir / "job-inputs"
+    for directory in (prompt_dir, stage_dir, stage_claim_dir, audit_dir, log_dir, job_inputs_dir):
         directory.mkdir(parents=True, exist_ok=False)
 
     created_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     brief_text = (job_dir / "brief.md").read_text(encoding="utf-8").strip()
     config_text = (job_dir / "config.yaml").read_text(encoding="utf-8").strip()
+
+    created_files: list[Path] = []
+    # Snapshot the job inputs verbatim: the brief and config can change over time,
+    # and the run must keep the exact versions it was scaffolded against.
+    for input_name in ("brief.md", "config.yaml"):
+        snapshot_path = job_inputs_dir / input_name
+        snapshot_path.write_bytes((job_dir / input_name).read_bytes())
+        created_files.append(snapshot_path)
 
     common_context = {
         "brief_markdown": brief_text,
@@ -352,11 +376,11 @@ def scaffold_run(job_name: str, job_dir: Path, run_id: str) -> Path:
         "source_registry_path": "",
         "depends_on": "",
         "researcher_label": "Researcher",
+        "research_mandate": "Cover the full research question with balanced depth.",
         "critic_label": "Critic",
         "target_label": "Target",
     }
 
-    created_files: list[Path] = []
     for stage in RUN_STAGES:
         output_path = stage_dir / str(stage["output"])
         packet_path = prompt_dir / str(stage["packet"])
@@ -367,6 +391,9 @@ def scaffold_run(job_name: str, job_dir: Path, run_id: str) -> Path:
                 "depends_on": ", ".join(stage["depends_on"]) if stage["depends_on"] else "none",
                 "prompt_packet_path": str(packet_path.resolve()),
                 "researcher_label": str(stage.get("researcher_label", "Researcher")),
+                "research_mandate": str(
+                    stage.get("research_mandate", "Cover the full research question with balanced depth.")
+                ),
                 "stage_description": str(stage["description"]),
                 "stage_id": str(stage["id"]),
                 "stage_output_path": str(output_path.resolve()),

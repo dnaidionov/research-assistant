@@ -98,6 +98,23 @@ def load_quality_policy_from_path(config_path: Path | None) -> dict[str, object]
     return quality_policy if isinstance(quality_policy, dict) else None
 
 
+def load_freshness_max_days(job_dir: Path) -> int | None:
+    document = load_job_config(job_dir)
+    freshness = document.get("freshness")
+    if not isinstance(freshness, dict):
+        return None
+    max_days = freshness.get("max_days")
+    return max_days if isinstance(max_days, int) and max_days > 0 else None
+
+
+def load_requirement_flag(job_dir: Path, flag: str) -> bool:
+    document = load_job_config(job_dir)
+    requirements = document.get("requirements")
+    if not isinstance(requirements, dict):
+        return False
+    return requirements.get(flag) is True
+
+
 def load_execution_config(job_dir: Path) -> dict[str, object] | None:
     document = load_job_config(job_dir)
     workflow = document.get("workflow")
