@@ -216,6 +216,9 @@ Automated runs persist:
 - workflow state in `runs/<run-id>/workflow-state.json`
 - usage telemetry in `runs/<run-id>/audit/usage/`
 - configured and actual execution records in `runs/<run-id>/audit/execution-config.json`
+- the exact `brief.md` and `config.yaml` the run was scaffolded against in `runs/<run-id>/job-inputs/`
+
+Because the prompt packets embed the brief at scaffold time, execution refuses to continue a run whose `brief.md` has changed since scaffolding; start a new run for an updated brief. Config drift is journaled as a warning, and execution-relevant config changes are still rejected by the execution-config snapshot guard.
 
 ## Claim Extraction and Final Artifact
 

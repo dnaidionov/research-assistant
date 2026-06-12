@@ -47,7 +47,8 @@
               "required": ["source_id", "role"],
               "properties": {
                 "source_id": {"type": "string"},
-                "role": {"type": "string", "enum": ["evidence", "context", "challenge", "provenance"]}
+                "role": {"type": "string", "enum": ["evidence", "context", "challenge", "provenance"]},
+                "excerpt": {"type": "string"}
               }
             }
           },
@@ -71,7 +72,8 @@
               "required": ["source_id", "role"],
               "properties": {
                 "source_id": {"type": "string"},
-                "role": {"type": "string", "enum": ["evidence", "context", "challenge", "provenance"]}
+                "role": {"type": "string", "enum": ["evidence", "context", "challenge", "provenance"]},
+                "excerpt": {"type": "string"}
               }
             }
           },

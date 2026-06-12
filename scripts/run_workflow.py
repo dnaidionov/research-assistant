@@ -346,12 +346,21 @@ def scaffold_run(job_name: str, job_dir: Path, run_id: str) -> Path:
     stage_claim_dir = run_dir / "stage-claims"
     audit_dir = run_dir / "audit"
     log_dir = run_dir / "logs"
-    for directory in (prompt_dir, stage_dir, stage_claim_dir, audit_dir, log_dir):
+    job_inputs_dir = run_dir / "job-inputs"
+    for directory in (prompt_dir, stage_dir, stage_claim_dir, audit_dir, log_dir, job_inputs_dir):
         directory.mkdir(parents=True, exist_ok=False)
 
     created_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     brief_text = (job_dir / "brief.md").read_text(encoding="utf-8").strip()
     config_text = (job_dir / "config.yaml").read_text(encoding="utf-8").strip()
+
+    created_files: list[Path] = []
+    # Snapshot the job inputs verbatim: the brief and config can change over time,
+    # and the run must keep the exact versions it was scaffolded against.
+    for input_name in ("brief.md", "config.yaml"):
+        snapshot_path = job_inputs_dir / input_name
+        snapshot_path.write_bytes((job_dir / input_name).read_bytes())
+        created_files.append(snapshot_path)
 
     common_context = {
         "brief_markdown": brief_text,
@@ -372,7 +381,6 @@ def scaffold_run(job_name: str, job_dir: Path, run_id: str) -> Path:
         "target_label": "Target",
     }
 
-    created_files: list[Path] = []
     for stage in RUN_STAGES:
         output_path = stage_dir / str(stage["output"])
         packet_path = prompt_dir / str(stage["packet"])

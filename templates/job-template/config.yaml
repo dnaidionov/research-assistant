@@ -5,6 +5,9 @@ requirements:
   require_claim_register: true
   require_disagreement_log: true
   separate_facts_from_inference: true
+  # When true, research facts/inferences citing external evidence must carry a
+  # quoted excerpt on an evidence support link (validation error instead of warning).
+  # require_evidence_excerpts: true
 
 source_policy:
   preferred:

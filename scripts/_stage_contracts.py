@@ -332,6 +332,25 @@ def _infer_authority_tier(source: dict[str, object]) -> str:
 
 
 DEFAULT_FRESHNESS_MAX_DAYS = 365
+_active_freshness_max_days = DEFAULT_FRESHNESS_MAX_DAYS
+
+
+def configure_freshness_max_days(days: object) -> None:
+    """Set the process-wide freshness window, typically from the job config's freshness.max_days."""
+    global _active_freshness_max_days
+    if days is None:
+        _active_freshness_max_days = DEFAULT_FRESHNESS_MAX_DAYS
+        return
+    try:
+        value = int(days)
+    except (TypeError, ValueError):
+        return
+    if value > 0:
+        _active_freshness_max_days = value
+
+
+def active_freshness_max_days() -> int:
+    return _active_freshness_max_days
 
 
 def _parse_publication_date(raw: str) -> date | None:
@@ -360,7 +379,7 @@ def _infer_freshness_status(source: dict[str, object]) -> str:
     if parsed is None:
         return "unknown"
     age_days = (datetime.now(timezone.utc).date() - parsed).days
-    return "stale" if age_days > DEFAULT_FRESHNESS_MAX_DAYS else "fresh"
+    return "stale" if age_days > active_freshness_max_days() else "fresh"
 
 
 def _infer_support_flags(source: dict[str, object]) -> dict[str, bool]:
@@ -543,15 +562,17 @@ def normalize_support_links(
                 continue
             if not isinstance(role, str) or role not in SUPPORT_LINK_ROLES:
                 continue
+            excerpt = link.get("excerpt")
+            extra = {"excerpt": excerpt.strip()} if isinstance(excerpt, str) and excerpt.strip() else {}
             if local_reference_map and source_id in local_reference_map:
                 for resolved_source_id in local_reference_map[source_id]:
-                    normalized_link = {"source_id": resolved_source_id, "role": role}
+                    normalized_link = {"source_id": resolved_source_id, "role": role, **extra}
                     if normalized_link not in normalized_links:
                         normalized_links.append(normalized_link)
                 continue
             if not SOURCE_ID_PATTERN.match(source_id):
                 continue
-            normalized_links.append({"source_id": source_id, "role": role})
+            normalized_links.append({"source_id": source_id, "role": role, **extra})
         if normalized_links:
             return normalized_links
 
@@ -606,6 +627,62 @@ def semantic_world_support_sources(
             if link["source_id"] not in sources:
                 sources.append(link["source_id"])
     return sources
+
+
+def evidence_excerpt_findings(
+    stage_id: str,
+    payload: dict[str, object],
+    source_registry: dict[str, object],
+) -> list[str]:
+    """Flag research facts/inferences that cite external evidence without any quoted excerpt on an evidence support link.
+
+    Excerpts make external support auditable without re-fetching the source. By
+    default these findings are warnings; requirements.require_evidence_excerpts
+    turns them into validation errors.
+    """
+    if stage_id not in {"research-a", "research-b"}:
+        return []
+
+    source_classes: dict[str, str] = {}
+    for source in [*source_registry.get("sources", []), *payload.get("sources", [])]:
+        if not isinstance(source, dict):
+            continue
+        normalized = normalize_source_record(source)
+        source_id = normalized.get("id")
+        if isinstance(source_id, str):
+            source_classes[source_id] = str(normalized.get("source_class") or "")
+
+    findings: list[str] = []
+    for field_name in ("facts", "inferences"):
+        items = payload.get(field_name)
+        if not isinstance(items, list):
+            continue
+        for position, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                continue
+            external_ids = {
+                source_id
+                for source_id in item.get("evidence_sources", [])
+                if isinstance(source_id, str) and source_classes.get(source_id) == "external_evidence"
+            }
+            if not external_ids:
+                continue
+            support_links = item.get("support_links")
+            has_excerpt = isinstance(support_links, list) and any(
+                isinstance(link, dict)
+                and link.get("role") == "evidence"
+                and link.get("source_id") in external_ids
+                and isinstance(link.get("excerpt"), str)
+                and link["excerpt"].strip()
+                for link in support_links
+            )
+            if not has_excerpt:
+                item_id = str(item.get("id") or f"{field_name}[{position}]")
+                findings.append(
+                    f"{field_name}[{position}] ({item_id}) cites external evidence without a quoted excerpt on an evidence support link; "
+                    "add a short excerpt so the support can be audited without re-fetching the source."
+                )
+    return findings
 
 
 def claim_dependencies(item: dict[str, object], local_reference_map: dict[str, list[str]] | None = None) -> list[str]:

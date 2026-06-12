@@ -54,6 +54,40 @@ class RunWorkflowTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmpdir.cleanup()
 
+    def test_scaffold_snapshots_job_inputs_into_run(self) -> None:
+        result = subprocess.run(
+            [
+                "python3",
+                str(RUN_WORKFLOW),
+                "--job-path",
+                str(self.job_dir),
+                "--run-id",
+                "run-inputs",
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        job_inputs_dir = self.job_dir / "runs" / "run-inputs" / "job-inputs"
+        self.assertEqual(
+            (job_inputs_dir / "brief.md").read_bytes(),
+            (self.job_dir / "brief.md").read_bytes(),
+        )
+        self.assertEqual(
+            (job_inputs_dir / "config.yaml").read_bytes(),
+            (self.job_dir / "config.yaml").read_bytes(),
+        )
+
+        manifest = json.loads(
+            (self.job_dir / "runs" / "run-inputs" / "audit" / "manifest.json").read_text(encoding="utf-8")
+        )
+        manifest_paths = {entry["path"] for entry in manifest["files"]}
+        self.assertIn("job-inputs/brief.md", manifest_paths)
+        self.assertIn("job-inputs/config.yaml", manifest_paths)
+
     def test_research_packets_carry_asymmetric_mandates_and_candidate_rules(self) -> None:
         result = subprocess.run(
             [

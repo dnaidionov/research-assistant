@@ -8,7 +8,8 @@ import re
 import sys
 from pathlib import Path
 
-from _job_config import load_quality_policy_from_path
+from _job_config import load_quality_policy_from_path, load_yaml_document
+from _stage_contracts import configure_freshness_max_days
 from _publication import (
     build_source_index,
     extract_reference_ids,
@@ -369,6 +370,11 @@ def main() -> int:
     claims_path = Path(args.claim_register).expanduser()
     output_path = Path(args.output).expanduser()
     config_path = Path(args.config).expanduser() if args.config else None
+
+    if config_path is not None and config_path.is_file():
+        freshness = load_yaml_document(config_path).get("freshness")
+        if isinstance(freshness, dict):
+            configure_freshness_max_days(freshness.get("max_days"))
 
     try:
         judge_text = judge_path.read_text(encoding="utf-8")
