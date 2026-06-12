@@ -1737,6 +1737,7 @@ def _append_claim(
     claim_dependencies: list[str] | None = None,
     confidence: str | None = None,
     section: str | None = None,
+    single_source_acknowledged: object = None,
 ) -> None:
     record: dict[str, object] = {
         "id": claim_id,
@@ -1754,6 +1755,10 @@ def _append_claim(
         record["confidence"] = confidence
     if section is not None:
         record["section"] = section
+    if single_source_acknowledged is True or (
+        isinstance(single_source_acknowledged, str) and single_source_acknowledged.strip()
+    ):
+        record["single_source_acknowledged"] = single_source_acknowledged
     claims.append(record)
 
 
@@ -1839,6 +1844,7 @@ def _append_semantic_claim(
         claim_dependencies=claim_dependencies(item, local_reference_map),
         confidence=confidence,
         section=section,
+        single_source_acknowledged=item.get("single_source_acknowledged"),
     )
 
 

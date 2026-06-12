@@ -41,6 +41,7 @@ workflow:
 #   disfavored_recommendation_support: true
 #   evidence_quality_mismatch: true
 #   disagreement_collapse: true
-#   # Require recommendations to carry at least two distinct evidence sources,
-#   # or an explicit single_source_acknowledged note on the claim.
+#   # Require recommendations (judge items with claim_class: "recommendation")
+#   # to carry at least two distinct evidence sources, or an explicit
+#   # single_source_acknowledged note that the judge sets on the item.
 #   single_source_recommendation: true

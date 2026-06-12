@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -27,6 +28,18 @@ DEFAULT_TIMEOUT_SECONDS = 15
 USER_AGENT = "research-assistant-link-check/1.0"
 
 CHECKED_SOURCE_CLASSES = {"external_evidence"}
+
+# Matches schemeless URLs such as "example.com/page" or "docs.python.org",
+# which are not checkable as local paths and not fetched without a scheme.
+SCHEMELESS_URL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*(\.[A-Za-z]{2,})+([/:?#]|$)")
+
+
+def looks_like_local_path(locator: str) -> bool:
+    if locator.startswith(("~", "/", "./", "../")):
+        return True
+    if SCHEMELESS_URL_PATTERN.match(locator):
+        return False
+    return "/" in locator or "\\" in locator
 
 
 def default_url_fetcher(url: str, timeout: float) -> tuple[bool, str]:
@@ -85,6 +98,10 @@ def check_source(
         candidate = base_dir / candidate
     if candidate.exists():
         return {"id": source_id, "locator": locator, "status": "ok", "detail": "path exists"}
+    if looks_like_local_path(locator):
+        # Concrete local paths are a first-class resolvable locator form; a
+        # missing one is a failed check, same as a missing file:// locator.
+        return {"id": source_id, "locator": locator, "status": "broken", "detail": "path missing"}
     return {"id": source_id, "locator": locator, "status": "unverifiable", "detail": "locator form not checkable"}
 
 

@@ -39,6 +39,7 @@ from _cli_adapters import (
 )
 from _execution_guards import (
     ensure_job_input_snapshot,
+    final_report_protected_paths,
     protected_stage_paths,
     refresh_run_manifest,
     restore_protected_files,
@@ -2914,7 +2915,29 @@ def run_final_artifact(
         "--output",
         str(custom_output),
     ]
-    completed_custom = subprocess.run(custom_report_cmd, cwd=job_dir, capture_output=True, text=True)
+    # The synthesis step launches a full LLM agent with filesystem access, so it
+    # gets the same protected-input guard as every stage.
+    protected_paths = final_report_protected_paths(
+        run_dir,
+        job_dir,
+        claim_register_path=claim_output,
+        report_output_path=custom_output,
+    )
+    if final_output.is_file():
+        protected_paths.append(final_output)
+    protected_snapshot = snapshot_protected_files(protected_paths)
+    try:
+        completed_custom = subprocess.run(custom_report_cmd, cwd=job_dir, capture_output=True, text=True)
+    finally:
+        restore_protected_files(run_dir, "final-report", protected_snapshot)
+        refresh_run_manifest(run_dir)
+    synthesis_prompt_path = run_dir / "logs" / "final-report-generation.prompt.md"
+    try:
+        # generate_final_report.py persists the real synthesis prompt (judge
+        # record + claim register) so token estimates reflect the actual cost.
+        synthesis_prompt_text = synthesis_prompt_path.read_text(encoding="utf-8")
+    except OSError:
+        synthesis_prompt_text = " ".join(custom_report_cmd)
     if completed_custom.returncode != 0:
         transition_post_processing_status(run_dir, state, "final_artifact", "failed")
         save_state(state_path, state)
@@ -2935,7 +2958,7 @@ def run_final_artifact(
                 duration_ms=0,
             ),
             status="failed",
-            prompt_text=" ".join(custom_report_cmd),
+            prompt_text=synthesis_prompt_text,
             failure_reason=completed_custom.stderr.strip() or "custom final report generation failed",
         )
         reporter.fail("system", "final-artifact")
@@ -2958,7 +2981,7 @@ def run_final_artifact(
             duration_ms=0,
         ),
         status="completed",
-        prompt_text=" ".join(custom_report_cmd),
+        prompt_text=synthesis_prompt_text,
     )
 
     transition_post_processing_status(run_dir, state, "final_artifact", "completed")

@@ -7,6 +7,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
+from _execution_guards import final_report_protected_paths  # noqa: E402
 from execute_workflow import (  # noqa: E402
     EXECUTION_BY_STAGE_ID,
     protected_stage_paths,
@@ -58,6 +59,45 @@ class IsolationGuardTests(unittest.TestCase):
         restored = restore_protected_files(self.run_dir, "research-a", snapshot)
         self.assertEqual(restored, [])
         self.assertFalse((self.run_dir / "events.jsonl").exists())
+
+    def test_final_report_protected_paths_cover_inputs_but_allow_the_report_itself(self) -> None:
+        stage_outputs = self.run_dir / "stage-outputs"
+        (stage_outputs / "06-judge.md").write_text("# Judge\n", encoding="utf-8")
+        (self.run_dir / "sources.json").write_text(json.dumps({"sources": []}), encoding="utf-8")
+        report_output = stage_outputs / "07-final-report.md"
+        report_output.write_text("# Stale report\n", encoding="utf-8")
+        claim_register = self.job_dir / "evidence" / "claims-run-001.json"
+        claim_register.parent.mkdir(parents=True)
+        claim_register.write_text(json.dumps({"claims": []}), encoding="utf-8")
+
+        paths = final_report_protected_paths(
+            self.run_dir,
+            self.job_dir,
+            claim_register_path=claim_register,
+            report_output_path=report_output,
+        )
+        names = {path.name for path in paths}
+        self.assertIn("brief.md", names)
+        self.assertIn("config.yaml", names)
+        self.assertIn("sources.json", names)
+        self.assertIn("06-judge.md", names)
+        self.assertIn("01-intake.json", names)
+        self.assertIn("claims-run-001.json", names)
+        self.assertNotIn("07-final-report.md", names)
+
+    def test_tampered_judge_artifact_is_restored_after_final_report_step(self) -> None:
+        stage_outputs = self.run_dir / "stage-outputs"
+        judge_path = stage_outputs / "06-judge.md"
+        judge_path.write_text("# Judge\n", encoding="utf-8")
+        snapshot = snapshot_protected_files(
+            final_report_protected_paths(self.run_dir, self.job_dir)
+        )
+
+        judge_path.write_text("# Tampered by synthesis agent\n", encoding="utf-8")
+        restored = restore_protected_files(self.run_dir, "final-report", snapshot)
+
+        self.assertEqual(judge_path.read_text(encoding="utf-8"), "# Judge\n")
+        self.assertEqual(len(restored), 1)
 
     def test_refresh_run_manifest_reflects_current_run_contents(self) -> None:
         refresh_run_manifest(self.run_dir)

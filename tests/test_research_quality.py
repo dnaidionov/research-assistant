@@ -179,6 +179,52 @@ class ResearchQualityTests(unittest.TestCase):
 
         self.assertEqual(errors, [], errors)
 
+    def test_judge_emitted_acknowledgment_satisfies_the_gate_end_to_end(self) -> None:
+        """The acknowledgment must survive the structured-judge claim-map path the
+        automated pipeline actually uses, not just hand-built registers."""
+        from _stage_contracts import build_claim_map_from_stage_json
+
+        def judge_payload(acknowledged: bool) -> dict[str, object]:
+            judgment: dict[str, object] = {
+                "id": "J-001",
+                "text": "Recommend Option A for the near term.",
+                "evidence_sources": ["SRC-001"],
+                "confidence": "medium",
+                "claim_class": "recommendation",
+            }
+            if acknowledged:
+                judgment["single_source_acknowledged"] = "Only one vendor benchmark exists."
+            return {
+                "stage": "judge",
+                "supported_conclusions": [],
+                "synthesis_judgments": [judgment],
+                "unresolved_disagreements": [],
+                "confidence_assessment": "Medium overall.",
+                "evidence_gaps": [],
+                "rationale": "Adjudicated from the record.",
+                "recommended_artifact_structure": ["Executive Summary"],
+                "sources": [
+                    {
+                        "id": "SRC-001",
+                        "title": "Vendor benchmark",
+                        "type": "benchmark report",
+                        "authority": "vendor",
+                        "locator": "https://example.com/benchmark",
+                        "source_class": "external_evidence",
+                    }
+                ],
+            }
+
+        policy = {"single_source_recommendation": True}
+
+        unacknowledged_register = build_claim_map_from_stage_json("judge", judge_payload(acknowledged=False))
+        errors = quality_gate_errors(unacknowledged_register, {}, policy)
+        self.assertTrue(any("single evidence source" in error for error in errors), errors)
+
+        acknowledged_register = build_claim_map_from_stage_json("judge", judge_payload(acknowledged=True))
+        errors = quality_gate_errors(acknowledged_register, {}, policy)
+        self.assertEqual(errors, [], errors)
+
 
 if __name__ == "__main__":
     unittest.main()

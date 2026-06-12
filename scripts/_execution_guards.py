@@ -70,6 +70,32 @@ def protected_stage_paths(stage: StageExecution, run_dir: Path, job_dir: Path) -
     return [path for path in paths if path.is_file()]
 
 
+def final_report_protected_paths(
+    run_dir: Path,
+    job_dir: Path,
+    *,
+    claim_register_path: Path | None = None,
+    report_output_path: Path | None = None,
+) -> list[Path]:
+    """Files the final-report synthesis agent must not modify: job inputs, every
+    completed stage artifact, the merged source registry, and the claim register.
+
+    The report output itself (and its rejected-draft sibling) is excluded — the
+    agent is allowed to write it.
+    """
+    paths = [job_dir / "brief.md", job_dir / "config.yaml", run_dir / "sources.json"]
+    stage_outputs_dir = run_dir / "stage-outputs"
+    if stage_outputs_dir.is_dir():
+        paths.extend(sorted(stage_outputs_dir.iterdir()))
+    if claim_register_path is not None:
+        paths.append(claim_register_path)
+    excluded: set[Path] = set()
+    if report_output_path is not None:
+        excluded.add(report_output_path)
+        excluded.add(report_output_path.with_suffix(report_output_path.suffix + ".rejected.md"))
+    return [path for path in paths if path.is_file() and path not in excluded]
+
+
 def snapshot_protected_files(paths: list[Path]) -> dict[Path, bytes]:
     return {path: path.read_bytes() for path in paths}
 

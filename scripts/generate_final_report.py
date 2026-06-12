@@ -6,6 +6,7 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from _claim_model import build_claim_register
@@ -46,6 +47,41 @@ def parse_args() -> argparse.Namespace:
         help="Skip post-generation claim and reference validation. The report is then operator-reviewed output only.",
     )
     return parser.parse_args()
+
+
+def output_written_during_invocation(output_path: Path, invocation_started: float) -> bool:
+    """Only trust an output file (re)written after the adapter started.
+
+    A leftover report from an earlier invocation must not be re-validated and
+    reported as freshly generated. The one-second slack absorbs coarse
+    filesystem mtime granularity.
+    """
+    if not output_path.is_file():
+        return False
+    try:
+        return output_path.stat().st_mtime >= invocation_started - 1.0
+    except OSError:
+        return False
+
+
+def strip_code_fence(markdown: str) -> str:
+    if not markdown.startswith("```"):
+        return markdown
+    lines = markdown.splitlines()
+    if lines[0].startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def resolve_report_markdown(stdout_text: str, output_path: Path, invocation_started: float) -> str:
+    """Pick the adapter's report content: a file it wrote during this invocation
+    is authoritative over stdout, which may be conversational chatter."""
+    candidate = stdout_text.strip()
+    if output_written_during_invocation(output_path, invocation_started):
+        candidate = output_path.read_text(encoding="utf-8").strip()
+    return strip_code_fence(candidate)
 
 
 def read_file_safe(path: Path) -> str:
@@ -208,12 +244,19 @@ def main() -> int:
         )
         recommended_structure = list(FALLBACK_REPORT_STRUCTURE)
 
+    claim_register_json = read_file_safe(claim_reg_path)
+    if not claim_register_json.strip():
+        print(
+            f"Warning: claim register {claim_reg_path} is missing or empty; the synthesis prompt carries no validated claims.",
+            file=sys.stderr,
+        )
+
     prompt = build_synthesis_prompt(
         run_dir=run_dir,
         output_path=output_path,
         recommended_structure=recommended_structure,
         judge_markdown=read_file_safe(judge_md_path),
-        claim_register_json=read_file_safe(claim_reg_path),
+        claim_register_json=claim_register_json,
     )
 
     try:
@@ -224,7 +267,11 @@ def main() -> int:
 
     log_path = run_dir / "logs" / "final-report-generation.driver.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    # The synthesis prompt embeds the judge record and claim register; persist it
+    # so the orchestrator can attribute real prompt size in usage telemetry.
+    (run_dir / "logs" / "final-report-generation.prompt.md").write_text(prompt, encoding="utf-8")
 
+    invocation_started = time.time()
     result = subprocess.run(cmd, cwd=job_dir, capture_output=True, text=True)
     log_path.write_text(
         "\n".join(
@@ -237,24 +284,15 @@ def main() -> int:
         print(f"Error running LLM adapter CLI: {result.stderr}", file=sys.stderr)
         return result.returncode
 
-    stdout_clean = result.stdout.strip()
-    if not stdout_clean and output_path.is_file():
-        # Some adapters write the artifact directly instead of materializing stdout.
-        stdout_clean = output_path.read_text(encoding="utf-8").strip()
-    # Strip any markdown code fence wrapper (e.g., ```markdown ... ```) if the LLM generated it
-    if stdout_clean.startswith("```"):
-        lines = stdout_clean.splitlines()
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        stdout_clean = "\n".join(lines).strip()
-
-    if not stdout_clean:
-        print("Error: adapter produced no report content.", file=sys.stderr)
+    report_body = resolve_report_markdown(result.stdout, output_path, invocation_started)
+    if not report_body:
+        print(
+            "Error: adapter produced no report content (stdout was empty and no output file was written during this invocation).",
+            file=sys.stderr,
+        )
         return 1
 
-    report_markdown = stdout_clean + "\n"
+    report_markdown = report_body + "\n"
 
     if not args.no_validate:
         errors, warnings = validate_report(report_markdown, load_source_index(run_dir))
@@ -264,6 +302,11 @@ def main() -> int:
             rejected_path = output_path.with_suffix(output_path.suffix + ".rejected.md")
             rejected_path.parent.mkdir(parents=True, exist_ok=True)
             rejected_path.write_text(report_markdown, encoding="utf-8")
+            if output_written_during_invocation(output_path, invocation_started):
+                # An adapter that wrote the rejected draft straight to the canonical
+                # path must not leave it there, or a resumed run would treat the
+                # unvalidated report as completed output.
+                output_path.unlink()
             print(
                 "Final report failed claim/reference validation and was written to "
                 f"{rejected_path} for operator review:",
