@@ -212,6 +212,10 @@ class ExecuteWorkflowTests(unittest.TestCase):
                         output_path.write_text("# Adapter qualification markdown\\n", encoding="utf-8")
                     sys.exit(0)
 
+                if "STAGE_ID=final-report" in prompt:
+                    print("# Executive Summary\\n\\nOption A has lower implementation risk. [SRC-001]\\n\\n# Recommendation\\n\\nOption A is the safer near-term choice. [SRC-001] Confidence: medium")
+                    sys.exit(0)
+
                 print("unexpected non-qualification call", file=sys.stderr)
                 sys.exit(9)
                 """
@@ -322,6 +326,10 @@ class ExecuteWorkflowTests(unittest.TestCase):
                         )
                     else:
                         output_path.write_text("# Adapter qualification markdown\\n", encoding="utf-8")
+                    sys.exit(0)
+
+                if "STAGE_ID=final-report" in prompt:
+                    print("# Executive Summary\\n\\nOption A has lower implementation risk. [SRC-001]\\n\\n# Recommendation\\n\\nOption A is the safer near-term choice. [SRC-001] Confidence: medium")
                     sys.exit(0)
 
                 print("unexpected non-qualification call", file=sys.stderr)
@@ -495,6 +503,10 @@ class ExecuteWorkflowTests(unittest.TestCase):
                         output_path.write_text("# Adapter qualification markdown\\n", encoding="utf-8")
                     sys.exit(0)
 
+                if "STAGE_ID=final-report" in prompt:
+                    print("# Executive Summary\\n\\nOption A has lower implementation risk. [SRC-001]\\n\\n# Recommendation\\n\\nOption A is the safer near-term choice. [SRC-001] Confidence: medium")
+                    sys.exit(0)
+
                 if stage == "intake":
                     output_path.write_text(
                         json.dumps({{
@@ -656,6 +668,10 @@ class ExecuteWorkflowTests(unittest.TestCase):
                         output_path.write_text("# Adapter qualification markdown\\n", encoding="utf-8")
                     sys.exit(0)
 
+                if "STAGE_ID=final-report" in prompt:
+                    print("# Executive Summary\\n\\nOption A has lower implementation risk. [SRC-001]\\n\\n# Recommendation\\n\\nOption A is the safer near-term choice. [SRC-001] Confidence: medium")
+                    sys.exit(0)
+
                 print({message!r}, file=sys.stderr)
                 sys.exit(23)
                 """
@@ -686,6 +702,10 @@ class ExecuteWorkflowTests(unittest.TestCase):
                         )
                     else:
                         output_path.write_text("# Adapter qualification markdown\\n", encoding="utf-8")
+                    sys.exit(0)
+
+                if "STAGE_ID=final-report" in prompt:
+                    print("# Executive Summary\\n\\nOption A has lower implementation risk. [SRC-001]\\n\\n# Recommendation\\n\\nOption A is the safer near-term choice. [SRC-001] Confidence: medium")
                     sys.exit(0)
 
                 print({message!r}, file=sys.stderr)
@@ -772,6 +792,10 @@ class ExecuteWorkflowTests(unittest.TestCase):
                         )
                     else:
                         output_path.write_text("# Adapter qualification markdown\\n", encoding="utf-8")
+                    sys.exit(0)
+
+                if "STAGE_ID=final-report" in prompt:
+                    print("# Executive Summary\\n\\nOption A has lower implementation risk. [SRC-001]\\n\\n# Recommendation\\n\\nOption A is the safer near-term choice. [SRC-001] Confidence: medium")
                     sys.exit(0)
 
                 if stage == "research-b" and substep == "source-pass":
@@ -941,6 +965,10 @@ class ExecuteWorkflowTests(unittest.TestCase):
                         output_path.write_text("# Adapter qualification markdown\\n", encoding="utf-8")
                     sys.exit(0)
 
+                if "STAGE_ID=final-report" in prompt:
+                    print("# Executive Summary\\n\\nOption A has lower implementation risk. [SRC-001]\\n\\n# Recommendation\\n\\nOption A is the safer near-term choice. [SRC-001] Confidence: medium")
+                    sys.exit(0)
+
                 if stage not in {{"research-b", "critique-b-on-a", "judge"}}:
                     print("unexpected stage", file=sys.stderr)
                     sys.exit(2)
@@ -994,6 +1022,10 @@ class ExecuteWorkflowTests(unittest.TestCase):
                         )
                     else:
                         output_path.write_text("# Adapter qualification markdown\\n", encoding="utf-8")
+                    sys.exit(0)
+
+                if "STAGE_ID=final-report" in prompt:
+                    print("# Executive Summary\\n\\nOption A has lower implementation risk. [SRC-001]\\n\\n# Recommendation\\n\\nOption A is the safer near-term choice. [SRC-001] Confidence: medium")
                     sys.exit(0)
 
                 if stage == "intake":
@@ -1153,6 +1185,10 @@ class ExecuteWorkflowTests(unittest.TestCase):
                         )
                     else:
                         output_path.write_text("# Adapter qualification markdown\\n", encoding="utf-8")
+                    sys.exit(0)
+
+                if "STAGE_ID=final-report" in prompt:
+                    print("# Executive Summary\\n\\nOption A has lower implementation risk. [SRC-001]\\n\\n# Recommendation\\n\\nOption A is the safer near-term choice. [SRC-001] Confidence: medium")
                     sys.exit(0)
 
                 if count_path.is_file():
@@ -1318,6 +1354,10 @@ class ExecuteWorkflowTests(unittest.TestCase):
                         )
                     else:
                         output_path.write_text("# Adapter qualification markdown\\n", encoding="utf-8")
+                    sys.exit(0)
+
+                if "STAGE_ID=final-report" in prompt:
+                    print("# Executive Summary\\n\\nOption A has lower implementation risk. [SRC-001]\\n\\n# Recommendation\\n\\nOption A is the safer near-term choice. [SRC-001] Confidence: medium")
                     sys.exit(0)
 
                 if stage == "research-b" and substep == "source-pass":
@@ -1787,6 +1827,10 @@ class ExecuteWorkflowTests(unittest.TestCase):
                         output_path.write_text("# Adapter qualification markdown\\n", encoding="utf-8")
                     sys.exit(0)
 
+                if "STAGE_ID=final-report" in prompt:
+                    print("# Executive Summary\\n\\nOption A has lower implementation risk. [SRC-001]\\n\\n# Recommendation\\n\\nOption A is the safer near-term choice. [SRC-001] Confidence: medium")
+                    sys.exit(0)
+
                 if stage == "research-b" and substep == "source-pass":
                     json_path.write_text(
                         json.dumps(
@@ -1966,6 +2010,10 @@ class ExecuteWorkflowTests(unittest.TestCase):
                         )
                     else:
                         output_path.write_text("# Adapter qualification markdown\\n", encoding="utf-8")
+                    sys.exit(0)
+
+                if "STAGE_ID=final-report" in prompt:
+                    print("# Executive Summary\\n\\nOption A has lower implementation risk. [SRC-001]\\n\\n# Recommendation\\n\\nOption A is the safer near-term choice. [SRC-001] Confidence: medium")
                     sys.exit(0)
 
                 if stage == "research-b" and substep == "source-pass":
@@ -2519,6 +2567,10 @@ class ExecuteWorkflowTests(unittest.TestCase):
                         )
                     else:
                         output_path.write_text("# Adapter qualification markdown\\n", encoding="utf-8")
+                    sys.exit(0)
+
+                if "STAGE_ID=final-report" in prompt:
+                    print("# Executive Summary\\n\\nOption A has lower implementation risk. [SRC-001]\\n\\n# Recommendation\\n\\nOption A is the safer near-term choice. [SRC-001] Confidence: medium")
                     sys.exit(0)
 
                 print("unexpected non-qualification call", file=sys.stderr)
@@ -3117,6 +3169,10 @@ class ExecuteWorkflowTests(unittest.TestCase):
                         output_path.write_text("# Adapter qualification markdown\\n", encoding="utf-8")
                     sys.exit(0)
 
+                if "STAGE_ID=final-report" in prompt:
+                    print("# Executive Summary\\n\\nOption A has lower implementation risk. [SRC-001]\\n\\n# Recommendation\\n\\nOption A is the safer near-term choice. [SRC-001] Confidence: medium")
+                    sys.exit(0)
+
                 if stage == "research-b" and substep == "source-pass":
                     json_path.write_text(
                         json.dumps(
@@ -3298,6 +3354,10 @@ class ExecuteWorkflowTests(unittest.TestCase):
                         )
                     else:
                         output_path.write_text("# Adapter qualification markdown\\n", encoding="utf-8")
+                    sys.exit(0)
+
+                if "STAGE_ID=final-report" in prompt:
+                    print("# Executive Summary\\n\\nOption A has lower implementation risk. [SRC-001]\\n\\n# Recommendation\\n\\nOption A is the safer near-term choice. [SRC-001] Confidence: medium")
                     sys.exit(0)
 
                 if stage == "research-b" and substep == "source-pass":

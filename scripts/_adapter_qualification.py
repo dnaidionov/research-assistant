@@ -279,6 +279,9 @@ def render_reference_prompt_packet(
         "job_dir": str(root.resolve()),
         "prompt_packet_path": str(packet_path.resolve()),
         "researcher_label": str(stage.get("researcher_label", "Researcher")),
+        "research_mandate": str(
+            stage.get("research_mandate", "Cover the full research question with balanced depth.")
+        ),
         "run_id": "qualification-run",
         "run_dir": str(run_dir.resolve()),
         "source_registry_path": str(source_registry_path(run_dir).resolve()),

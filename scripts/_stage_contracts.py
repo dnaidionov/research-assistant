@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from copy import deepcopy
+from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -86,10 +87,15 @@ STAGE_JSON_KEYS: dict[str, tuple[str, ...]] = {
 }
 
 OPTIONAL_STAGE_JSON_KEYS: dict[str, tuple[str, ...]] = {
+    "research-a": ("candidates",),
+    "research-b": ("candidates",),
     "judge": ("brief_improvements",),
 }
 
 SOURCE_PASS_KEYS = ("stage", "sources")
+
+CANDIDATE_MATURITY_LEVELS = {"ga", "recent_release", "announced_unreleased", "roadmap_signal"}
+UNRELEASED_CANDIDATE_MATURITY_LEVELS = {"announced_unreleased", "roadmap_signal"}
 
 
 def is_structured_stage(stage_id: str) -> bool:
@@ -295,6 +301,8 @@ def _infer_evidence_kind(source: dict[str, object]) -> str:
         return "recovered_artifact"
     if "marketing" in source_type:
         return "marketing"
+    if any(token in source_type for token in ("announcement", "press release", "product launch", "launch post", "roadmap")):
+        return "vendor_announcement"
     if any(token in source_type for token in ("official documentation", "datasheet", "specification", "spec sheet")):
         return "official_documentation"
     if any(token in source_type for token in ("technical note", "technical report", "benchmark", "paper", "report")):
@@ -314,6 +322,8 @@ def _infer_authority_tier(source: dict[str, object]) -> str:
         return "provisional_recovery"
     if evidence_kind == "marketing":
         return "vendor_marketing"
+    if evidence_kind == "vendor_announcement":
+        return "vendor_announcement"
     if evidence_kind == "official_documentation":
         return "primary_vendor"
     if evidence_kind == "technical_report" and authority == "vendor":
@@ -321,12 +331,36 @@ def _infer_authority_tier(source: dict[str, object]) -> str:
     return "unknown"
 
 
+DEFAULT_FRESHNESS_MAX_DAYS = 365
+
+
+def _parse_publication_date(raw: str) -> date | None:
+    value = raw.strip()
+    for pattern, fmt in (
+        (r"^\d{4}-\d{2}-\d{2}$", "%Y-%m-%d"),
+        (r"^\d{4}-\d{2}$", "%Y-%m"),
+        (r"^\d{4}$", "%Y"),
+    ):
+        if re.match(pattern, value):
+            try:
+                return datetime.strptime(value, fmt).date()
+            except ValueError:
+                return None
+    return None
+
+
 def _infer_freshness_status(source: dict[str, object]) -> str:
     freshness_status = str(source.get("freshness_status") or "").strip()
     if freshness_status:
         return freshness_status
     publication_date = str(source.get("publication_date") or source.get("freshness_date") or "").strip()
-    return "undated" if publication_date else "unknown"
+    if not publication_date:
+        return "undated"
+    parsed = _parse_publication_date(publication_date)
+    if parsed is None:
+        return "unknown"
+    age_days = (datetime.now(timezone.utc).date() - parsed).days
+    return "stale" if age_days > DEFAULT_FRESHNESS_MAX_DAYS else "fresh"
 
 
 def _infer_support_flags(source: dict[str, object]) -> dict[str, bool]:
@@ -354,6 +388,8 @@ def _infer_policy_outcome(source: dict[str, object]) -> str:
         return "blocked"
     if evidence_kind == "marketing":
         return "disfavored"
+    if evidence_kind == "vendor_announcement":
+        return "allowed_with_warning"
     if freshness_status == "stale":
         return "allowed_with_warning"
     return "allowed"
@@ -374,6 +410,11 @@ def _infer_policy_notes(source: dict[str, object]) -> list[str]:
         return ["Recovered provisional source is not publication-safe evidence."]
     if evidence_kind == "marketing":
         return ["Marketing-only source is disfavored for final publication."]
+    if evidence_kind == "vendor_announcement":
+        return [
+            "Vendor announcement supports existence and vendor-claim statements only; "
+            "treat performance, availability, and pricing as inference with explicit availability risk."
+        ]
     if freshness_status == "stale":
         return ["Source is stale and should be corroborated by fresher evidence."]
     return []
@@ -427,6 +468,14 @@ def source_quality_warnings(payload: dict[str, object]) -> list[str]:
         if source_class == "job_input" and ("/prompt-packets/" in locator or locator == "__PROMPT_PACKET__"):
             warnings.append(
                 f"sources[{position}].locator points to a prompt packet; prefer the canonical job artifact such as brief.md or config.yaml."
+            )
+        if source_class == "external_evidence" and str(normalized_source.get("freshness_status") or "") == "undated":
+            warnings.append(
+                f"sources[{position}] ({source_id or 'unknown id'}) is undated external evidence; add publication_date when determinable so freshness can be audited."
+            )
+        if source_class == "external_evidence" and str(normalized_source.get("freshness_status") or "") == "stale":
+            warnings.append(
+                f"sources[{position}] ({source_id or 'unknown id'}) is stale per the freshness policy; corroborate with fresher evidence where the claim is load-bearing."
             )
     return warnings
 
@@ -967,6 +1016,21 @@ def render_stage_markdown_from_json(stage_id: str, payload: dict[str, object]) -
         else:
             for item in summary_items or []:
                 lines.append(_entry_text(item) + _format_evidence_sources(_entry_sources(item)))
+        candidates = payload.get("candidates")
+        if isinstance(candidates, list) and candidates:
+            lines.extend(["", "# Candidate Landscape", ""])
+            for index, item in enumerate(candidates, start=1):
+                if not isinstance(item, dict):
+                    continue
+                parts = [f"{index}. {item.get('name', '')} ({item.get('maturity', 'unknown maturity')})"]
+                fit_summary = str(item.get("fit_summary") or "").strip()
+                if fit_summary:
+                    parts.append(fit_summary)
+                availability_risk = str(item.get("availability_risk") or "").strip()
+                if availability_risk:
+                    parts.append(f"Availability risk: {availability_risk}")
+                evidence = _format_evidence_sources([source for source in item.get("evidence_sources", []) if isinstance(source, str)])
+                lines.append(" — ".join(parts) + evidence)
         lines.extend(["", "# Facts", ""])
         for index, item in enumerate(payload.get("facts", []), start=1):
             lines.append(f"{index}. {item['text']}{_format_evidence_sources(list(item.get('evidence_sources', [])))}")
@@ -1374,6 +1438,38 @@ def _validate_source_evaluation(items: object, errors: list[str]) -> None:
                 errors.append(f"source_evaluation[{position}].{key} must be a canonical external source ID.")
 
 
+def _validate_candidates(items: object, source_index: dict[str, dict[str, str]], errors: list[str]) -> None:
+    if items is None:
+        return
+    if not isinstance(items, list):
+        errors.append("candidates must be a list.")
+        return
+    for position, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            errors.append(f"candidates[{position}] must be an object.")
+            continue
+        _require_string(item.get("name"), f"candidates[{position}].name", errors)
+        _require_string(item.get("fit_summary"), f"candidates[{position}].fit_summary", errors)
+        maturity = item.get("maturity")
+        if not isinstance(maturity, str) or maturity not in CANDIDATE_MATURITY_LEVELS:
+            errors.append(
+                f"candidates[{position}].maturity must be one of {sorted(CANDIDATE_MATURITY_LEVELS)}."
+            )
+        elif maturity in UNRELEASED_CANDIDATE_MATURITY_LEVELS:
+            availability_risk = item.get("availability_risk")
+            if not isinstance(availability_risk, str) or not availability_risk.strip():
+                errors.append(
+                    f"candidates[{position}] has maturity {maturity} and must carry a non-empty availability_risk note."
+                )
+        evidence_sources = item.get("evidence_sources")
+        if not isinstance(evidence_sources, list) or not evidence_sources:
+            errors.append(f"candidates[{position}] must include at least one evidence source.")
+            continue
+        for source_id in evidence_sources:
+            if not isinstance(source_id, str) or source_id not in source_index:
+                errors.append(f"candidates[{position}] references unresolved source id {source_id}.")
+
+
 def validate_stage_json(stage_id: str, payload: dict[str, object], source_registry: dict[str, object]) -> list[str]:
     payload = normalize_stage_citations(stage_id, payload)
     errors: list[str] = []
@@ -1395,6 +1491,7 @@ def validate_stage_json(stage_id: str, payload: dict[str, object], source_regist
 
     if stage_id in {"research-a", "research-b"}:
         _validate_text_entry_list(payload.get("summary"), "summary", errors)
+        _validate_candidates(payload.get("candidates"), source_index, errors)
         _validate_claim_list(payload.get("facts"), "facts", source_index, errors, require_id=True, require_confidence=False)
         _validate_claim_list(
             payload.get("inferences"), "inferences", source_index, errors, require_id=True, require_confidence=True

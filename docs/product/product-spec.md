@@ -167,6 +167,21 @@ Implemented today:
 - stage-claim extraction now logs internal failures explicitly instead of failing silently before emitting a driver log
 - workflow-state now advances to terminal run-level statuses such as `completed` and `failed` during execution rather than remaining stuck at the scaffold status
 - standalone claim extraction can now consume structured stage JSON directly instead of always falling back to lexical markdown parsing
+- research passes now run with asymmetric mandates: pass A weights established solutions and pass B runs an explicit horizon scan over recent releases and credibly announced but unreleased options, with both passes still owning the full question
+- option-selection research now carries a candidate-landscape contract: a `# Candidate Landscape` markdown section plus an optional structured `candidates` payload where each candidate carries `name`, `maturity` (`ga`, `recent_release`, `announced_unreleased`, `roadmap_signal`), `fit_summary`, and resolvable evidence, and unreleased candidates must carry an explicit `availability_risk`
+- the critique contract now explicitly audits candidate coverage, flagging missed recent or announced alternatives as omissions
+- vendor announcements and press releases now normalize into a `vendor_announcement` evidence kind with an `allowed_with_warning` policy outcome: admissible for existence and vendor-claim statements, never for real-world performance facts
+- freshness inference is now active rather than inert: dated sources classify as `fresh` or `stale` against the freshness window, stale sources carry policy warnings, and undated external evidence produces an explicit source-quality warning
+- the job template exposes a `novelty` policy (`include_announced`, `horizon_months`) that flows into the research prompts
+- the source pass now keeps a runner-addressed scratchpad of per-source findings and excerpts under `audit/substeps/`, and the claim pass is pointed at those notes so it no longer has to re-derive the research from bare source IDs
+- stage execution now snapshots protected inputs (brief, config, completed upstream artifacts) and restores them after the stage if an agent modified them, journaling a `protected_artifacts_restored` event
+- `audit/manifest.json` is now refreshed with current file hashes after each stage and at workflow completion instead of describing only the scaffold
+- stage and substep prompts now explicitly forbid reading other runs under `runs/` or the parallel research pass
+- usage telemetry now falls back to byte-derived token estimates (`usage_status: estimated`) when a provider CLI reports no usage, and usage summaries aggregate estimated tokens separately from reported tokens
+- the custom final report step is now domain-neutral and gated: it synthesizes from the judge record and claim register (earlier artifacts are path-referenced background only), and the generated report fails closed when it contains uncited facts or inferences, cites source IDs missing from the run registry, or cites workflow provenance; rejected drafts are kept beside the output for operator review
+- adapter CLI command construction now lives in one shared `scripts/_cli_adapters.py` module used by both the workflow runner and the final report generator
+- `scripts/check_source_links.py` provides a standalone post-run audit that verifies external-evidence locators actually resolve (HTTP reachability and file existence), catching fabricated citations that pass schema validation
+- the quality policy now supports `single_source_recommendation`, which fails publication when a recommendation rests on one evidence source without an explicit single-source acknowledgment
 - **Interactive Family Training**: Users can promote job brief/config templates to the `fixtures/reference-job/families/` register through a dual-pane comparison and editing modal.
 - **Deterministic Scaffolding Mode**: The dashboard now supports a "Just scaffold" execution option that invokes `run_workflow.py` to prepare a job without running LLM agents.
 - **Selective Sync Logic**: API-backed file selection for "Train Family" allows partial updates to fixture defaults.
@@ -195,7 +210,7 @@ The current shortcomings, in priority order, are:
    The runner now passes explicit structured-output paths, uses deterministic adapter executors, pre-qualifies adapters before structured execution, and supports stronger regression profiles with stale-aware reruns, sanitized prompt-packet-derived probes, and frozen realistic fixtures. The remaining weakness is provider compliance over time: some CLIs can still drift or degrade on real prompts even after passing compact and realistic regression fixtures.
 
 4. Source identity is now modeled, but source governance is still shallow.
-   A run-level `sources.json` exists, source IDs must resolve, and source records now carry basic policy metadata and outcomes, but the system still does not enforce richer freshness thresholds, authority scoring, or topic-level conflict policy.
+   A run-level `sources.json` exists, source IDs must resolve, source records carry policy metadata, freshness now classifies dated sources as fresh or stale with warnings, and a standalone link checker can verify locator reachability after a run. The remaining gaps are per-job freshness thresholds (the window is currently a fixed default rather than read from `freshness.max_days`), authority scoring, semantic verification that a source actually supports the claim citing it, and topic-level conflict policy.
 
 5. Provenance-versus-evidence separation is only partially semantic.
    Structured stages now support typed support links, explicit claim dependencies, and source-class-aware derivation, but markdown-only extraction and some downstream compatibility paths still infer meaning from token shapes.

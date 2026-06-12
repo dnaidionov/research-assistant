@@ -21,7 +21,23 @@ source_policy:
 freshness:
   max_days: 365
 
+novelty:
+  # Consider solutions announced but not yet released when they could fit the goal.
+  include_announced: true
+  # How far back a release still counts as "recent" for the horizon-scan research pass.
+  horizon_months: 12
+
 workflow:
   preserve_disagreements: true
   require_judge_synthesis: true
   claim_extraction_required: true
+
+# Optional publication quality gates. Uncomment to enable.
+# quality_policy:
+#   one_sided_source_selection: true
+#   disfavored_recommendation_support: true
+#   evidence_quality_mismatch: true
+#   disagreement_collapse: true
+#   # Require recommendations to carry at least two distinct evidence sources,
+#   # or an explicit single_source_acknowledged note on the claim.
+#   single_source_recommendation: true

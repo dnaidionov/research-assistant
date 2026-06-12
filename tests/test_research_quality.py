@@ -130,6 +130,55 @@ class ResearchQualityTests(unittest.TestCase):
 
         self.assertTrue(any("disagreement" in error.lower() for error in errors))
 
+    def test_flags_single_source_recommendation_without_acknowledgment(self) -> None:
+        claim_register = {
+            "claims": [
+                {
+                    "id": "R-001",
+                    "text": "Recommend Option A.",
+                    "type": "recommendation",
+                    "evidence_sources": ["SRC-001"],
+                }
+            ]
+        }
+
+        errors = quality_gate_errors(claim_register, {}, {"single_source_recommendation": True})
+
+        self.assertTrue(any("single evidence source" in error for error in errors))
+
+    def test_accepts_single_source_recommendation_with_acknowledgment(self) -> None:
+        claim_register = {
+            "claims": [
+                {
+                    "id": "R-001",
+                    "text": "Recommend Option A.",
+                    "type": "recommendation",
+                    "evidence_sources": ["SRC-001"],
+                    "single_source_acknowledged": "Only one vendor benchmark exists for this configuration.",
+                }
+            ]
+        }
+
+        errors = quality_gate_errors(claim_register, {}, {"single_source_recommendation": True})
+
+        self.assertEqual(errors, [], errors)
+
+    def test_accepts_corroborated_recommendation(self) -> None:
+        claim_register = {
+            "claims": [
+                {
+                    "id": "R-001",
+                    "text": "Recommend Option A.",
+                    "type": "recommendation",
+                    "evidence_sources": ["SRC-001", "SRC-002"],
+                }
+            ]
+        }
+
+        errors = quality_gate_errors(claim_register, {}, {"single_source_recommendation": True})
+
+        self.assertEqual(errors, [], errors)
+
 
 if __name__ == "__main__":
     unittest.main()

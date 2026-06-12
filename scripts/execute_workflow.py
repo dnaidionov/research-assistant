@@ -13,7 +13,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -23,6 +23,19 @@ from _adapter_qualification import (
     persist_adapter_qualification,
     profile_for_required_trust,
     trust_satisfies,
+)
+from _cli_adapters import (
+    CLI_ADAPTERS,
+    CLIAdapter,
+    DEFAULT_ANTIGRAVITY_BIN,
+    DEFAULT_CLAUDE_BIN,
+    DEFAULT_CODEX_BIN,
+    DEFAULT_GEMINI_BIN,
+    DEFAULT_GEMINI_MODEL,
+    build_antigravity_command,
+    build_claude_command,
+    build_codex_command,
+    build_gemini_command,
 )
 from _job_config import load_execution_config, load_yaml_document
 from _provider_runtime import (
@@ -68,7 +81,7 @@ from _stage_validation import (
     validate_stage_markdown_contract,
     validate_structured_stage_artifact,
 )
-from _workflow_lib import write_json
+from _workflow_lib import sha256_file, write_json
 from _workflow_state import (
     append_workflow_event,
     derive_workflow_state_from_events,
@@ -78,11 +91,6 @@ from _repo_paths import load_repo_path_config, resolve_jobs_root
 from run_workflow import RUN_STAGES, resolve_job_path, scaffold_run
 
 
-DEFAULT_CODEX_BIN = "codex"
-DEFAULT_GEMINI_BIN = "gemini"
-DEFAULT_ANTIGRAVITY_BIN = "antigravity"
-DEFAULT_CLAUDE_BIN = "claude"
-DEFAULT_GEMINI_MODEL = "pro"
 STAGE_CLAIM_STAGE_IDS = {"research-a", "research-b", "critique-a-on-b", "critique-b-on-a", "judge"}
 INCREMENTAL_RUN_ID_PATTERN = re.compile(r"^run-(\d+)$")
 DEFAULT_REQUIRED_PROVIDER_TRUST = "structured_safe_smoke"
@@ -118,14 +126,6 @@ GREEN = "\x1b[32m"
 RED = "\x1b[31m"
 YELLOW = "\x1b[33m"
 RESET = "\x1b[0m"
-
-
-@dataclass(frozen=True)
-class CLIAdapter:
-    name: str
-    command_builder: Callable[[str, Path, str, str | None], list[str]]
-    stdout_materialization: set[str] = field(default_factory=set)
-    supports_model_selection: bool = False
 
 
 @dataclass(frozen=True)
@@ -221,53 +221,6 @@ class StageProcessController:
                     os.killpg(process.pid, signal.SIGKILL)
                 except (ProcessLookupError, PermissionError):
                     continue
-
-
-def build_codex_command(binary: str, job_dir: Path, prompt: str, model: str | None = None) -> list[str]:
-    return [binary, "exec", "--full-auto", "-C", str(job_dir), prompt]
-
-
-def build_gemini_command(binary: str, job_dir: Path, prompt: str, model: str | None = None) -> list[str]:
-    return [binary, "--model", model or DEFAULT_GEMINI_MODEL, "-p", prompt, "-y", "--output-format", "text"]
-
-
-def build_antigravity_command(binary: str, job_dir: Path, prompt: str, model: str | None = None) -> list[str]:
-    command = [binary, "chat", "--mode", "agent", "--yes"]
-    if model:
-        command.extend(["--model", model])
-    command.append(prompt)
-    return command
-
-
-def build_claude_command(binary: str, job_dir: Path, prompt: str, model: str | None = None) -> list[str]:
-    command = [binary]
-    if model:
-        command.extend(["--model", model])
-    command.extend(["-p", "--output-format", "text", "--permission-mode", "bypassPermissions", prompt])
-    return command
-
-
-CLI_ADAPTERS: dict[str, CLIAdapter] = {
-    "codex": CLIAdapter(name="codex", command_builder=build_codex_command),
-    "gemini": CLIAdapter(
-        name="gemini",
-        command_builder=build_gemini_command,
-        stdout_materialization={"markdown", "structured_json"},
-        supports_model_selection=True,
-    ),
-    "antigravity": CLIAdapter(
-        name="antigravity",
-        command_builder=build_antigravity_command,
-        stdout_materialization={"markdown", "structured_json"},
-        supports_model_selection=True,
-    ),
-    "claude": CLIAdapter(
-        name="claude",
-        command_builder=build_claude_command,
-        stdout_materialization={"markdown", "structured_json"},
-        supports_model_selection=True,
-    ),
-}
 
 
 class ProgressReporter:
@@ -892,6 +845,8 @@ def build_agent_prompt(stage: StageExecution, run_dir: Path) -> str:
             f"Use `{sources_path}` as the run-level source registry reference only. Do not modify that file directly.",
             "Do not leave placeholder content in the output file.",
             "Use upstream stage output artifacts when the prompt packet references them.",
+            "Do not read or use artifacts from other runs under `runs/`, and do not read the parallel research pass output; only this stage's declared upstream artifacts are admissible workflow inputs.",
+            "Do not modify the job brief, the job config, or any artifact other than this stage's declared outputs.",
             "Evidence is never obvious. Every fact and world-claim inference must carry explicit evidence support on that exact item; nearby citations do not count.",
         ]
     )
@@ -1014,6 +969,10 @@ def build_source_pass_prompt(stage: StageExecution, run_dir: Path, source_output
             "Required JSON shape:",
             '{"stage": "<stage-id>", "sources": [...]}',
             "Do not write claims, summaries, conclusions, or markdown in the authoritative JSON output for this substep.",
+            f"While researching, keep a working scratchpad at `{scratch_markdown_path}`: for each source you declare, record a short note with the key findings, figures, and quoted excerpts you extracted from it.",
+            "The scratchpad is the handoff to the claim pass, which runs without your memory of this pass; capture enough detail there that the claims can be written without re-fetching every source.",
+            "Do not read or use artifacts from other runs under `runs/`, and do not read the parallel research pass; gather your own evidence.",
+            "Do not modify the job brief, the job config, or any artifact other than this substep's declared outputs.",
             "Retain exact source locators. Evidence is never obvious.",
         ]
     )
@@ -1025,27 +984,43 @@ def build_claim_pass_prompt(
     source_output_path: Path,
     claim_output_path: Path,
     scratch_markdown_path: Path,
+    source_scratch_path: Path | None = None,
 ) -> str:
     packet_path = stage_packet_path(run_dir, stage.packet_name)
     sources_path = source_registry_path(run_dir)
-    return "\n".join(
+    lines = [
+        f"STAGE_ID={stage.stage_id}",
+        "SUBSTEP=claim-pass",
+        f"OUTPUT_PATH={scratch_markdown_path}",
+        f"OUTPUT_JSON_PATH={claim_output_path}",
+        f"SOURCE_PASS_PATH={source_output_path}",
+    ]
+    if source_scratch_path is not None:
+        lines.append(f"SOURCE_NOTES_PATH={source_scratch_path}")
+    lines.extend(
         [
-            f"STAGE_ID={stage.stage_id}",
-            "SUBSTEP=claim-pass",
-            f"OUTPUT_PATH={scratch_markdown_path}",
-            f"OUTPUT_JSON_PATH={claim_output_path}",
-            f"SOURCE_PASS_PATH={source_output_path}",
             f"SOURCE_REGISTRY_PATH={sources_path}",
             f"PROMPT_PACKET={packet_path}",
             "",
             f"Execute only the claim pass for workflow stage `{stage.stage_id}`.",
             f"Read the full stage instructions from `{packet_path}`.",
             f"Read the validated stage-local sources from `{source_output_path}` and use only those source IDs.",
+        ]
+    )
+    if source_scratch_path is not None:
+        lines.append(
+            f"Read the source pass research notes from `{source_scratch_path}` first; they contain the findings and excerpts already extracted from each source. Re-fetch a source only when the notes are insufficient for a claim."
+        )
+    lines.extend(
+        [
             f"Write JSON to `{claim_output_path}`.",
             "Return the structured claim payload for this stage without a sources list; the runner will attach validated sources separately.",
+            "Do not read or use artifacts from other runs under `runs/`, and do not read the parallel research pass.",
+            "Do not modify the job brief, the job config, or any artifact other than this substep's declared outputs.",
             "Evidence is never obvious. Every fact and world-claim inference must carry explicit evidence on that exact item; nearby citations do not count.",
         ]
     )
+    return "\n".join(lines)
 
 
 def build_substep_repair_prompt(
@@ -1833,7 +1808,14 @@ def run_structured_stage(
                 state,
                 lambda: transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "started"),
             )
-            claim_prompt = build_claim_pass_prompt(stage, run_dir, source_output_path, claim_output_path, claim_scratch_path)
+            claim_prompt = build_claim_pass_prompt(
+                stage,
+                run_dir,
+                source_output_path,
+                claim_output_path,
+                claim_scratch_path,
+                source_scratch_path=source_scratch_path if source_scratch_path.is_file() else None,
+            )
             try:
                 claim_result, _claim_payload, claim_repair_attempted, claim_repair_result, _ = execute_json_substep(
                     stage=stage,
@@ -2418,7 +2400,91 @@ def qualify_stage_adapters(
     return reports
 
 
+_MANIFEST_LOCK = threading.Lock()
+
+
+def protected_stage_paths(stage: StageExecution, run_dir: Path, job_dir: Path) -> list[Path]:
+    """Files a stage agent must not modify: job inputs and completed upstream artifacts."""
+    paths = [job_dir / "brief.md", job_dir / "config.yaml"]
+    stage_map = {str(candidate["id"]): candidate for candidate in RUN_STAGES}
+    entry = stage_map.get(stage.stage_id)
+    if entry is not None:
+        for dependency_stage_id in entry.get("depends_on", []):
+            dependency = stage_map[str(dependency_stage_id)]
+            paths.append(run_dir / "stage-outputs" / str(dependency["output"]))
+            if is_structured_stage(str(dependency_stage_id)):
+                paths.append(stage_structured_output_path(run_dir, str(dependency_stage_id)))
+    return [path for path in paths if path.is_file()]
+
+
+def snapshot_protected_files(paths: list[Path]) -> dict[Path, bytes]:
+    return {path: path.read_bytes() for path in paths}
+
+
+def restore_protected_files(run_dir: Path, stage_id: str, snapshot: dict[Path, bytes]) -> list[str]:
+    restored: list[str] = []
+    for path, content in snapshot.items():
+        try:
+            current = path.read_bytes() if path.is_file() else None
+        except OSError:
+            current = None
+        if current != content:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+            restored.append(str(path))
+    if restored:
+        append_workflow_event(run_dir, "protected_artifacts_restored", stage_id=stage_id, paths=restored)
+    return restored
+
+
+def refresh_run_manifest(run_dir: Path) -> None:
+    """Rebuild audit/manifest.json from the current run contents so the manifest reflects executed state, not just the scaffold."""
+    manifest_path = run_dir / "audit" / "manifest.json"
+    entries: list[dict[str, str]] = []
+    for path in sorted(run_dir.rglob("*")):
+        if not path.is_file() or path == manifest_path:
+            continue
+        try:
+            digest = sha256_file(path)
+        except OSError:
+            continue
+        entries.append({"path": str(path.relative_to(run_dir)), "sha256": digest})
+    with _MANIFEST_LOCK:
+        write_json(manifest_path, {"files": entries})
+
+
 def run_agent_stage(
+    stage: StageExecution,
+    run_dir: Path,
+    job_dir: Path,
+    state: dict[str, object],
+    state_path: Path,
+    state_lock: threading.RLock,
+    stage_assignments: dict[str, StageAdapterSelection],
+    adapter_bins: dict[str, str],
+    reporter: ProgressReporter,
+    process_controller: StageProcessController | None = None,
+) -> tuple[str, str]:
+    snapshot = snapshot_protected_files(protected_stage_paths(stage, run_dir, job_dir))
+    try:
+        return _execute_agent_stage(
+            stage,
+            run_dir,
+            job_dir,
+            state,
+            state_path,
+            state_lock,
+            stage_assignments,
+            adapter_bins,
+            reporter,
+            process_controller,
+        )
+    finally:
+        restore_protected_files(run_dir, stage.stage_id, snapshot)
+        refresh_run_manifest(run_dir)
+
+
+def _execute_agent_stage(
     stage: StageExecution,
     run_dir: Path,
     job_dir: Path,
@@ -3494,6 +3560,7 @@ def main() -> int:
             stage_assignments,
             adapter_bins,
         )
+        refresh_run_manifest(run_dir)
     except Exception as exc:
         print(str(exc), file=sys.stderr)
         return 1

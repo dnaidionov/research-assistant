@@ -52,6 +52,10 @@ def _usage_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
     reported_output_tokens = 0
     reported_total_tokens = 0
     reported_token_records = 0
+    estimated_input_tokens = 0
+    estimated_output_tokens = 0
+    estimated_total_tokens = 0
+    estimated_token_records = 0
 
     for record in records:
         usage_status = str(record.get("usage_status", "unavailable"))
@@ -70,6 +74,11 @@ def _usage_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
             reported_output_tokens += int(record["output_tokens"])
         if record.get("total_tokens") is not None:
             reported_total_tokens += int(record["total_tokens"])
+        if any(record.get(key) is not None for key in ("estimated_input_tokens", "estimated_output_tokens", "estimated_total_tokens")):
+            estimated_token_records += 1
+            estimated_input_tokens += int(record.get("estimated_input_tokens") or 0)
+            estimated_output_tokens += int(record.get("estimated_output_tokens") or 0)
+            estimated_total_tokens += int(record.get("estimated_total_tokens") or 0)
 
     return {
         "records": len(records),
@@ -84,6 +93,10 @@ def _usage_totals(records: list[dict[str, Any]]) -> dict[str, Any]:
         "input_tokens": reported_input_tokens if reported_token_records else None,
         "output_tokens": reported_output_tokens if reported_token_records else None,
         "total_tokens": reported_total_tokens if reported_token_records else None,
+        "estimated_token_records": estimated_token_records,
+        "estimated_input_tokens": estimated_input_tokens if estimated_token_records else None,
+        "estimated_output_tokens": estimated_output_tokens if estimated_token_records else None,
+        "estimated_total_tokens": estimated_total_tokens if estimated_token_records else None,
         "statuses": dict(status_counts),
     }
 
@@ -206,6 +219,20 @@ def build_usage_record(
     final_model = model or extract_reported_model_name(stdout, stderr)
     prompt_bytes = len((prompt_text or "").encode("utf-8"))
     prompt_chars = len(prompt_text or "")
+    stdout_byte_count = len(stdout.encode("utf-8"))
+    has_reported_tokens = any(
+        value is not None for value in (final_input_tokens, final_output_tokens, final_total_tokens)
+    )
+    estimated_input_tokens: int | None = None
+    estimated_output_tokens: int | None = None
+    estimated_total_tokens: int | None = None
+    if not has_reported_tokens and (prompt_bytes or stdout_byte_count):
+        # Rough bytes/4 heuristic so cost stays observable when a CLI exposes no usage data.
+        estimated_input_tokens = prompt_bytes // 4 if prompt_bytes else None
+        estimated_output_tokens = stdout_byte_count // 4 if stdout_byte_count else None
+        estimated_total_tokens = (estimated_input_tokens or 0) + (estimated_output_tokens or 0) or None
+        if final_usage_status == "unavailable":
+            final_usage_status = "estimated"
     return {
         "scope": scope,
         "stage_id": stage_id,
@@ -227,9 +254,9 @@ def build_usage_record(
         "input_tokens": final_input_tokens,
         "output_tokens": final_output_tokens,
         "total_tokens": final_total_tokens,
-        "estimated_input_tokens": None,
-        "estimated_output_tokens": None,
-        "estimated_total_tokens": None,
+        "estimated_input_tokens": estimated_input_tokens,
+        "estimated_output_tokens": estimated_output_tokens,
+        "estimated_total_tokens": estimated_total_tokens,
         "attempt_index": attempt_index,
         "failure_reason": failure_reason,
     }

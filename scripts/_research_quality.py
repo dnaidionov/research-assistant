@@ -31,6 +31,24 @@ def quality_gate_errors(
         if len(evidence_sources) <= 1 and evidence_sources:
             errors.append("Quality gate failed: research relies on a one-sided source base.")
 
+    if policy.get("single_source_recommendation"):
+        for claim in claims:
+            if str(claim.get("type") or "") != "recommendation":
+                continue
+            evidence_source_ids = {
+                source_id for source_id in claim.get("evidence_sources", []) if isinstance(source_id, str)
+            }
+            if len(evidence_source_ids) == 1:
+                acknowledgment = claim.get("single_source_acknowledged")
+                acknowledged = acknowledgment is True or (
+                    isinstance(acknowledgment, str) and acknowledgment.strip()
+                )
+                if not acknowledged:
+                    errors.append(
+                        f"Quality gate failed: recommendation {claim.get('id', '<unknown>')} rests on a single evidence source "
+                        "without an explicit single-source acknowledgment; corroborate it or acknowledge the limitation."
+                    )
+
     if policy.get("disfavored_recommendation_support"):
         for claim in claims:
             if str(claim.get("type") or "") != "recommendation":

@@ -23,6 +23,7 @@ Synthesize research pass A, research pass B, and both critiques into a judge rep
 - Keep a traceable path from synthesis back to the research passes and critiques.
 - Where evidence is mixed, preserve the disagreement instead of pretending the stronger narrative won by default.
 - If neither side is adequately supported, say so directly.
+- When adjudicating candidate options, weigh maturity explicitly: an announced or unreleased option may be recommended only with its availability risk stated inline, and an established option preferred purely for maturity should say so rather than implying the newer option was inferior on the merits.
 
 ## Output Contract
 

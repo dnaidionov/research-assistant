@@ -54,6 +54,45 @@ class RunWorkflowTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmpdir.cleanup()
 
+    def test_research_packets_carry_asymmetric_mandates_and_candidate_rules(self) -> None:
+        result = subprocess.run(
+            [
+                "python3",
+                str(RUN_WORKFLOW),
+                "--job-path",
+                str(self.job_dir),
+                "--run-id",
+                "run-mandates",
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        packets_dir = self.job_dir / "runs" / "run-mandates" / "prompt-packets"
+        packet_a = (packets_dir / "02-research-a.md").read_text(encoding="utf-8")
+        packet_b = (packets_dir / "03-research-b.md").read_text(encoding="utf-8")
+
+        self.assertIn("established, proven solutions", packet_a)
+        self.assertIn("solution horizon", packet_b)
+        self.assertIn("announced but unreleased", packet_b)
+        self.assertNotEqual(packet_a, packet_b)
+        for packet in (packet_a, packet_b):
+            self.assertIn("## Candidate Coverage Rules", packet)
+            self.assertIn("# Candidate Landscape", packet)
+            self.assertIn("announced_unreleased", packet)
+            self.assertIn("Do not read or use the parallel research pass output", packet)
+            self.assertIn("artifacts from other runs", packet)
+
+        critique_packet = (packets_dir / "04-critique-a-on-b.md").read_text(encoding="utf-8")
+        self.assertIn("recently released solutions", critique_packet)
+        self.assertIn("credibly announced but unreleased", critique_packet)
+
+        judge_packet = (packets_dir / "06-judge.md").read_text(encoding="utf-8")
+        self.assertIn("availability risk", judge_packet)
+
     def test_creates_full_run_scaffold_and_audit_files(self) -> None:
         result = subprocess.run(
             [
