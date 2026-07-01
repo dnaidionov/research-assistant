@@ -8,7 +8,15 @@ requirements:
   # When true, research facts/inferences citing external evidence must carry a
   # quoted excerpt on an evidence support link (validation error instead of warning).
   # require_evidence_excerpts: true
+  # When true, a judge output that leaves any critique disagreement id (DIS-###)
+  # unaddressed fails validation instead of warning.
+  # require_disagreement_coverage: true
 
+# Enforced during validation and publication: entries are matched (case-insensitive)
+# against each source's type and authority. "disallowed" matches block claims that
+# cite the source at publication; "allowed_with_caution" matches carry warnings;
+# "preferred" matches are annotated. Matches only ever escalate the intrinsic
+# policy outcome, never relax it.
 source_policy:
   preferred:
     - official documentation

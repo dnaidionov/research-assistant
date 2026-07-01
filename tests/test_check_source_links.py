@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 import unittest
@@ -6,7 +7,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from check_source_links import check_registry  # noqa: E402
+from check_source_links import (  # noqa: E402
+    check_registry,
+    collect_evidence_excerpts,
+    match_excerpt,
+    verify_excerpts,
+)
 
 
 def fake_fetcher(reachable_urls: set[str]):
@@ -92,6 +98,154 @@ class CheckSourceLinksTests(unittest.TestCase):
             statuses = {result["id"]: result["status"] for result in report["results"]}
             self.assertEqual(statuses["SRC-URI"], "ok")
             self.assertEqual(statuses["SRC-URI-GONE"], "broken")
+
+
+DOCUMENT = """<html><head><style>body { color: red; }</style></head>
+<body><h1>Product Spec</h1>
+<p>The X100 module draws 2.5 watts under sustained load and supports
+PCIe Gen4 with a maximum throughput of 8 GB/s in both directions.</p>
+</body></html>"""
+
+
+def fake_content_fetcher(documents: dict[str, str]):
+    def fetch(url: str, timeout: float) -> tuple[str | None, str]:
+        if url in documents:
+            return documents[url], "fetched"
+        return None, "fetch failed: 404"
+
+    return fetch
+
+
+class ExcerptVerificationTests(unittest.TestCase):
+    def registry(self) -> dict[str, object]:
+        return {
+            "sources": [
+                {
+                    "id": "SRC-001",
+                    "source_class": "external_evidence",
+                    "locator": "https://example.com/spec",
+                }
+            ]
+        }
+
+    def excerpt_entry(self, excerpt: str) -> dict[str, str]:
+        return {"stage": "research-a", "claim_id": "F-001", "source_id": "SRC-001", "excerpt": excerpt}
+
+    def test_quoted_excerpt_is_verified_through_html(self) -> None:
+        report = verify_excerpts(
+            [self.excerpt_entry("The X100 module draws 2.5 watts under sustained load")],
+            self.registry(),
+            content_fetcher=fake_content_fetcher({"https://example.com/spec": DOCUMENT}),
+        )
+        self.assertEqual(report["results"][0]["status"], "verified")
+
+    def test_trimmed_excerpt_scores_partial(self) -> None:
+        report = verify_excerpts(
+            [
+                self.excerpt_entry(
+                    "the X100 module draws 2.5 watts under sustained load and supports PCIe Gen5 rails"
+                )
+            ],
+            self.registry(),
+            content_fetcher=fake_content_fetcher({"https://example.com/spec": DOCUMENT}),
+        )
+        self.assertEqual(report["results"][0]["status"], "partial")
+
+    def test_invented_excerpt_is_not_found(self) -> None:
+        report = verify_excerpts(
+            [self.excerpt_entry("The X100 module includes a dedicated neural accelerator rated at 40 TOPS")],
+            self.registry(),
+            content_fetcher=fake_content_fetcher({"https://example.com/spec": DOCUMENT}),
+        )
+        self.assertEqual(report["results"][0]["status"], "not_found")
+        self.assertIn("research-a:F-001", report["summary"]["not_found_claims"])
+
+    def test_unfetchable_and_unresolved_sources_are_reported(self) -> None:
+        report = verify_excerpts(
+            [
+                self.excerpt_entry("Any excerpt text at all for this claim body"),
+                {"stage": "research-b", "claim_id": "F-002", "source_id": "SRC-GHOST", "excerpt": "Quoted."},
+            ],
+            self.registry(),
+            content_fetcher=fake_content_fetcher({}),
+        )
+        statuses = [result["status"] for result in report["results"]]
+        self.assertEqual(statuses, ["unfetchable", "unresolved_source"])
+
+    def test_collect_evidence_excerpts_reads_research_stage_links(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir)
+            stage_dir = run_dir / "stage-outputs"
+            stage_dir.mkdir()
+            (stage_dir / "02-research-a.json").write_text(
+                json.dumps(
+                    {
+                        "stage": "research-a",
+                        "facts": [
+                            {
+                                "id": "F-001",
+                                "text": "Fact.",
+                                "evidence_sources": ["SRC-001"],
+                                "support_links": [
+                                    {"source_id": "SRC-001", "role": "evidence", "excerpt": "Quoted line."},
+                                    {"source_id": "SRC-002", "role": "context", "excerpt": "Context, ignored."},
+                                ],
+                            }
+                        ],
+                        "inferences": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (stage_dir / "06-judge.json").write_text(json.dumps({"stage": "judge"}), encoding="utf-8")
+
+            excerpts = collect_evidence_excerpts(run_dir)
+
+        self.assertEqual(len(excerpts), 1)
+        self.assertEqual(excerpts[0]["source_id"], "SRC-001")
+        self.assertEqual(excerpts[0]["excerpt"], "Quoted line.")
+
+    def test_pdf_content_is_unfetchable_not_false_negative(self) -> None:
+        registry = {
+            "sources": [
+                {
+                    "id": "SRC-001",
+                    "source_class": "external_evidence",
+                    "locator": "https://example.com/paper.pdf?download=1",
+                },
+                {
+                    "id": "SRC-002",
+                    "source_class": "external_evidence",
+                    "locator": "https://example.com/paper",
+                },
+            ]
+        }
+        entries = [
+            self.excerpt_entry("Some quoted sentence from the PDF body text here."),
+            {
+                "stage": "research-a",
+                "claim_id": "F-002",
+                "source_id": "SRC-002",
+                "excerpt": "Another quoted sentence from a PDF served without extension.",
+            },
+        ]
+        entries[0]["source_id"] = "SRC-001"
+        report = verify_excerpts(
+            entries,
+            registry,
+            content_fetcher=fake_content_fetcher({"https://example.com/paper": "%PDF-1.7 \x00\x00 binary"}),
+        )
+        statuses = [result["status"] for result in report["results"]]
+        self.assertEqual(statuses, ["unfetchable", "unfetchable"])
+        self.assertNotIn("not_found", statuses)
+
+    def test_match_excerpt_normalizes_curly_quotes_and_whitespace(self) -> None:
+        status, score = match_excerpt(
+            "It supports “sustained load” operation.",
+            'it supports "sustained   load" operation.',
+        )
+        self.assertEqual(status, "verified")
+        self.assertEqual(score, 1.0)
 
 
 if __name__ == "__main__":

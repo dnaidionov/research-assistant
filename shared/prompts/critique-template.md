@@ -75,6 +75,7 @@ Return markdown using exactly these top-level sections in this order:
 
 - Preserve disagreements that cannot be resolved from the available evidence.
 - Do not force convergence.
+- Give every disagreement a stable id and start the item with it: `DIS-AB-001`, `DIS-AB-002`, ... when this stage is `critique-a-on-b`, or `DIS-BA-001`, ... when it is `critique-b-on-a`. The judge is required to address each id.
 
 #### `# Overall Critique Summary`
 
@@ -99,6 +100,7 @@ Rules:
 
 - `stage` must equal `{stage_id}`.
 - `supported_claims`, `unsupported_claims`, `weak_source_issues`, `omissions`, `overreach`, and `unresolved_disagreements` must be structured lists.
+- Every `unresolved_disagreements` item must be an object with `id` and `text`, where `id` matches the section's `DIS-` id for that disagreement. Missing or malformed ids are assigned positionally by the runner.
 - `unsupported_claims` should preserve the challenged claim, why support is inadequate, and what evidence would be needed where possible.
 - When a critique item cites support, add `support_links` as a typed list of `{{ "source_id", "role" }}` objects where possible.
 - If a critique item depends on earlier local claim IDs, record those under `claim_dependencies` instead of placing them in `support_links.source_id`.

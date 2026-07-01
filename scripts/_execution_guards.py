@@ -10,12 +10,18 @@ versions a run was scaffolded against.
 
 from __future__ import annotations
 
+import json
 import sys
 import threading
 from pathlib import Path
 
 from _execution_plan import StageExecution
-from _stage_contracts import is_structured_stage, stage_structured_output_path
+from _stage_contracts import (
+    is_structured_stage,
+    merge_source_registry,
+    persist_source_registry,
+    stage_structured_output_path,
+)
 from _workflow_lib import sha256_file, write_json
 from _workflow_state import append_workflow_event
 from run_workflow import RUN_STAGES
@@ -54,6 +60,69 @@ def ensure_job_input_snapshot(run_dir: Path, job_dir: Path) -> None:
 
 
 _MANIFEST_LOCK = threading.Lock()
+
+# Tracks the last runner-legitimate content of each run's sources.json so that
+# reverting an agent's unauthorized edit cannot wipe a sibling stage's merge
+# that landed while this stage was still executing. Process-wide state: safe
+# for the per-invocation CLI processes and the threaded stage groups they run;
+# a long-lived multi-run host would need per-run scoping instead.
+_SOURCE_REGISTRY_LOCK = threading.Lock()
+_TRACKED_SOURCE_REGISTRY: dict[Path, str] = {}
+
+
+def register_source_registry_baseline(source_path: Path) -> None:
+    """Record the on-disk registry as runner-legitimate if not yet tracked.
+
+    Called at stage start, before the stage agent launches; the first caller in
+    a stage group wins, so agent writes can never become the baseline.
+    """
+    with _SOURCE_REGISTRY_LOCK:
+        key = source_path.resolve()
+        if key not in _TRACKED_SOURCE_REGISTRY and source_path.is_file():
+            _TRACKED_SOURCE_REGISTRY[key] = source_path.read_text(encoding="utf-8")
+
+
+def merge_sources_into_tracked_registry(source_path: Path, new_sources: list[dict[str, object]]) -> None:
+    """Runner-side merge: apply new sources on top of the last legitimate
+    registry content — never on top of possibly agent-tampered disk state —
+    and bless the result as the new baseline."""
+    with _SOURCE_REGISTRY_LOCK:
+        key = source_path.resolve()
+        tracked = _TRACKED_SOURCE_REGISTRY.get(key)
+        if tracked is not None:
+            base = json.loads(tracked)
+        elif source_path.is_file():
+            base = json.loads(source_path.read_text(encoding="utf-8"))
+        else:
+            base = {"sources": []}
+        merged = merge_source_registry(base, new_sources)
+        persist_source_registry(source_path, merged)
+        _TRACKED_SOURCE_REGISTRY[key] = source_path.read_text(encoding="utf-8")
+
+
+def revert_unauthorized_source_registry_edits(source_path: Path) -> bool:
+    """Restore sources.json to the last runner-legitimate content if it differs.
+
+    Returns True when an unauthorized edit was reverted. Restoring to the
+    tracked content (not a stage-start snapshot) preserves sibling stages'
+    merges that completed while this stage was running.
+    """
+    with _SOURCE_REGISTRY_LOCK:
+        key = source_path.resolve()
+        tracked = _TRACKED_SOURCE_REGISTRY.get(key)
+        if tracked is None:
+            return False
+        current = source_path.read_text(encoding="utf-8") if source_path.is_file() else None
+        if current == tracked:
+            return False
+        source_path.write_text(tracked, encoding="utf-8")
+        return True
+
+
+def reset_source_registry_tracking() -> None:
+    """Clear tracked registry baselines (test isolation / multi-run hosts)."""
+    with _SOURCE_REGISTRY_LOCK:
+        _TRACKED_SOURCE_REGISTRY.clear()
 
 
 def protected_stage_paths(stage: StageExecution, run_dir: Path, job_dir: Path) -> list[Path]:

@@ -62,6 +62,7 @@ Return markdown using exactly these top-level sections in this order:
 
 - List disagreements that remain open because evidence is mixed, incomplete, ambiguous, or contested.
 - Treat this section as adjudication, not as a place to invent new uncited facts.
+- Address every disagreement id (`DIS-AB-###`, `DIS-BA-###`) raised in the critiques' Unresolved Disagreements For Judge sections: either resolve it with evidence in your conclusions or rationale, citing the id explicitly, or carry it into this section with its id. Ids you never mention are flagged by validation.
 - For each disagreement, state:
   - the disputed point
   - the strongest case on each side

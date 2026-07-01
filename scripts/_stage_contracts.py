@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from copy import deepcopy
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -285,8 +286,25 @@ def normalize_source_record(source: dict[str, object]) -> dict[str, object]:
     support_flags = _infer_support_flags(normalized)
     normalized.setdefault("supports_world_claims", support_flags["supports_world_claims"])
     normalized.setdefault("supports_process_claims", support_flags["supports_process_claims"])
-    normalized.setdefault("policy_outcome", _infer_policy_outcome(normalized))
-    normalized.setdefault("policy_notes", _infer_policy_notes(normalized))
+    policy_outcome = _infer_policy_outcome(normalized)
+    policy_notes = _infer_policy_notes(normalized)
+    classification = _job_policy_classification(normalized)
+    if classification is not None:
+        list_name, matched_entry, list_outcome = classification
+        normalized.setdefault("source_policy_list", list_name)
+        if _POLICY_SEVERITY.get(list_outcome, 0) > _POLICY_SEVERITY.get(policy_outcome, 0):
+            policy_outcome = list_outcome
+        note = _job_policy_note(list_name, matched_entry)
+        if note not in policy_notes:
+            policy_notes.append(note)
+        if normalized.get("authority_tier") == "unknown":
+            normalized["authority_tier"] = {
+                "preferred": "policy_preferred",
+                "allowed_with_caution": "policy_caution",
+                "disallowed": "policy_disallowed",
+            }[list_name]
+    normalized["policy_outcome"] = policy_outcome
+    normalized["policy_notes"] = policy_notes
     return normalized
 
 
@@ -344,13 +362,105 @@ def configure_freshness_max_days(days: object) -> None:
     try:
         value = int(days)
     except (TypeError, ValueError):
+        print(
+            f"Warning: ignoring invalid freshness.max_days value {days!r}; keeping {_active_freshness_max_days} days.",
+            file=sys.stderr,
+        )
         return
     if value > 0:
         _active_freshness_max_days = value
+    else:
+        print(
+            f"Warning: ignoring non-positive freshness.max_days value {days!r}; keeping {_active_freshness_max_days} days.",
+            file=sys.stderr,
+        )
 
 
 def active_freshness_max_days() -> int:
     return _active_freshness_max_days
+
+
+# Job-level source policy lists (source_policy in config.yaml). Like the
+# freshness window, this is process-wide state configured per invocation.
+# List matches can only escalate the intrinsic policy outcome, never relax it.
+_POLICY_SEVERITY = {"allowed": 0, "allowed_with_warning": 1, "disfavored": 2, "blocked": 3}
+_SOURCE_POLICY_LIST_OUTCOMES: tuple[tuple[str, str], ...] = (
+    ("disallowed", "blocked"),
+    ("allowed_with_caution", "allowed_with_warning"),
+    ("preferred", "allowed"),
+)
+_active_source_policy: dict[str, tuple[str, ...]] = {}
+
+
+def configure_source_policy(policy: object) -> None:
+    """Set the process-wide job source policy lists, typically from config.yaml's source_policy."""
+    global _active_source_policy
+    parsed: dict[str, tuple[str, ...]] = {}
+    if isinstance(policy, dict):
+        for list_name, _outcome in _SOURCE_POLICY_LIST_OUTCOMES:
+            entries = policy.get(list_name)
+            if isinstance(entries, list):
+                cleaned = tuple(str(entry).strip().lower() for entry in entries if str(entry).strip())
+                if cleaned:
+                    parsed[list_name] = cleaned
+    _active_source_policy = parsed
+
+
+def active_source_policy() -> dict[str, tuple[str, ...]]:
+    return dict(_active_source_policy)
+
+
+def _policy_match_tokens(text: str) -> set[str]:
+    """Lowercased word tokens with naive singularization, so 'academic papers' matches 'academic paper'."""
+    tokens = set()
+    for token in re.findall(r"[a-z0-9]+", text.lower()):
+        tokens.add(token[:-1] if len(token) > 3 and token.endswith("s") else token)
+    return tokens
+
+
+def _policy_list_match(source: dict[str, object], entries: tuple[str, ...]) -> str | None:
+    """Match when every word of a policy entry appears in the source's descriptors.
+
+    Direction matters: the entry's qualifiers must all be present, so a source
+    typed 'forum post' does not match a policy entry 'uncited forum posts' —
+    the operator disallowed uncited forum posts, not all forum posts.
+    """
+    source_type = str(source.get("type") or "").strip()
+    authority = str(source.get("authority") or "").strip()
+    field_tokens = [
+        _policy_match_tokens(source_type),
+        _policy_match_tokens(authority),
+        _policy_match_tokens(f"{source_type} {authority}"),
+    ]
+    for entry in entries:
+        entry_tokens = _policy_match_tokens(entry)
+        if not entry_tokens:
+            continue
+        for tokens in field_tokens:
+            if tokens and entry_tokens <= tokens:
+                return entry
+    return None
+
+
+def _job_policy_classification(source: dict[str, object]) -> tuple[str, str, str] | None:
+    """Return (list_name, matched_entry, outcome) for the most severe matching policy list."""
+    if str(source.get("source_class") or "") != "external_evidence":
+        return None
+    for list_name, outcome in _SOURCE_POLICY_LIST_OUTCOMES:
+        entries = _active_source_policy.get(list_name)
+        if entries:
+            matched = _policy_list_match(source, entries)
+            if matched is not None:
+                return list_name, matched, outcome
+    return None
+
+
+def _job_policy_note(list_name: str, matched_entry: str) -> str:
+    if list_name == "disallowed":
+        return f"Job source policy disallows this source type ({matched_entry})."
+    if list_name == "allowed_with_caution":
+        return f"Job source policy allows this source type only with caution ({matched_entry})."
+    return f"Job source policy prefers this source type ({matched_entry})."
 
 
 def _parse_publication_date(raw: str) -> date | None:
@@ -495,6 +605,15 @@ def source_quality_warnings(payload: dict[str, object]) -> list[str]:
         if source_class == "external_evidence" and str(normalized_source.get("freshness_status") or "") == "stale":
             warnings.append(
                 f"sources[{position}] ({source_id or 'unknown id'}) is stale per the freshness policy; corroborate with fresher evidence where the claim is load-bearing."
+            )
+        source_policy_list = str(normalized_source.get("source_policy_list") or "")
+        if source_policy_list == "disallowed":
+            warnings.append(
+                f"sources[{position}] ({source_id or 'unknown id'}) matches the job's disallowed source policy list; claims citing it will be blocked at publication."
+            )
+        elif source_policy_list == "allowed_with_caution":
+            warnings.append(
+                f"sources[{position}] ({source_id or 'unknown id'}) matches the job's allowed-with-caution source policy list; corroborate load-bearing claims with preferred sources."
             )
     return warnings
 
@@ -862,8 +981,58 @@ def build_stage_json_from_markdown(stage_id: str, markdown: str) -> dict[str, ob
     raise KeyError(f"Stage {stage_id} does not have a structured contract.")
 
 
+DISAGREEMENT_ID_PATTERN = re.compile(r"^DIS-[A-Z]{2}-\d{3}$")
+_EMBEDDED_DISAGREEMENT_ID_PATTERN = re.compile(r"^(DIS-[A-Z]{2}-\d{3})\s*[:\-–]\s*(.+)$")
+DISAGREEMENT_STAGE_PREFIXES = {"critique-a-on-b": "AB", "critique-b-on-a": "BA"}
+
+
+def assign_disagreement_ids(stage_id: str, items: object) -> list[dict[str, object]]:
+    """Give every critique unresolved-disagreement entry a stable DIS-### id.
+
+    Agent-provided ids matching the canonical pattern are kept (first use wins);
+    ids embedded at the start of the text are lifted into the id field;
+    everything else gets a deterministic positional id. The persisted critique
+    JSON therefore always carries ids the judge can be held to.
+    """
+    prefix = DISAGREEMENT_STAGE_PREFIXES.get(stage_id)
+    if prefix is None or not isinstance(items, list):
+        return items if isinstance(items, list) else []
+    stage_id_prefix = f"DIS-{prefix}-"
+    normalized_items: list[dict[str, object]] = []
+    used: set[str] = set()
+    for item in items:
+        entry = dict(item) if isinstance(item, dict) else {"text": str(item).strip()}
+        text = str(entry.get("text") or "").strip()
+        candidate = str(entry.get("id") or "").strip()
+        if not DISAGREEMENT_ID_PATTERN.match(candidate):
+            embedded = _EMBEDDED_DISAGREEMENT_ID_PATTERN.match(text)
+            if embedded:
+                candidate = embedded.group(1)
+                entry["text"] = embedded.group(2).strip()
+            else:
+                candidate = ""
+        if candidate and not candidate.startswith(stage_id_prefix):
+            # A wrong-prefix id would collide with the sibling critique's
+            # namespace in the run register; reassign positionally.
+            candidate = ""
+        if not candidate or candidate in used:
+            position = len(normalized_items) + 1
+            candidate = f"DIS-{prefix}-{position:03d}"
+            while candidate in used:
+                position += 1
+                candidate = f"DIS-{prefix}-{position:03d}"
+        entry["id"] = candidate
+        used.add(candidate)
+        normalized_items.append(entry)
+    return normalized_items
+
+
 def normalize_stage_citations(stage_id: str, payload: dict[str, object]) -> dict[str, object]:
     normalized = deepcopy(payload)
+    if stage_id in DISAGREEMENT_STAGE_PREFIXES:
+        normalized["unresolved_disagreements"] = assign_disagreement_ids(
+            stage_id, normalized.get("unresolved_disagreements")
+        )
     supporting_sections = []
     if stage_id in {"research-a", "research-b"}:
         supporting_sections = ["facts"]
@@ -946,6 +1115,19 @@ def normalize_stage_citations(stage_id: str, payload: dict[str, object]) -> dict
 
 def _format_evidence_sources(sources: list[str]) -> str:
     return f" [{', '.join(sources)}]" if sources else ""
+
+
+def _disagreement_entry_lines(items: object) -> list[str]:
+    if not isinstance(items, list):
+        return _entry_lines(items)
+    lines: list[str] = []
+    for item in items:
+        text = _entry_text(item)
+        suffix = _format_evidence_sources(_entry_sources(item))
+        dis_id = str(item.get("id") or "").strip() if isinstance(item, dict) else ""
+        prefix = f"{dis_id}: " if DISAGREEMENT_ID_PATTERN.match(dis_id) else ""
+        lines.append(f"- {prefix}{text}{suffix}".rstrip())
+    return lines
 
 
 def _entry_lines(items: object) -> list[str]:
@@ -1139,7 +1321,7 @@ def render_stage_markdown_from_json(stage_id: str, payload: dict[str, object]) -
         lines.extend(["", "# Overreach And Overconfident Inference", ""])
         lines.extend(_entry_lines(payload.get("overreach")))
         lines.extend(["", "# Unresolved Disagreements For Judge", ""])
-        lines.extend(_entry_lines(payload.get("unresolved_disagreements")))
+        lines.extend(_disagreement_entry_lines(payload.get("unresolved_disagreements")))
         lines.extend(["", "# Overall Critique Summary", ""])
         lines.extend(_critique_summary_lines(payload.get("summary")))
         return "\n".join(lines).rstrip() + "\n"

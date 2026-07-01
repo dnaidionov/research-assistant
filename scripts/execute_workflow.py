@@ -40,9 +40,12 @@ from _cli_adapters import (
 from _execution_guards import (
     ensure_job_input_snapshot,
     final_report_protected_paths,
+    merge_sources_into_tracked_registry,
     protected_stage_paths,
     refresh_run_manifest,
+    register_source_registry_baseline,
     restore_protected_files,
+    revert_unauthorized_source_registry_edits,
     snapshot_protected_files,
 )
 from _execution_plan import (
@@ -87,6 +90,7 @@ from _job_config import (
     load_execution_config,
     load_freshness_max_days,
     load_requirement_flag,
+    load_source_policy,
     load_yaml_document,
 )
 from _provider_runtime import (
@@ -95,14 +99,15 @@ from _provider_runtime import (
     record_provider_repair_attempt,
     record_provider_stage_result,
 )
+from _disagreement_register import apply_judge_dispositions, merge_stage_disagreements
 from _stage_contracts import (
+    DISAGREEMENT_STAGE_PREFIXES,
     build_claim_map_from_stage_json,
     configure_freshness_max_days,
+    configure_source_policy,
     is_structured_stage,
     load_json as load_contract_json,
     merge_stage_substep_payloads,
-    merge_source_registry,
-    persist_source_registry,
     render_stage_markdown_from_json,
     sanitize_claim_pass_payload,
     source_registry_path,
@@ -130,6 +135,7 @@ from _usage_telemetry import (
     utc_now_iso,
 )
 from _stage_validation import (
+    configure_disagreement_coverage_requirement,
     configure_excerpt_requirement,
     validate_stage_markdown_contract,
     validate_structured_stage_artifact,
@@ -350,9 +356,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def apply_job_validation_policies(job_dir: Path) -> None:
-    """Configure process-wide validation policy from the job config: freshness window and excerpt strictness."""
+    """Configure process-wide validation policy from the job config: freshness window, source policy lists, and excerpt strictness."""
     configure_freshness_max_days(load_freshness_max_days(job_dir))
+    configure_source_policy(load_source_policy(job_dir))
     configure_excerpt_requirement(load_requirement_flag(job_dir, "require_evidence_excerpts"))
+    configure_disagreement_coverage_requirement(load_requirement_flag(job_dir, "require_disagreement_coverage"))
 
 
 def next_incremental_run_id(job_dir: Path) -> str:
@@ -474,19 +482,17 @@ def dependency_structured_payloads(stage_id: str, run_dir: Path) -> list[dict[st
 
 
 def merge_stage_sources_into_registry(stage_id: str, run_dir: Path) -> None:
-    source_path = source_registry_path(run_dir)
-    source_registry = load_contract_json(source_path)
     payload = load_contract_json(stage_structured_output_path(run_dir, stage_id))
-    merged = merge_source_registry(source_registry, list(payload.get("sources", [])))
-    persist_source_registry(source_path, merged)
+    merge_sources_into_tracked_registry(source_registry_path(run_dir), list(payload.get("sources", [])))
+    if stage_id in DISAGREEMENT_STAGE_PREFIXES:
+        merge_stage_disagreements(run_dir, stage_id, payload)
+    elif stage_id == "judge":
+        apply_judge_dispositions(run_dir, payload)
 
 
 def merge_intake_sources_into_registry(run_dir: Path) -> None:
-    source_path = source_registry_path(run_dir)
-    source_registry = load_contract_json(source_path)
     intake_payload = load_contract_json(stage_output_path(run_dir, "01-intake.json"))
-    merged = merge_source_registry(source_registry, list(intake_payload.get("sources", [])))
-    persist_source_registry(source_path, merged)
+    merge_sources_into_tracked_registry(source_registry_path(run_dir), list(intake_payload.get("sources", [])))
 
 
 def append_command_usage_record(
@@ -1221,7 +1227,10 @@ def run_structured_stage(
     source_scratch_path = stage_substep_markdown_path(run_dir, stage.stage_id, "source-pass")
     claim_scratch_path = stage_substep_markdown_path(run_dir, stage.stage_id, "claim-pass")
     source_registry_file = source_registry_path(run_dir)
+    # The snapshot feeds validation with the stage-start registry view; reverts
+    # go through the tracked baseline so sibling merges are preserved.
     source_registry_snapshot = source_registry_file.read_text(encoding="utf-8") if source_registry_file.is_file() else json.dumps({"sources": []})
+    register_source_registry_baseline(source_registry_file)
     source_registry_restored = False
 
     source_prompt = build_source_pass_prompt(stage, run_dir, source_output_path, source_scratch_path)
@@ -1243,8 +1252,7 @@ def run_structured_stage(
 
     def restore_source_registry() -> None:
         nonlocal source_registry_restored
-        if source_registry_file.is_file() and source_registry_file.read_text(encoding="utf-8") != source_registry_snapshot:
-            source_registry_file.write_text(source_registry_snapshot, encoding="utf-8")
+        if revert_unauthorized_source_registry_edits(source_registry_file):
             source_registry_restored = True
 
     def try_resume_source_pass() -> tuple[bool, dict[str, object] | None]:
@@ -2046,6 +2054,8 @@ def _execute_agent_stage(
     source_registry_snapshot = (
         source_registry_file.read_text(encoding="utf-8") if source_registry_file is not None and source_registry_file.is_file() else None
     )
+    if source_registry_file is not None:
+        register_source_registry_baseline(source_registry_file)
     log_path = run_dir / "logs" / f"{stage.stage_id}.{adapter.name}.driver.log"
     cmd = adapter.command_builder(adapter_bin, job_dir, prompt, stage_selection.model)
     repair_attempted = False
@@ -2072,12 +2082,7 @@ def _execute_agent_stage(
             except (ValueError, json.JSONDecodeError) as exc:
                 intake_validation_errors = [str(exc)]
         if command_result.returncode == 0 and output_complete and structured_output_path is not None:
-            if (
-                source_registry_file is not None
-                and source_registry_snapshot is not None
-                and source_registry_file.read_text(encoding="utf-8") != source_registry_snapshot
-            ):
-                source_registry_file.write_text(source_registry_snapshot, encoding="utf-8")
+            if source_registry_file is not None and revert_unauthorized_source_registry_edits(source_registry_file):
                 restored_source_registry = True
             structured_output_exists = structured_output_path.is_file()
             structured_output_complete = is_json_artifact_complete(structured_output_path)
