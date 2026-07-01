@@ -38,6 +38,14 @@ class AssignDisagreementIdTests(unittest.TestCase):
         self.assertEqual(items[1]["id"], "DIS-BA-002")
         self.assertEqual(items[1]["text"], "Thermal envelope contested.")
 
+    def test_wrong_prefix_agent_ids_are_reassigned(self) -> None:
+        # A critique must not claim ids in the sibling critique's namespace.
+        items = assign_disagreement_ids(
+            "critique-a-on-b",
+            [{"id": "DIS-BA-001", "text": "Copied from the other pass."}],
+        )
+        self.assertEqual(items[0]["id"], "DIS-AB-001")
+
     def test_duplicate_and_malformed_ids_fall_back_to_positional(self) -> None:
         items = assign_disagreement_ids(
             "critique-a-on-b",
@@ -178,6 +186,32 @@ class RegisterTests(unittest.TestCase):
         merge_stage_disagreements(self.run_dir, "critique-a-on-b", payload)
         register = json.loads(disagreement_register_path(self.run_dir).read_text(encoding="utf-8"))
         self.assertEqual(len(register["disagreements"]), 1)
+
+    def test_rerun_replaces_the_stage_entries_without_stranding_stale_ones(self) -> None:
+        merge_stage_disagreements(
+            self.run_dir,
+            "critique-a-on-b",
+            {
+                "unresolved_disagreements": [
+                    {"id": "DIS-AB-001", "text": "First."},
+                    {"id": "DIS-AB-002", "text": "Second, later withdrawn."},
+                ]
+            },
+        )
+        merge_stage_disagreements(
+            self.run_dir,
+            "critique-b-on-a",
+            {"unresolved_disagreements": [{"id": "DIS-BA-001", "text": "Sibling entry."}]},
+        )
+        # Rerun of critique-a-on-b drops its second disagreement.
+        merge_stage_disagreements(
+            self.run_dir,
+            "critique-a-on-b",
+            {"unresolved_disagreements": [{"id": "DIS-AB-001", "text": "First."}]},
+        )
+        register = json.loads(disagreement_register_path(self.run_dir).read_text(encoding="utf-8"))
+        ids = {entry["id"] for entry in register["disagreements"]}
+        self.assertEqual(ids, {"DIS-AB-001", "DIS-BA-001"})
 
 
 if __name__ == "__main__":

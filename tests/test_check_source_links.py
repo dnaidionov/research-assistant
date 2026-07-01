@@ -205,6 +205,40 @@ class ExcerptVerificationTests(unittest.TestCase):
         self.assertEqual(excerpts[0]["source_id"], "SRC-001")
         self.assertEqual(excerpts[0]["excerpt"], "Quoted line.")
 
+    def test_pdf_content_is_unfetchable_not_false_negative(self) -> None:
+        registry = {
+            "sources": [
+                {
+                    "id": "SRC-001",
+                    "source_class": "external_evidence",
+                    "locator": "https://example.com/paper.pdf?download=1",
+                },
+                {
+                    "id": "SRC-002",
+                    "source_class": "external_evidence",
+                    "locator": "https://example.com/paper",
+                },
+            ]
+        }
+        entries = [
+            self.excerpt_entry("Some quoted sentence from the PDF body text here."),
+            {
+                "stage": "research-a",
+                "claim_id": "F-002",
+                "source_id": "SRC-002",
+                "excerpt": "Another quoted sentence from a PDF served without extension.",
+            },
+        ]
+        entries[0]["source_id"] = "SRC-001"
+        report = verify_excerpts(
+            entries,
+            registry,
+            content_fetcher=fake_content_fetcher({"https://example.com/paper": "%PDF-1.7 \x00\x00 binary"}),
+        )
+        statuses = [result["status"] for result in report["results"]]
+        self.assertEqual(statuses, ["unfetchable", "unfetchable"])
+        self.assertNotIn("not_found", statuses)
+
     def test_match_excerpt_normalizes_curly_quotes_and_whitespace(self) -> None:
         status, score = match_excerpt(
             "It supports “sustained load” operation.",

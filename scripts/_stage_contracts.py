@@ -410,14 +410,34 @@ def active_source_policy() -> dict[str, tuple[str, ...]]:
     return dict(_active_source_policy)
 
 
+def _policy_match_tokens(text: str) -> set[str]:
+    """Lowercased word tokens with naive singularization, so 'academic papers' matches 'academic paper'."""
+    tokens = set()
+    for token in re.findall(r"[a-z0-9]+", text.lower()):
+        tokens.add(token[:-1] if len(token) > 3 and token.endswith("s") else token)
+    return tokens
+
+
 def _policy_list_match(source: dict[str, object], entries: tuple[str, ...]) -> str | None:
-    fields = [
-        str(source.get("type") or "").strip().lower(),
-        str(source.get("authority") or "").strip().lower(),
+    """Match when every word of a policy entry appears in the source's descriptors.
+
+    Direction matters: the entry's qualifiers must all be present, so a source
+    typed 'forum post' does not match a policy entry 'uncited forum posts' —
+    the operator disallowed uncited forum posts, not all forum posts.
+    """
+    source_type = str(source.get("type") or "").strip()
+    authority = str(source.get("authority") or "").strip()
+    field_tokens = [
+        _policy_match_tokens(source_type),
+        _policy_match_tokens(authority),
+        _policy_match_tokens(f"{source_type} {authority}"),
     ]
     for entry in entries:
-        for field in fields:
-            if field and (entry in field or field in entry):
+        entry_tokens = _policy_match_tokens(entry)
+        if not entry_tokens:
+            continue
+        for tokens in field_tokens:
+            if tokens and entry_tokens <= tokens:
                 return entry
     return None
 
@@ -977,6 +997,7 @@ def assign_disagreement_ids(stage_id: str, items: object) -> list[dict[str, obje
     prefix = DISAGREEMENT_STAGE_PREFIXES.get(stage_id)
     if prefix is None or not isinstance(items, list):
         return items if isinstance(items, list) else []
+    stage_id_prefix = f"DIS-{prefix}-"
     normalized_items: list[dict[str, object]] = []
     used: set[str] = set()
     for item in items:
@@ -990,6 +1011,10 @@ def assign_disagreement_ids(stage_id: str, items: object) -> list[dict[str, obje
                 entry["text"] = embedded.group(2).strip()
             else:
                 candidate = ""
+        if candidate and not candidate.startswith(stage_id_prefix):
+            # A wrong-prefix id would collide with the sibling critique's
+            # namespace in the run register; reassign positionally.
+            candidate = ""
         if not candidate or candidate in used:
             position = len(normalized_items) + 1
             candidate = f"DIS-{prefix}-{position:03d}"

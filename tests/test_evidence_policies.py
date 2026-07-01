@@ -164,6 +164,26 @@ class SourcePolicyEnforcementTests(unittest.TestCase):
         self.assertEqual(record["policy_outcome"], "allowed")
         self.assertNotIn("source_policy_list", record)
 
+    def test_qualified_entries_do_not_match_unqualified_sources(self) -> None:
+        # "uncited forum posts" is disallowed; a plain forum post is not.
+        record = normalize_source_record(external_source("forum post"))
+        self.assertEqual(record["policy_outcome"], "allowed")
+        self.assertNotIn("source_policy_list", record)
+
+        record = normalize_source_record(external_source("blog", authority="independent analyst"))
+        self.assertEqual(record["policy_outcome"], "allowed")
+
+        record = normalize_source_record(external_source("uncited forum post"))
+        self.assertEqual(record["policy_outcome"], "blocked")
+
+    def test_entry_qualifiers_may_span_type_and_authority(self) -> None:
+        record = normalize_source_record(external_source("blog", authority="anonymous"))
+        self.assertEqual(record["policy_outcome"], "blocked")
+
+    def test_singular_type_matches_plural_entry(self) -> None:
+        record = normalize_source_record(external_source("academic paper", authority="peer reviewed"))
+        self.assertEqual(record["source_policy_list"], "preferred")
+
     def test_no_configured_policy_is_a_no_op(self) -> None:
         configure_source_policy(None)
         record = normalize_source_record(external_source("anonymous blog"))

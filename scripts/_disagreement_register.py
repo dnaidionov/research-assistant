@@ -35,27 +35,32 @@ def load_disagreement_register(run_dir: Path) -> dict[str, object]:
 
 
 def merge_stage_disagreements(run_dir: Path, stage_id: str, stage_payload: dict[str, object]) -> None:
-    """Merge a critique stage's normalized unresolved disagreements into the register."""
+    """Replace a critique stage's entries in the register with its current set.
+
+    Replacement (not additive merge) keeps the register faithful to the stage
+    artifact: a rerun critique that dropped a disagreement does not strand a
+    stale open entry that the judge would then be falsely flagged for.
+    """
     register = load_disagreement_register(run_dir)
     entries: list[dict[str, object]] = [
-        entry for entry in register["disagreements"] if isinstance(entry, dict)
+        entry
+        for entry in register["disagreements"]
+        if isinstance(entry, dict) and str(entry.get("raised_by")) != stage_id
     ]
-    by_id = {str(entry.get("id")): entry for entry in entries}
     for item in stage_payload.get("unresolved_disagreements", []):
         if not isinstance(item, dict):
             continue
         dis_id = str(item.get("id") or "").strip()
         if not DISAGREEMENT_ID_PATTERN.match(dis_id):
             continue
-        text = str(item.get("text") or "").strip()
-        existing = by_id.get(dis_id)
-        if existing is None:
-            entry = {"id": dis_id, "raised_by": stage_id, "text": text, "status": "open"}
-            entries.append(entry)
-            by_id[dis_id] = entry
-        else:
-            existing["raised_by"] = stage_id
-            existing["text"] = text
+        entries.append(
+            {
+                "id": dis_id,
+                "raised_by": stage_id,
+                "text": str(item.get("text") or "").strip(),
+                "status": "open",
+            }
+        )
     write_json(disagreement_register_path(run_dir), {"disagreements": entries})
 
 

@@ -228,11 +228,17 @@ def _load_document_for_source(
         return None, "empty locator"
     if locator in cache:
         return cache[locator]
-    if locator.lower().endswith(".pdf"):
+    # Strip query/fragment so PDFs served behind ?download=1 style URLs are
+    # still recognized; content sniffing below catches the rest.
+    locator_path = locator.split("#", 1)[0].split("?", 1)[0]
+    if locator_path.lower().endswith(".pdf"):
         result: tuple[str | None, str] = (None, "binary format not text-checkable")
     elif locator.startswith(("http://", "https://")):
         text, detail = content_fetcher(locator, timeout)
-        result = (html_to_text(text) if text is not None else None, detail)
+        if text is not None and text.lstrip().startswith("%PDF-"):
+            result = (None, "binary format not text-checkable")
+        else:
+            result = (html_to_text(text) if text is not None else None, detail)
     else:
         path = Path(locator[len("file://") :]) if locator.startswith("file://") else Path(locator).expanduser()
         if not path.is_absolute():
