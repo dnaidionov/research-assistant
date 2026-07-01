@@ -12,6 +12,16 @@ Run Source Registry: `{source_registry_path}`
 
 Produce an independent research pass. This pass must stand on its own and must not borrow conclusions from the parallel pass.
 
+## Role Mandate
+
+{research_mandate}
+
+## Independence Rules
+
+- Do not read or use the parallel research pass output for this run.
+- Do not read or use artifacts from other runs under `runs/`; only this run's intake output, the brief, and the config are admissible workflow inputs.
+- Gather your own evidence. Convergence with the parallel pass must come from the evidence, not from copying.
+
 ## Non-Negotiable Rules
 
 - Every factual claim must include citations inline.
@@ -25,6 +35,17 @@ Produce an independent research pass. This pass must stand on its own and must n
 - Express uncertainty explicitly. Do not use confident language where the evidence is mixed, incomplete, or low quality.
 - Source quality matters. If a source is weak, say so instead of laundering it into a stronger claim.
 
+## Candidate Coverage Rules
+
+These rules apply whenever the research question involves selecting, comparing, or recommending solutions, tools, vendors, hardware, or approaches.
+
+- Enumerate the candidate option space explicitly before evaluating it. Do not silently evaluate only the first viable candidate.
+- Consider novel and recent options, not only established ones. That includes solutions released recently and solutions that are credibly announced but not yet released, when they could plausibly fit the research goal and timeline.
+- Respect the `novelty` policy in the job config when present: `include_announced` controls whether announced-but-unreleased options are in scope, and `horizon_months` sets how far back a release counts as recent.
+- Label every candidate with a maturity status: `ga` (generally available), `recent_release`, `announced_unreleased`, or `roadmap_signal`.
+- Announced or unreleased candidates are admissible, but treat vendor announcements as evidence only that the option exists and that the vendor claims specific properties. Any statement about real-world performance, availability dates, or pricing of an unreleased option is an inference with explicit confidence and an explicit availability risk.
+- If you conclude that no recent or announced candidates are relevant, state that explicitly with the search you performed, instead of omitting the topic.
+
 ## Output Contract
 
 Write two artifacts:
@@ -35,12 +56,13 @@ Write two artifacts:
 Return markdown using exactly these top-level sections in this order:
 
 1. `# Executive Summary`
-2. `# Facts`
-3. `# Inferences`
-4. `# Uncertainty Register`
-5. `# Evidence Gaps`
-6. `# Preliminary Disagreements`
-7. `# Source Evaluation`
+2. `# Candidate Landscape` (required when the research involves selecting or comparing options; omit otherwise)
+3. `# Facts`
+4. `# Inferences`
+5. `# Uncertainty Register`
+6. `# Evidence Gaps`
+7. `# Preliminary Disagreements`
+8. `# Source Evaluation`
 
 ### Section Rules
 
@@ -48,6 +70,13 @@ Return markdown using exactly these top-level sections in this order:
 
 - Short synthesis only.
 - Do not introduce any claim here that is absent from later sections.
+
+#### `# Candidate Landscape`
+
+- Use numbered items, one per candidate option.
+- Each item must include the candidate name, its maturity status (`ga`, `recent_release`, `announced_unreleased`, or `roadmap_signal`), a one-line fit assessment, and inline citations.
+- Include established, recently released, and credibly announced candidates per the Candidate Coverage Rules.
+- If a relevant candidate was considered and excluded, say why in one line rather than dropping it silently.
 
 #### `# Facts`
 
@@ -88,6 +117,7 @@ Write JSON with these top-level keys:
 
 - `stage`
 - `summary`
+- `candidates` (required when the research involves selecting or comparing options; omit otherwise)
 - `facts`
 - `inferences`
 - `uncertainties`
@@ -99,6 +129,9 @@ Write JSON with these top-level keys:
 Rules:
 
 - `stage` must equal `{stage_id}`.
+- Every `candidates` item must contain `name`, `maturity`, `fit_summary`, and `evidence_sources`.
+- `maturity` must be one of: `ga`, `recent_release`, `announced_unreleased`, `roadmap_signal`.
+- Candidates with maturity `announced_unreleased` or `roadmap_signal` must also carry an `availability_risk` note.
 - Every `facts` item must contain `id`, `text`, and `evidence_sources`.
 - Every `inferences` item must contain `id`, `text`, `evidence_sources`, and `confidence`.
 - Every fact and every world-claim inference must carry explicit evidence on that exact item. Nearby or previous citations do not satisfy the requirement.
@@ -114,6 +147,9 @@ Rules:
 - `confidence` must be `low`, `medium`, or `high`.
 - Every cited source id must be declared in `sources`.
 - Every `sources` item must include `id`, `title`, `type`, `authority`, and `locator`, and should include `source_class` when known.
+- Include `publication_date` (ISO date, or year-month, or year) on every `external_evidence` source whenever it is determinable. Undated external evidence weakens freshness auditing.
+- When a source is a vendor announcement, press release, or product launch post, set its `type` accordingly (for example `vendor announcement`) so the policy layer can classify it. Announcements support existence and vendor-claim statements; they do not support real-world performance facts.
+- Where feasible, include a short quoted `excerpt` on each `support_links` entry that carries the `evidence` role, copied from the cited source, so the support can be audited without re-fetching the source.
 - Prefer explicit source classes:
   - `external_evidence`
   - `job_input`

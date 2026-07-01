@@ -14,6 +14,23 @@
   "properties": {
     "stage": {"type": "string", "enum": ["research-a", "research-b"]},
     "summary": {"type": "array"},
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "maturity", "fit_summary", "evidence_sources"],
+        "properties": {
+          "name": {"type": "string"},
+          "maturity": {
+            "type": "string",
+            "enum": ["ga", "recent_release", "announced_unreleased", "roadmap_signal"]
+          },
+          "fit_summary": {"type": "string"},
+          "availability_risk": {"type": "string"},
+          "evidence_sources": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
     "facts": {
       "type": "array",
       "items": {
@@ -30,7 +47,8 @@
               "required": ["source_id", "role"],
               "properties": {
                 "source_id": {"type": "string"},
-                "role": {"type": "string", "enum": ["evidence", "context", "challenge", "provenance"]}
+                "role": {"type": "string", "enum": ["evidence", "context", "challenge", "provenance"]},
+                "excerpt": {"type": "string"}
               }
             }
           },
@@ -54,7 +72,8 @@
               "required": ["source_id", "role"],
               "properties": {
                 "source_id": {"type": "string"},
-                "role": {"type": "string", "enum": ["evidence", "context", "challenge", "provenance"]}
+                "role": {"type": "string", "enum": ["evidence", "context", "challenge", "provenance"]},
+                "excerpt": {"type": "string"}
               }
             }
           },
@@ -82,6 +101,7 @@
             "type": "string",
             "enum": ["external_evidence", "job_input", "workflow_provenance", "recovered_provisional"]
           },
+          "publication_date": {"type": "string"},
           "acquisition_provenance": {"type": "string"}
         }
       }

@@ -18,6 +18,8 @@ from execute_workflow import (
     ProgressReporter,
     STAGE_CLAIM_STAGE_IDS,
     append_manual_stage_usage_record,
+    apply_job_validation_policies,
+    ensure_job_input_snapshot,
     build_adapter_bin_map,
     build_execution_snapshot,
     confirm_existing_run,
@@ -119,6 +121,8 @@ def main() -> int:
         run_dir = job_dir / "runs" / args.run_id
         if not run_dir.is_dir():
             raise ValueError(f"Run {args.run_id} does not exist at {run_dir}. Scaffold it first.")
+        apply_job_validation_policies(job_dir)
+        ensure_job_input_snapshot(run_dir, job_dir)
         execution_config, configured_stage_assignments, runtime_policy, provider_catalog, stage_assignments, stage_required_trust = _resolved_assignments(args, job_dir)
         persist_execution_snapshot(
             run_dir=run_dir,

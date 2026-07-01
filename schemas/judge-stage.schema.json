@@ -33,7 +33,9 @@
               }
             }
           },
-          "claim_dependencies": {"type": "array", "items": {"type": "string"}}
+          "claim_dependencies": {"type": "array", "items": {"type": "string"}},
+          "claim_class": {"type": "string"},
+          "single_source_acknowledged": {"oneOf": [{"type": "boolean"}, {"type": "string"}]}
         }
       }
     },
@@ -58,7 +60,9 @@
             }
           },
           "claim_dependencies": {"type": "array", "items": {"type": "string"}},
-          "confidence": {"type": "string", "enum": ["low", "medium", "high"]}
+          "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+          "claim_class": {"type": "string"},
+          "single_source_acknowledged": {"oneOf": [{"type": "boolean"}, {"type": "string"}]}
         }
       }
     },
