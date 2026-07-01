@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 
 from _stage_contracts import (
+    DISAGREEMENT_ID_PATTERN,
+    DISAGREEMENT_STAGE_PREFIXES,
     build_claim_map_from_stage_json,
     collect_numbered_items,
     collect_section_entries,
@@ -32,6 +35,53 @@ def configure_excerpt_requirement(strict: object) -> None:
 
 def excerpt_requirement_is_strict() -> bool:
     return _require_evidence_excerpts
+
+
+_require_disagreement_coverage = False
+
+
+def configure_disagreement_coverage_requirement(strict: object) -> None:
+    """When enabled (requirements.require_disagreement_coverage), a judge output that leaves critique disagreement ids unaddressed fails validation instead of warning."""
+    global _require_disagreement_coverage
+    _require_disagreement_coverage = strict is True
+
+
+def disagreement_coverage_is_strict() -> bool:
+    return _require_disagreement_coverage
+
+
+def judge_disagreement_coverage_findings(
+    normalized_payload: dict[str, object],
+    dependency_payloads: list[dict[str, object]] | None,
+) -> list[str]:
+    """Flag critique disagreement ids the judge output never mentions.
+
+    The judge must adjudicate every DIS-### id raised by the critiques: either
+    resolve it with evidence or carry it into its unresolved list. Coverage is
+    checked by id mention anywhere in the judge's structured payload.
+    """
+    if not dependency_payloads:
+        return []
+    judge_text = json.dumps(normalized_payload)
+    findings: list[str] = []
+    for dependency in dependency_payloads:
+        if not isinstance(dependency, dict):
+            continue
+        dependency_stage = str(dependency.get("stage") or "")
+        if dependency_stage not in DISAGREEMENT_STAGE_PREFIXES:
+            continue
+        for item in dependency.get("unresolved_disagreements", []):
+            if not isinstance(item, dict):
+                continue
+            dis_id = str(item.get("id") or "").strip()
+            if not DISAGREEMENT_ID_PATTERN.match(dis_id):
+                continue
+            if dis_id not in judge_text:
+                preview = str(item.get("text") or "")[:80]
+                findings.append(
+                    f"Judge output does not address disagreement {dis_id} raised by {dependency_stage}: {preview}"
+                )
+    return findings
 
 
 @dataclass(frozen=True)
@@ -141,6 +191,13 @@ def validate_structured_stage_artifact(
             structured_errors = [*structured_errors, *excerpt_findings]
         else:
             structured_warnings = [*structured_warnings, *excerpt_findings]
+    if stage_id == "judge":
+        coverage_findings = judge_disagreement_coverage_findings(normalized_payload, dependency_payloads)
+        if coverage_findings:
+            if disagreement_coverage_is_strict():
+                structured_errors = [*structured_errors, *coverage_findings]
+            else:
+                structured_warnings = [*structured_warnings, *coverage_findings]
     original_markdown_errors = validate_stage_markdown_contract(stage_id, markdown)
     if structured_errors:
         return StageValidationResult(

@@ -961,8 +961,53 @@ def build_stage_json_from_markdown(stage_id: str, markdown: str) -> dict[str, ob
     raise KeyError(f"Stage {stage_id} does not have a structured contract.")
 
 
+DISAGREEMENT_ID_PATTERN = re.compile(r"^DIS-[A-Z]{2}-\d{3}$")
+_EMBEDDED_DISAGREEMENT_ID_PATTERN = re.compile(r"^(DIS-[A-Z]{2}-\d{3})\s*[:\-–]\s*(.+)$")
+DISAGREEMENT_STAGE_PREFIXES = {"critique-a-on-b": "AB", "critique-b-on-a": "BA"}
+
+
+def assign_disagreement_ids(stage_id: str, items: object) -> list[dict[str, object]]:
+    """Give every critique unresolved-disagreement entry a stable DIS-### id.
+
+    Agent-provided ids matching the canonical pattern are kept (first use wins);
+    ids embedded at the start of the text are lifted into the id field;
+    everything else gets a deterministic positional id. The persisted critique
+    JSON therefore always carries ids the judge can be held to.
+    """
+    prefix = DISAGREEMENT_STAGE_PREFIXES.get(stage_id)
+    if prefix is None or not isinstance(items, list):
+        return items if isinstance(items, list) else []
+    normalized_items: list[dict[str, object]] = []
+    used: set[str] = set()
+    for item in items:
+        entry = dict(item) if isinstance(item, dict) else {"text": str(item).strip()}
+        text = str(entry.get("text") or "").strip()
+        candidate = str(entry.get("id") or "").strip()
+        if not DISAGREEMENT_ID_PATTERN.match(candidate):
+            embedded = _EMBEDDED_DISAGREEMENT_ID_PATTERN.match(text)
+            if embedded:
+                candidate = embedded.group(1)
+                entry["text"] = embedded.group(2).strip()
+            else:
+                candidate = ""
+        if not candidate or candidate in used:
+            position = len(normalized_items) + 1
+            candidate = f"DIS-{prefix}-{position:03d}"
+            while candidate in used:
+                position += 1
+                candidate = f"DIS-{prefix}-{position:03d}"
+        entry["id"] = candidate
+        used.add(candidate)
+        normalized_items.append(entry)
+    return normalized_items
+
+
 def normalize_stage_citations(stage_id: str, payload: dict[str, object]) -> dict[str, object]:
     normalized = deepcopy(payload)
+    if stage_id in DISAGREEMENT_STAGE_PREFIXES:
+        normalized["unresolved_disagreements"] = assign_disagreement_ids(
+            stage_id, normalized.get("unresolved_disagreements")
+        )
     supporting_sections = []
     if stage_id in {"research-a", "research-b"}:
         supporting_sections = ["facts"]
@@ -1045,6 +1090,19 @@ def normalize_stage_citations(stage_id: str, payload: dict[str, object]) -> dict
 
 def _format_evidence_sources(sources: list[str]) -> str:
     return f" [{', '.join(sources)}]" if sources else ""
+
+
+def _disagreement_entry_lines(items: object) -> list[str]:
+    if not isinstance(items, list):
+        return _entry_lines(items)
+    lines: list[str] = []
+    for item in items:
+        text = _entry_text(item)
+        suffix = _format_evidence_sources(_entry_sources(item))
+        dis_id = str(item.get("id") or "").strip() if isinstance(item, dict) else ""
+        prefix = f"{dis_id}: " if DISAGREEMENT_ID_PATTERN.match(dis_id) else ""
+        lines.append(f"- {prefix}{text}{suffix}".rstrip())
+    return lines
 
 
 def _entry_lines(items: object) -> list[str]:
@@ -1238,7 +1296,7 @@ def render_stage_markdown_from_json(stage_id: str, payload: dict[str, object]) -
         lines.extend(["", "# Overreach And Overconfident Inference", ""])
         lines.extend(_entry_lines(payload.get("overreach")))
         lines.extend(["", "# Unresolved Disagreements For Judge", ""])
-        lines.extend(_entry_lines(payload.get("unresolved_disagreements")))
+        lines.extend(_disagreement_entry_lines(payload.get("unresolved_disagreements")))
         lines.extend(["", "# Overall Critique Summary", ""])
         lines.extend(_critique_summary_lines(payload.get("summary")))
         return "\n".join(lines).rstrip() + "\n"

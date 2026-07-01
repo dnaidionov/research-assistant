@@ -99,7 +99,9 @@ from _provider_runtime import (
     record_provider_repair_attempt,
     record_provider_stage_result,
 )
+from _disagreement_register import apply_judge_dispositions, merge_stage_disagreements
 from _stage_contracts import (
+    DISAGREEMENT_STAGE_PREFIXES,
     build_claim_map_from_stage_json,
     configure_freshness_max_days,
     configure_source_policy,
@@ -133,6 +135,7 @@ from _usage_telemetry import (
     utc_now_iso,
 )
 from _stage_validation import (
+    configure_disagreement_coverage_requirement,
     configure_excerpt_requirement,
     validate_stage_markdown_contract,
     validate_structured_stage_artifact,
@@ -357,6 +360,7 @@ def apply_job_validation_policies(job_dir: Path) -> None:
     configure_freshness_max_days(load_freshness_max_days(job_dir))
     configure_source_policy(load_source_policy(job_dir))
     configure_excerpt_requirement(load_requirement_flag(job_dir, "require_evidence_excerpts"))
+    configure_disagreement_coverage_requirement(load_requirement_flag(job_dir, "require_disagreement_coverage"))
 
 
 def next_incremental_run_id(job_dir: Path) -> str:
@@ -480,6 +484,10 @@ def dependency_structured_payloads(stage_id: str, run_dir: Path) -> list[dict[st
 def merge_stage_sources_into_registry(stage_id: str, run_dir: Path) -> None:
     payload = load_contract_json(stage_structured_output_path(run_dir, stage_id))
     merge_sources_into_tracked_registry(source_registry_path(run_dir), list(payload.get("sources", [])))
+    if stage_id in DISAGREEMENT_STAGE_PREFIXES:
+        merge_stage_disagreements(run_dir, stage_id, payload)
+    elif stage_id == "judge":
+        apply_judge_dispositions(run_dir, payload)
 
 
 def merge_intake_sources_into_registry(run_dir: Path) -> None:

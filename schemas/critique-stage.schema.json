@@ -164,6 +164,7 @@
             "type": "object",
             "required": ["text"],
             "properties": {
+              "id": {"type": "string", "pattern": "^DIS-[A-Z]{2}-\\d{3}$"},
               "text": {"type": "string"},
               "evidence_sources": {"type": "array", "items": {"type": "string"}},
               "claim_dependencies": {"type": "array", "items": {"type": "string"}},
