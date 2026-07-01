@@ -244,11 +244,12 @@ python3 scripts/generate_final_artifact.py \
 
 The final artifact remains operator-reviewed output, not autonomous truth certification.
 
-After a run, you can audit that external-evidence locators actually resolve (catching fabricated citations that pass schema validation):
+After a run, you can audit that external-evidence locators actually resolve (catching fabricated citations that pass schema validation), and optionally verify that the quoted evidence excerpts recorded by the research stages actually appear in the cited documents (catching paraphrased or invented quotes):
 
 ```bash
 python3 scripts/check_source_links.py \
-  --sources ~/Projects/research-hub/jobs/my-project-1/runs/run-001/sources.json
+  --sources ~/Projects/research-hub/jobs/my-project-1/runs/run-001/sources.json \
+  --verify-excerpts
 ```
 
 ## Local Dashboard
