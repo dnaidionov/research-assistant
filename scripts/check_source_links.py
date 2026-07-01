@@ -33,13 +33,26 @@ CHECKED_SOURCE_CLASSES = {"external_evidence"}
 # which are not checkable as local paths and not fetched without a scheme.
 SCHEMELESS_URL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*(\.[A-Za-z]{2,})+([/:?#]|$)")
 
+# Extensions that mark a bare, separator-less locator such as "spec.pdf" as a
+# local file rather than a schemeless domain. Deliberately excludes extensions
+# that are also plausible TLDs in citations (e.g. zip, app, mov).
+LOCAL_FILE_EXTENSIONS = {
+    "pdf", "md", "markdown", "txt", "rst",
+    "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+    "csv", "tsv", "json", "yaml", "yml", "xml",
+    "html", "htm", "png", "jpg", "jpeg", "gif", "svg",
+}
+
 
 def looks_like_local_path(locator: str) -> bool:
     if locator.startswith(("~", "/", "./", "../")):
         return True
+    if "/" not in locator and "\\" not in locator:
+        suffix = locator.rsplit(".", 1)[-1].lower() if "." in locator else ""
+        return suffix in LOCAL_FILE_EXTENSIONS
     if SCHEMELESS_URL_PATTERN.match(locator):
         return False
-    return "/" in locator or "\\" in locator
+    return True
 
 
 def default_url_fetcher(url: str, timeout: float) -> tuple[bool, str]:

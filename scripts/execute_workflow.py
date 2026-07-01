@@ -2926,12 +2926,15 @@ def run_final_artifact(
     if final_output.is_file():
         protected_paths.append(final_output)
     protected_snapshot = snapshot_protected_files(protected_paths)
+    synthesis_prompt_path = run_dir / "logs" / "final-report-generation.prompt.md"
+    # Clear any prompt persisted by an earlier invocation so a failure before
+    # prompt construction is not attributed a stale prompt's token estimate.
+    synthesis_prompt_path.unlink(missing_ok=True)
     try:
         completed_custom = subprocess.run(custom_report_cmd, cwd=job_dir, capture_output=True, text=True)
     finally:
         restore_protected_files(run_dir, "final-report", protected_snapshot)
         refresh_run_manifest(run_dir)
-    synthesis_prompt_path = run_dir / "logs" / "final-report-generation.prompt.md"
     try:
         # generate_final_report.py persists the real synthesis prompt (judge
         # record + claim register) so token estimates reflect the actual cost.

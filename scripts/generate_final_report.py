@@ -271,6 +271,11 @@ def main() -> int:
     # so the orchestrator can attribute real prompt size in usage telemetry.
     (run_dir / "logs" / "final-report-generation.prompt.md").write_text(prompt, encoding="utf-8")
 
+    # Capture the source registry before the adapter runs: validation must
+    # resolve citations against the pre-invocation registry, or a misbehaving
+    # agent could inject fake sources that pass the missing-source-ID gate.
+    source_index = load_source_index(run_dir)
+
     invocation_started = time.time()
     result = subprocess.run(cmd, cwd=job_dir, capture_output=True, text=True)
     log_path.write_text(
@@ -295,7 +300,7 @@ def main() -> int:
     report_markdown = report_body + "\n"
 
     if not args.no_validate:
-        errors, warnings = validate_report(report_markdown, load_source_index(run_dir))
+        errors, warnings = validate_report(report_markdown, source_index)
         for warning in warnings:
             print(f"Warning: {warning}", file=sys.stderr)
         if errors:

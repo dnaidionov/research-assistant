@@ -52,6 +52,7 @@ class CheckSourceLinksTests(unittest.TestCase):
                     {"id": "SRC-FILE", "source_class": "external_evidence", "locator": str(real_file)},
                     {"id": "SRC-GONE", "source_class": "external_evidence", "locator": "attachments/missing.pdf"},
                     {"id": "SRC-ABS-GONE", "source_class": "external_evidence", "locator": str(base / "fabricated" / "spec.pdf")},
+                    {"id": "SRC-BARE-GONE", "source_class": "external_evidence", "locator": "spec.pdf"},
                 ]
             }
             report = check_registry(registry, url_fetcher=fake_fetcher(set()), base_dir=base)
@@ -59,18 +60,21 @@ class CheckSourceLinksTests(unittest.TestCase):
             self.assertEqual(statuses["SRC-FILE"], "ok")
             self.assertEqual(statuses["SRC-GONE"], "broken")
             self.assertEqual(statuses["SRC-ABS-GONE"], "broken")
+            self.assertEqual(statuses["SRC-BARE-GONE"], "broken")
             self.assertIn("SRC-GONE", report["summary"]["broken_ids"])
 
     def test_uncheckable_locator_forms_stay_unverifiable(self) -> None:
         registry = {
             "sources": [
                 {"id": "SRC-DOMAIN", "source_class": "external_evidence", "locator": "example.com/page"},
+                {"id": "SRC-BARE-DOMAIN", "source_class": "external_evidence", "locator": "example.com"},
                 {"id": "SRC-VAGUE", "source_class": "external_evidence", "locator": "Various industry benchmarks"},
             ]
         }
         report = check_registry(registry, url_fetcher=fake_fetcher(set()))
         statuses = {result["id"]: result["status"] for result in report["results"]}
         self.assertEqual(statuses["SRC-DOMAIN"], "unverifiable")
+        self.assertEqual(statuses["SRC-BARE-DOMAIN"], "unverifiable")
         self.assertEqual(statuses["SRC-VAGUE"], "unverifiable")
         self.assertEqual(report["summary"].get("broken", 0), 0)
 
