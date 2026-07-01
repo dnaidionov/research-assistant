@@ -252,6 +252,15 @@ python3 scripts/check_source_links.py \
   --verify-excerpts
 ```
 
+For deeper (paid) verification, sampled LLM entailment spot-checks ask an adapter whether each quoted excerpt actually supports the claim citing it:
+
+```bash
+python3 scripts/verify_claim_entailment.py \
+  --run-dir ~/Projects/research-hub/jobs/my-project-1/runs/run-001 \
+  --job-dir ~/Projects/research-hub/jobs/my-project-1 \
+  --adapter-name claude --adapter-bin claude --sample 5
+```
+
 ## Local Dashboard
 
 Start the dashboard with:
