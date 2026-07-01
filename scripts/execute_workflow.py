@@ -90,6 +90,7 @@ from _job_config import (
     load_execution_config,
     load_freshness_max_days,
     load_requirement_flag,
+    load_source_policy,
     load_yaml_document,
 )
 from _provider_runtime import (
@@ -101,6 +102,7 @@ from _provider_runtime import (
 from _stage_contracts import (
     build_claim_map_from_stage_json,
     configure_freshness_max_days,
+    configure_source_policy,
     is_structured_stage,
     load_json as load_contract_json,
     merge_stage_substep_payloads,
@@ -351,8 +353,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def apply_job_validation_policies(job_dir: Path) -> None:
-    """Configure process-wide validation policy from the job config: freshness window and excerpt strictness."""
+    """Configure process-wide validation policy from the job config: freshness window, source policy lists, and excerpt strictness."""
     configure_freshness_max_days(load_freshness_max_days(job_dir))
+    configure_source_policy(load_source_policy(job_dir))
     configure_excerpt_requirement(load_requirement_flag(job_dir, "require_evidence_excerpts"))
 
 

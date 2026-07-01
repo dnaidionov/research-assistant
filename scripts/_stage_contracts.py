@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from copy import deepcopy
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -285,8 +286,25 @@ def normalize_source_record(source: dict[str, object]) -> dict[str, object]:
     support_flags = _infer_support_flags(normalized)
     normalized.setdefault("supports_world_claims", support_flags["supports_world_claims"])
     normalized.setdefault("supports_process_claims", support_flags["supports_process_claims"])
-    normalized.setdefault("policy_outcome", _infer_policy_outcome(normalized))
-    normalized.setdefault("policy_notes", _infer_policy_notes(normalized))
+    policy_outcome = _infer_policy_outcome(normalized)
+    policy_notes = _infer_policy_notes(normalized)
+    classification = _job_policy_classification(normalized)
+    if classification is not None:
+        list_name, matched_entry, list_outcome = classification
+        normalized.setdefault("source_policy_list", list_name)
+        if _POLICY_SEVERITY.get(list_outcome, 0) > _POLICY_SEVERITY.get(policy_outcome, 0):
+            policy_outcome = list_outcome
+        note = _job_policy_note(list_name, matched_entry)
+        if note not in policy_notes:
+            policy_notes.append(note)
+        if normalized.get("authority_tier") == "unknown":
+            normalized["authority_tier"] = {
+                "preferred": "policy_preferred",
+                "allowed_with_caution": "policy_caution",
+                "disallowed": "policy_disallowed",
+            }[list_name]
+    normalized["policy_outcome"] = policy_outcome
+    normalized["policy_notes"] = policy_notes
     return normalized
 
 
@@ -344,13 +362,85 @@ def configure_freshness_max_days(days: object) -> None:
     try:
         value = int(days)
     except (TypeError, ValueError):
+        print(
+            f"Warning: ignoring invalid freshness.max_days value {days!r}; keeping {_active_freshness_max_days} days.",
+            file=sys.stderr,
+        )
         return
     if value > 0:
         _active_freshness_max_days = value
+    else:
+        print(
+            f"Warning: ignoring non-positive freshness.max_days value {days!r}; keeping {_active_freshness_max_days} days.",
+            file=sys.stderr,
+        )
 
 
 def active_freshness_max_days() -> int:
     return _active_freshness_max_days
+
+
+# Job-level source policy lists (source_policy in config.yaml). Like the
+# freshness window, this is process-wide state configured per invocation.
+# List matches can only escalate the intrinsic policy outcome, never relax it.
+_POLICY_SEVERITY = {"allowed": 0, "allowed_with_warning": 1, "disfavored": 2, "blocked": 3}
+_SOURCE_POLICY_LIST_OUTCOMES: tuple[tuple[str, str], ...] = (
+    ("disallowed", "blocked"),
+    ("allowed_with_caution", "allowed_with_warning"),
+    ("preferred", "allowed"),
+)
+_active_source_policy: dict[str, tuple[str, ...]] = {}
+
+
+def configure_source_policy(policy: object) -> None:
+    """Set the process-wide job source policy lists, typically from config.yaml's source_policy."""
+    global _active_source_policy
+    parsed: dict[str, tuple[str, ...]] = {}
+    if isinstance(policy, dict):
+        for list_name, _outcome in _SOURCE_POLICY_LIST_OUTCOMES:
+            entries = policy.get(list_name)
+            if isinstance(entries, list):
+                cleaned = tuple(str(entry).strip().lower() for entry in entries if str(entry).strip())
+                if cleaned:
+                    parsed[list_name] = cleaned
+    _active_source_policy = parsed
+
+
+def active_source_policy() -> dict[str, tuple[str, ...]]:
+    return dict(_active_source_policy)
+
+
+def _policy_list_match(source: dict[str, object], entries: tuple[str, ...]) -> str | None:
+    fields = [
+        str(source.get("type") or "").strip().lower(),
+        str(source.get("authority") or "").strip().lower(),
+    ]
+    for entry in entries:
+        for field in fields:
+            if field and (entry in field or field in entry):
+                return entry
+    return None
+
+
+def _job_policy_classification(source: dict[str, object]) -> tuple[str, str, str] | None:
+    """Return (list_name, matched_entry, outcome) for the most severe matching policy list."""
+    if str(source.get("source_class") or "") != "external_evidence":
+        return None
+    for list_name, outcome in _SOURCE_POLICY_LIST_OUTCOMES:
+        entries = _active_source_policy.get(list_name)
+        if entries:
+            matched = _policy_list_match(source, entries)
+            if matched is not None:
+                return list_name, matched, outcome
+    return None
+
+
+def _job_policy_note(list_name: str, matched_entry: str) -> str:
+    if list_name == "disallowed":
+        return f"Job source policy disallows this source type ({matched_entry})."
+    if list_name == "allowed_with_caution":
+        return f"Job source policy allows this source type only with caution ({matched_entry})."
+    return f"Job source policy prefers this source type ({matched_entry})."
 
 
 def _parse_publication_date(raw: str) -> date | None:
@@ -495,6 +585,15 @@ def source_quality_warnings(payload: dict[str, object]) -> list[str]:
         if source_class == "external_evidence" and str(normalized_source.get("freshness_status") or "") == "stale":
             warnings.append(
                 f"sources[{position}] ({source_id or 'unknown id'}) is stale per the freshness policy; corroborate with fresher evidence where the claim is load-bearing."
+            )
+        source_policy_list = str(normalized_source.get("source_policy_list") or "")
+        if source_policy_list == "disallowed":
+            warnings.append(
+                f"sources[{position}] ({source_id or 'unknown id'}) matches the job's disallowed source policy list; claims citing it will be blocked at publication."
+            )
+        elif source_policy_list == "allowed_with_caution":
+            warnings.append(
+                f"sources[{position}] ({source_id or 'unknown id'}) matches the job's allowed-with-caution source policy list; corroborate load-bearing claims with preferred sources."
             )
     return warnings
 

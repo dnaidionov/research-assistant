@@ -8,9 +8,9 @@ import re
 import sys
 from pathlib import Path
 
-from _job_config import load_freshness_max_days, load_quality_policy
+from _job_config import load_freshness_max_days, load_quality_policy, load_source_policy
 from _publication import publication_readiness_errors
-from _stage_contracts import configure_freshness_max_days
+from _stage_contracts import configure_freshness_max_days, configure_source_policy
 from _workflow_lib import REPO_ROOT, REQUIRED_JOB_DIRS, REQUIRED_JOB_FILES, validate_job_dir
 
 
@@ -167,6 +167,7 @@ def validate_final_artifact_readiness(
         errors.append(f"Missing required claim register: {claim_path}")
     else:
         configure_freshness_max_days(load_freshness_max_days(job_dir))
+        configure_source_policy(load_source_policy(job_dir))
         payload = json.loads(claim_path.read_text(encoding="utf-8"))
         publication_errors = publication_readiness_errors(
             judge_text,

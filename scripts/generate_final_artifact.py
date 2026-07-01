@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from _job_config import load_quality_policy_from_path, load_yaml_document
-from _stage_contracts import configure_freshness_max_days
+from _stage_contracts import configure_freshness_max_days, configure_source_policy
 from _publication import (
     build_source_index,
     extract_reference_ids,
@@ -372,9 +372,13 @@ def main() -> int:
     config_path = Path(args.config).expanduser() if args.config else None
 
     if config_path is not None and config_path.is_file():
-        freshness = load_yaml_document(config_path).get("freshness")
+        config_document = load_yaml_document(config_path)
+        freshness = config_document.get("freshness")
         if isinstance(freshness, dict):
             configure_freshness_max_days(freshness.get("max_days"))
+        source_policy = config_document.get("source_policy")
+        if isinstance(source_policy, dict):
+            configure_source_policy(source_policy)
 
     try:
         judge_text = judge_path.read_text(encoding="utf-8")

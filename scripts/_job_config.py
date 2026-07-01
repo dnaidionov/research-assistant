@@ -107,6 +107,12 @@ def load_freshness_max_days(job_dir: Path) -> int | None:
     return max_days if isinstance(max_days, int) and max_days > 0 else None
 
 
+def load_source_policy(job_dir: Path) -> dict[str, object] | None:
+    document = load_job_config(job_dir)
+    source_policy = document.get("source_policy")
+    return source_policy if isinstance(source_policy, dict) else None
+
+
 def load_requirement_flag(job_dir: Path, flag: str) -> bool:
     document = load_job_config(job_dir)
     requirements = document.get("requirements")
