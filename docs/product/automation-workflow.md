@@ -377,7 +377,7 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - validates the generated markdown with the same claim/reference substrate as the deterministic artifact: uncited facts or inferences, unresolved or blocked source IDs, and provenance-only citations all fail the report closed
 - on validation failure, writes the rejected draft to `07-final-report.md.rejected.md` for operator review and removes any draft that was written straight to the canonical output path, so a resumed run cannot treat unvalidated content as complete
 - on success, `execute_workflow.py` publishes a copy to `outputs/final-report-<run-id>.md` in the job directory, alongside the deterministic artifact
-- `--no-validate` is available as an operator escape hatch; a report generated this way is operator-reviewed output only
+- `--no-validate` is available as an operator escape hatch; a report generated this way is operator-reviewed output only, and the artifact is prefixed with an `UNVALIDATED` marker comment so it stays distinguishable from a validated report even after a resumed run publishes it
 
 ## Intake State
 

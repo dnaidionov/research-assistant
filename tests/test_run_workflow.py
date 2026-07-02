@@ -166,6 +166,15 @@ class RunWorkflowTests(unittest.TestCase):
                 "judge",
             ],
         )
+        # All three post-processing steps must be visible from scaffold time,
+        # so a scaffolded-but-unexecuted run shows them as pending rather than
+        # omitting the final-report row entirely.
+        self.assertEqual(state["post_processing"]["claim_extraction"]["status"], "pending")
+        self.assertEqual(state["post_processing"]["final_artifact"]["status"], "pending")
+        self.assertEqual(state["post_processing"]["final_report"]["status"], "pending")
+        self.assertTrue(
+            state["post_processing"]["final_report"]["output_path"].endswith("outputs/final-report-run-001.md")
+        )
         self.assertEqual(state["job_dir"], str(self.job_dir))
         self.assertEqual(state["run_id"], "run-001")
 

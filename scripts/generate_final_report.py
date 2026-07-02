@@ -11,7 +11,8 @@ from pathlib import Path
 
 from _claim_model import build_claim_register
 from _cli_adapters import build_adapter_command
-from _stage_contracts import normalize_source_record
+from _job_config import load_freshness_max_days, load_source_policy
+from _stage_contracts import configure_freshness_max_days, configure_source_policy, normalize_source_record
 from extract_claims import extract_claims as extract_markdown_claims
 
 # Generic decision-research shape used only when the judge record does not
@@ -29,6 +30,13 @@ FALLBACK_REPORT_STRUCTURE = [
 ]
 
 NON_PUBLISHABLE_SOURCE_CLASSES = {"workflow_provenance", "recovered_provisional"}
+
+# Prepended to reports generated with --no-validate. Invisible in rendered
+# markdown, but keeps skipped validation detectable in the raw artifact.
+UNVALIDATED_REPORT_MARKER = (
+    "<!-- UNVALIDATED: generated with --no-validate; claim/reference validation "
+    "was skipped. Operator-reviewed output only. -->"
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -93,7 +101,7 @@ def read_file_safe(path: Path) -> str:
     return ""
 
 
-def load_source_index(run_dir: Path) -> dict[str, dict[str, str]]:
+def load_source_index(run_dir: Path) -> dict[str, dict[str, object]]:
     registry_path = run_dir / "sources.json"
     if not registry_path.is_file():
         return {}
@@ -101,18 +109,24 @@ def load_source_index(run_dir: Path) -> dict[str, dict[str, str]]:
         payload = json.loads(registry_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return {}
-    index: dict[str, dict[str, str]] = {}
+    index: dict[str, dict[str, object]] = {}
     for source in payload.get("sources", []):
         if not isinstance(source, dict):
             continue
         normalized = normalize_source_record(source)
         source_id = normalized.get("id")
         if isinstance(source_id, str) and source_id.strip():
-            index[source_id] = {key: str(value) for key, value in normalized.items() if isinstance(value, str)}
+            # Keep policy_notes (a list) alongside the string fields so policy
+            # failures can cite the reason a source is blocked.
+            index[source_id] = {
+                key: value if key == "policy_notes" else str(value)
+                for key, value in normalized.items()
+                if isinstance(value, str) or key == "policy_notes"
+            }
     return index
 
 
-def validate_report(markdown: str, source_index: dict[str, dict[str, str]]) -> tuple[list[str], list[str]]:
+def validate_report(markdown: str, source_index: dict[str, dict[str, object]]) -> tuple[list[str], list[str]]:
     """Validate the synthesized report with the same claim substrate as the deterministic artifact.
 
     Returns (errors, warnings).
@@ -153,6 +167,16 @@ def validate_report(markdown: str, source_index: dict[str, dict[str, str]]) -> t
             if record.get("source_class") in NON_PUBLISHABLE_SOURCE_CLASSES:
                 errors.append(
                     f"Final report cites source {reference_id} whose class {record.get('source_class')} is not publishable evidence."
+                )
+            if record.get("policy_outcome") == "blocked":
+                policy_notes = record.get("policy_notes")
+                if isinstance(policy_notes, list):
+                    policy_detail = "; ".join(str(note) for note in policy_notes if str(note).strip())
+                else:
+                    policy_detail = str(policy_notes or "")
+                detail = f" {policy_detail}" if policy_detail else ""
+                errors.append(
+                    f"Final report cites source {reference_id} which is blocked by source policy.{detail}"
                 )
     else:
         warnings.append("Run source registry is missing or empty; cited source IDs could not be resolved.")
@@ -214,6 +238,13 @@ def main() -> int:
     run_dir = Path(args.run_dir).expanduser()
     job_dir = Path(args.job_dir).expanduser()
     output_path = Path(args.output).expanduser()
+
+    # This script runs as its own process, so the orchestrator's in-process
+    # policy configuration does not reach it: load the job's freshness window
+    # and source policy here so validation matches the deterministic artifact
+    # (which does the same from its --config).
+    configure_freshness_max_days(load_freshness_max_days(job_dir))
+    configure_source_policy(load_source_policy(job_dir))
 
     judge_json_path = run_dir / "stage-outputs" / "06-judge.json"
     judge_md_path = run_dir / "stage-outputs" / "06-judge.md"
@@ -298,6 +329,12 @@ def main() -> int:
         return 1
 
     report_markdown = report_body + "\n"
+
+    if args.no_validate:
+        # Mark skipped validation in the artifact itself: a later resumed run
+        # publishes the canonical file as-is, so without this marker an
+        # unvalidated report would be indistinguishable from a validated one.
+        report_markdown = UNVALIDATED_REPORT_MARKER + "\n" + report_markdown
 
     if not args.no_validate:
         errors, warnings = validate_report(report_markdown, source_index)

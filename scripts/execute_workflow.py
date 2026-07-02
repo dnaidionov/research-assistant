@@ -665,6 +665,27 @@ def update_execution_snapshot_actual_assignment(
     return snapshot
 
 
+def reconcile_stale_snapshot_assignment(
+    run_dir: Path,
+    stage_id: str,
+    selection: StageAdapterSelection,
+) -> None:
+    """Promote a stuck non-terminal snapshot assignment to completed.
+
+    Used on resume skip paths: a crash after the step's artifact was written
+    but before the completed transition leaves the recorded assignment at
+    "started". A step that never recorded an assignment is left alone — a
+    skip must not invent an attempt that never happened.
+    """
+    path = execution_snapshot_path(run_dir)
+    if not path.is_file():
+        return
+    snapshot = json.loads(path.read_text(encoding="utf-8"))
+    existing = snapshot.get("actual_stage_assignments", {}).get(stage_id)
+    if isinstance(existing, dict) and existing.get("status") == "started":
+        update_execution_snapshot_actual_assignment(run_dir, stage_id, selection, "completed")
+
+
 def persist_execution_snapshot(
     *,
     run_dir: Path,
@@ -2930,6 +2951,12 @@ def run_final_report(
     Runs after run_deterministic_final_artifact, as the last step of the workflow.
     """
     custom_output = run_dir / "stage-outputs" / "07-final-report.md"
+    # Reuse the judge's provider/model unless the job explicitly routes the
+    # final-report step to a different one via workflow.execution.stage_providers.
+    report_selection = stage_assignments.get(FINAL_REPORT_STAGE_ID, stage_assignments["judge"])
+    report_adapter = resolve_adapter(report_selection.adapter_name)
+    report_bin = adapter_bins[report_adapter.name]
+
     if custom_output.is_file():
         if not report_output.is_file():
             # Backfill the job-outputs copy for a run whose report was already
@@ -2937,21 +2964,20 @@ def run_final_report(
             # resuming without re-invoking the adapter.
             report_output.parent.mkdir(parents=True, exist_ok=True)
             report_output.write_text(custom_output.read_text(encoding="utf-8"), encoding="utf-8")
+        # A crash between the adapter finishing and the completed transition
+        # leaves the snapshot assignment stuck at "started"; reconcile it here
+        # without inventing an assignment for runs that never launched the step.
+        reconcile_stale_snapshot_assignment(run_dir, FINAL_REPORT_STAGE_ID, report_selection)
         transition_post_processing_status(run_dir, state, "final_report", "completed")
         save_state(state_path, state)
         reporter.complete("system", "final-report")
         return
 
-    _started_monotonic, started_at = timed_operation_bounds()
+    started_monotonic, started_at = timed_operation_bounds()
     reporter.start("system", "final-report")
     transition_post_processing_status(run_dir, state, "final_report", "started")
     save_state(state_path, state)
 
-    # Reuse the judge's provider/model unless the job explicitly routes the
-    # final-report step to a different one via workflow.execution.stage_providers.
-    report_selection = stage_assignments.get(FINAL_REPORT_STAGE_ID, stage_assignments["judge"])
-    report_adapter = resolve_adapter(report_selection.adapter_name)
-    report_bin = adapter_bins[report_adapter.name]
     update_execution_snapshot_actual_assignment(run_dir, FINAL_REPORT_STAGE_ID, report_selection, "started")
 
     custom_report_cmd = [
@@ -2996,15 +3022,16 @@ def run_final_report(
         synthesis_prompt_text = synthesis_prompt_path.read_text(encoding="utf-8")
     except OSError:
         synthesis_prompt_text = " ".join(custom_report_cmd)
+    report_provider_key = report_selection.provider_name or report_selection.adapter_name
     if completed_custom.returncode != 0:
         transition_post_processing_status(run_dir, state, "final_report", "failed")
         save_state(state_path, state)
-        finished_at_custom = utc_now_iso()
+        finished_at_custom, duration_ms_custom = finish_operation(started_monotonic)
         append_command_usage_record(
             run_dir=run_dir,
             scope="post_processing",
             stage_id="final-report",
-            provider_key=report_selection.provider_name or "system",
+            provider_key=report_provider_key,
             adapter=report_adapter.name,
             model=report_selection.model,
             result=CommandResult(
@@ -3013,22 +3040,31 @@ def run_final_report(
                 completed_custom.stderr,
                 started_at=started_at,
                 finished_at=finished_at_custom,
-                duration_ms=0,
+                duration_ms=duration_ms_custom,
             ),
             status="failed",
             prompt_text=synthesis_prompt_text,
             failure_reason=completed_custom.stderr.strip() or "custom final report generation failed",
         )
         update_execution_snapshot_actual_assignment(run_dir, FINAL_REPORT_STAGE_ID, report_selection, "failed")
+        record_provider_stage_result(
+            job_dir,
+            report_provider_key,
+            FINAL_REPORT_STAGE_ID,
+            "failed",
+            run_id=run_dir.name,
+            adapter_name=report_selection.adapter_name,
+            model=report_selection.model,
+        )
         reporter.fail("system", "final-report")
         raise RuntimeError(f"Custom final report generation failed: {completed_custom.stderr.strip()}")
 
-    finished_at_custom = utc_now_iso()
+    finished_at_custom, duration_ms_custom = finish_operation(started_monotonic)
     append_command_usage_record(
         run_dir=run_dir,
         scope="post_processing",
         stage_id="final-report",
-        provider_key=report_selection.provider_name or "system",
+        provider_key=report_provider_key,
         adapter=report_adapter.name,
         model=report_selection.model,
         result=CommandResult(
@@ -3037,7 +3073,7 @@ def run_final_report(
             completed_custom.stderr,
             started_at=started_at,
             finished_at=finished_at_custom,
-            duration_ms=0,
+            duration_ms=duration_ms_custom,
         ),
         status="completed",
         prompt_text=synthesis_prompt_text,
@@ -3050,6 +3086,15 @@ def run_final_report(
     report_output.write_text(custom_output.read_text(encoding="utf-8"), encoding="utf-8")
 
     update_execution_snapshot_actual_assignment(run_dir, FINAL_REPORT_STAGE_ID, report_selection, "completed")
+    record_provider_stage_result(
+        job_dir,
+        report_provider_key,
+        FINAL_REPORT_STAGE_ID,
+        "completed",
+        run_id=run_dir.name,
+        adapter_name=report_selection.adapter_name,
+        model=report_selection.model,
+    )
     transition_post_processing_status(run_dir, state, "final_report", "completed")
     save_state(state_path, state)
     reporter.complete("system", "final-report")

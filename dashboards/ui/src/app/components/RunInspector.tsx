@@ -31,12 +31,42 @@ const statusIcon = (status: string, className = "w-4 h-4") => {
 };
 
 // Post-processing steps run after the six agent stages, in this order, ending
-// with final-report generation as the last step of the workflow.
+// with final-report generation as the last step of the workflow. stageId links
+// a step to its execution-config assignment when it runs through an adapter.
 const POST_PROCESSING_STEPS = [
-  { key: 'claim_extraction', label: 'Claim Extraction', description: 'Extract atomic claims from the judge synthesis into a JSON claim register.' },
-  { key: 'final_artifact', label: 'Final Artifact', description: 'Render the structured, deterministic final artifact from the judge record and claim register.' },
-  { key: 'final_report', label: 'Final Report', description: 'Synthesize the LLM-driven final report and publish it to the job outputs directory — the last step of the workflow.' },
+  { key: 'claim_extraction', label: 'Claim Extraction', description: 'Extract atomic claims from the judge synthesis into a JSON claim register.', stageId: null },
+  { key: 'final_artifact', label: 'Final Artifact', description: 'Render the structured, deterministic final artifact from the judge record and claim register.', stageId: null },
+  { key: 'final_report', label: 'Final Report', description: 'Synthesize the LLM-driven final report and publish it to the job outputs directory — the last step of the workflow.', stageId: 'final-report' },
 ];
+
+interface StageAssignment {
+  provider_key?: string;
+  adapter?: string;
+  model?: string | null;
+}
+
+// The execution snapshot (audit/execution-config.json) records assignments as
+// {provider_key, adapter, model} under actual_stage_assignments (what actually
+// ran) and resolved_stage_assignments (what was planned).
+const assignmentFor = (executionConfig: any, stageId: string): StageAssignment | null => {
+  const assignment =
+    executionConfig?.actual_stage_assignments?.[stageId] ||
+    executionConfig?.resolved_stage_assignments?.[stageId];
+  if (assignment?.provider_key || assignment?.adapter || assignment?.model) {
+    return assignment;
+  }
+  return null;
+};
+
+const AssignmentBadge = ({ assignment }: { assignment: StageAssignment }) => (
+  <div className="flex items-center gap-3 mb-4 mt-2 text-xs font-mono text-slate-400 bg-slate-800/40 w-fit px-3 py-1.5 rounded-lg border border-slate-700/50">
+    {assignment.provider_key && <span>Provider: <span className="text-brand-300">{assignment.provider_key}</span></span>}
+    {assignment.adapter && assignment.adapter !== assignment.provider_key && (
+      <span>Adapter: <span className="text-sky-300">{assignment.adapter}</span></span>
+    )}
+    {assignment.model && <span>Model: <span className="text-emerald-300">{assignment.model}</span></span>}
+  </div>
+);
 
 export default function RunInspector({ jobId, runId, onClose }: RunInspectorProps) {
   const [data, setData] = useState<any>(null);
@@ -158,21 +188,7 @@ export default function RunInspector({ jobId, runId, onClose }: RunInspectorProp
                  <FileClock className="w-6 h-6 text-brand-400" /> Subprocess Status
                </h3>
                {data.workflowState?.stages?.map((stage: any, index: number) => {
-                 let providerInfo = null;
-                 if (data.executionConfig) {
-                   const spaces = [
-                     data.executionConfig.pipeline?.stages?.[stage.id],
-                     data.executionConfig.stages?.[stage.id],
-                     data.executionConfig[stage.id],
-                     data.executionConfig
-                   ];
-                   for (const s of spaces) {
-                     if (s?.provider || s?.model) {
-                       providerInfo = { provider: s.provider, model: s.model };
-                       break;
-                     }
-                   }
-                 }
+                 const providerInfo = assignmentFor(data.executionConfig, stage.id);
 
                  return (
                  <div key={stage.id} className="bg-slate-900 border border-slate-700/60 rounded-2xl p-6 shadow-xl relative overflow-hidden">
@@ -187,12 +203,7 @@ export default function RunInspector({ jobId, runId, onClose }: RunInspectorProp
                      </span>
                    </div>
 
-                   {providerInfo && (
-                     <div className="flex items-center gap-3 mb-4 mt-2 text-xs font-mono text-slate-400 bg-slate-800/40 w-fit px-3 py-1.5 rounded-lg border border-slate-700/50">
-                       {providerInfo.provider && <span>Provider: <span className="text-brand-300">{providerInfo.provider}</span></span>}
-                       {providerInfo.model && <span>Model: <span className="text-emerald-300">{providerInfo.model}</span></span>}
-                     </div>
-                   )}
+                   {providerInfo && <AssignmentBadge assignment={providerInfo} />}
 
                    {stage.substeps && Object.keys(stage.substeps).length > 0 && (
                      <div className="mt-4 pt-4 border-t border-slate-800">
@@ -218,10 +229,11 @@ export default function RunInspector({ jobId, runId, onClose }: RunInspectorProp
                      <FileClock className="w-6 h-6 text-brand-400" /> Post-Processing
                    </h3>
                    {POST_PROCESSING_STEPS
-                     .map(({ key, label, description }) => ({ key, label, description, step: data.workflowState.post_processing[key] }))
+                     .map(({ key, label, description, stageId }) => ({ key, label, description, stageId, step: data.workflowState.post_processing[key] }))
                      .filter(({ step }) => !!step)
-                     .map(({ key, label, description, step }, index) => {
+                     .map(({ key, label, description, stageId, step }, index) => {
                        const stageCount = data.workflowState?.stages?.length || 0;
+                       const assignment = stageId ? assignmentFor(data.executionConfig, stageId) : null;
                        return (
                          <div key={key} className="bg-slate-900 border border-slate-700/60 rounded-2xl p-6 shadow-xl relative overflow-hidden">
                            <div className="absolute top-0 left-0 w-1 h-full bg-brand-500/30" />
@@ -234,6 +246,7 @@ export default function RunInspector({ jobId, runId, onClose }: RunInspectorProp
                                {statusIcon(step.status)} {step.status || 'pending'}
                              </span>
                            </div>
+                           {assignment && <AssignmentBadge assignment={assignment} />}
                            {step.output_path && (
                              <p className="text-xs font-mono text-slate-500 mt-2 truncate">{step.output_path}</p>
                            )}
