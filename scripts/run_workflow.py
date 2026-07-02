@@ -253,6 +253,7 @@ def build_state(job_name: str, job_dir: Path, run_id: str, run_dir: Path, create
         "post_processing": {
             "claim_extraction": {"output_path": str(job_dir / "evidence" / f"claims-{run_id}.json"), "status": "pending"},
             "final_artifact": {"output_path": str(job_dir / "outputs" / f"final-{run_id}.md"), "status": "pending"},
+            "final_report": {"output_path": str(job_dir / "outputs" / f"final-report-{run_id}.md"), "status": "pending"},
             "stage_claims": stage_claims,
         },
         "run_dir": str(run_dir),

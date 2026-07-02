@@ -38,7 +38,7 @@ def recompute_run_status(state: dict[str, object]) -> str:
                 post_statuses.append(str(value.get("status", "pending")))
 
     all_statuses = stage_statuses + post_statuses
-    if any(status in {"failed", "cancelled"} for status in all_statuses):
+    if any(status in {"failed", "cancelled", "aborted"} for status in all_statuses):
         return "failed"
     if any(status == "running" for status in all_statuses):
         return "running"

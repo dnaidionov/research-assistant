@@ -463,7 +463,14 @@ class ExecuteWorkflowTests(unittest.TestCase):
             *extra,
         ]
 
-    def _write_fake_executor(self, path: Path, agent_name: str) -> None:
+    def _write_fake_executor(self, path: Path, agent_name: str, *, fail_final_report: bool = False) -> None:
+        if fail_final_report:
+            final_report_action = 'print("synthesis adapter exploded", file=sys.stderr); sys.exit(1)'
+        else:
+            final_report_action = (
+                'print("# Executive Summary\\n\\nOption A has lower implementation risk. [SRC-001]\\n\\n'
+                '# Recommendation\\n\\nOption A is the safer near-term choice. [SRC-001] Confidence: medium"); sys.exit(0)'
+            )
         path.write_text(
             textwrap.dedent(
                 f"""\
@@ -506,8 +513,7 @@ class ExecuteWorkflowTests(unittest.TestCase):
                     sys.exit(0)
 
                 if "STAGE_ID=final-report" in prompt:
-                    print("# Executive Summary\\n\\nOption A has lower implementation risk. [SRC-001]\\n\\n# Recommendation\\n\\nOption A is the safer near-term choice. [SRC-001] Confidence: medium")
-                    sys.exit(0)
+                    {final_report_action}
 
                 if stage == "intake":
                     output_path.write_text(
@@ -2857,6 +2863,52 @@ class ExecuteWorkflowTests(unittest.TestCase):
             report_output.read_text(encoding="utf-8"),
             (run_dir / "stage-outputs" / "07-final-report.md").read_text(encoding="utf-8"),
         )
+
+    def test_final_report_failure_fails_run_and_records_state_usage_and_scorecard(self) -> None:
+        # The default split runs judge (and therefore final-report) on gemini;
+        # everything succeeds except the final-report synthesis.
+        self._write_fake_executor(self.gemini_bin, "gemini", fail_final_report=True)
+
+        result = subprocess.run(
+            self._workflow_command("run-report-failure"),
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("custom final report generation failed", (result.stderr + result.stdout).lower())
+
+        run_dir = self.job_dir / "runs" / "run-report-failure"
+        state = json.loads((run_dir / "workflow-state.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["post_processing"]["final_artifact"]["status"], "completed")
+        self.assertEqual(state["post_processing"]["final_report"]["status"], "failed")
+        self.assertEqual(state["status"], "failed")
+
+        self.assertFalse((self.job_dir / "outputs" / "final-report-run-report-failure.md").is_file())
+        # The deterministic artifact must survive the report failure.
+        self.assertTrue((self.job_dir / "outputs" / "final-run-report-failure.md").is_file())
+
+        usage_records = json.loads((run_dir / "audit" / "usage" / "usage-records.json").read_text(encoding="utf-8"))
+        failed_report_records = [
+            record
+            for record in usage_records
+            if record["stage_id"] == "final-report" and record["scope"] == "post_processing" and record["status"] == "failed"
+        ]
+        self.assertEqual(len(failed_report_records), 1)
+        self.assertEqual(failed_report_records[0]["adapter"], "gemini")
+
+        execution_snapshot = json.loads((run_dir / "audit" / "execution-config.json").read_text(encoding="utf-8"))
+        self.assertEqual(execution_snapshot["actual_stage_assignments"]["final-report"]["status"], "failed")
+
+        scorecard = json.loads(
+            (self.job_dir / "audit" / "provider-scorecards" / "secondary.json").read_text(encoding="utf-8")
+        )
+        final_report_results = [
+            entry for entry in scorecard["stage_results"] if entry.get("stage_id") == "final-report"
+        ]
+        self.assertEqual(len(final_report_results), 1)
+        self.assertEqual(final_report_results[0]["status"], "failed")
 
     def test_rejects_model_override_for_adapter_without_model_support(self) -> None:
         (self.job_dir / "config.yaml").write_text(

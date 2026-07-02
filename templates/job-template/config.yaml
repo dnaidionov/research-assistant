@@ -42,6 +42,25 @@ workflow:
   preserve_disagreements: true
   require_judge_synthesis: true
   claim_extraction_required: true
+  # Preferred way to pin stage-provider and stage-model selection: define named
+  # providers and map every execution stage to one. The optional final-report
+  # entry routes the LLM final-report synthesis step (the last step of every
+  # run); when omitted, it reuses the judge stage's provider and model.
+  # execution:
+  #   providers:
+  #     codex_primary:
+  #       adapter: codex
+  #     gemini_secondary:
+  #       adapter: gemini
+  #       model: pro
+  #   stage_providers:
+  #     intake: codex_primary
+  #     research-a: codex_primary
+  #     research-b: gemini_secondary
+  #     critique-a-on-b: codex_primary
+  #     critique-b-on-a: gemini_secondary
+  #     judge: gemini_secondary
+  #     final-report: gemini_secondary
 
 # Optional publication quality gates. Uncomment to enable.
 # quality_policy:
