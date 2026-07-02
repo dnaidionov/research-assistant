@@ -48,9 +48,6 @@ export async function GET(req: Request, context: { params: Promise<{ jobId: stri
     const stageOutputsPath = path.join(runPath, 'stage-outputs');
     const promptPacketsPath = path.join(runPath, 'prompt-packets');
     
-    const stageOutputs = await getFiles(stageOutputsPath);
-    const promptPackets = await getFiles(promptPacketsPath);
-    
     // The LLM-synthesized final report (scripts/generate_final_report.py) is the
     // last workflow step; it writes validated markdown to stage-outputs/07-final-report.md.
     // A rejected draft is written to the .rejected.md sibling instead and is
@@ -59,6 +56,9 @@ export async function GET(req: Request, context: { params: Promise<{ jobId: stri
     try {
       finalReportMarkdown = await fs.readFile(path.join(stageOutputsPath, '07-final-report.md'), 'utf8');
     } catch(e) {}
+
+    const stageOutputs = (await getFiles(stageOutputsPath)).filter((f) => f.path !== '07-final-report.md');
+    const promptPackets = await getFiles(promptPacketsPath);
 
     let log = await fs.readFile(path.join(runPath, 'run.log'), 'utf8').catch(() => null);
 

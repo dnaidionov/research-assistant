@@ -217,28 +217,29 @@ export default function RunInspector({ jobId, runId, onClose }: RunInspectorProp
                    <h3 className="text-xl font-medium text-slate-200 mb-6 pt-4 flex items-center gap-2 border-t border-slate-800">
                      <FileClock className="w-6 h-6 text-brand-400" /> Post-Processing
                    </h3>
-                   {POST_PROCESSING_STEPS.map(({ key, label, description }, offset) => {
-                     const step = data.workflowState.post_processing[key];
-                     if (!step) return null;
-                     const stageCount = data.workflowState?.stages?.length || 0;
-                     return (
-                       <div key={key} className="bg-slate-900 border border-slate-700/60 rounded-2xl p-6 shadow-xl relative overflow-hidden">
-                         <div className="absolute top-0 left-0 w-1 h-full bg-brand-500/30" />
-                         <div className="flex justify-between items-start mb-2">
-                           <div>
-                             <h4 className="text-lg font-medium text-slate-100">{stageCount + offset + 1}. {label}</h4>
-                             <p className="text-sm text-slate-400 mt-1">{description}</p>
+                   {POST_PROCESSING_STEPS
+                     .map(({ key, label, description }) => ({ key, label, description, step: data.workflowState.post_processing[key] }))
+                     .filter(({ step }) => !!step)
+                     .map(({ key, label, description, step }, index) => {
+                       const stageCount = data.workflowState?.stages?.length || 0;
+                       return (
+                         <div key={key} className="bg-slate-900 border border-slate-700/60 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+                           <div className="absolute top-0 left-0 w-1 h-full bg-brand-500/30" />
+                           <div className="flex justify-between items-start mb-2">
+                             <div>
+                               <h4 className="text-lg font-medium text-slate-100">{stageCount + index + 1}. {label}</h4>
+                               <p className="text-sm text-slate-400 mt-1">{description}</p>
+                             </div>
+                             <span className={`px-3 py-1 flex items-center gap-1.5 rounded-md text-xs font-semibold capitalize border ${statusColor(step.status)}`}>
+                               {statusIcon(step.status)} {step.status || 'pending'}
+                             </span>
                            </div>
-                           <span className={`px-3 py-1 flex items-center gap-1.5 rounded-md text-xs font-semibold capitalize border ${statusColor(step.status)}`}>
-                             {statusIcon(step.status)} {step.status || 'pending'}
-                           </span>
+                           {step.output_path && (
+                             <p className="text-xs font-mono text-slate-500 mt-2 truncate">{step.output_path}</p>
+                           )}
                          </div>
-                         {step.output_path && (
-                           <p className="text-xs font-mono text-slate-500 mt-2 truncate">{step.output_path}</p>
-                         )}
-                       </div>
-                     );
-                   })}
+                       );
+                     })}
 
                    {data.workflowState.post_processing.stage_claims && (
                      <div className="bg-slate-900 border border-slate-700/60 rounded-2xl p-6 shadow-xl relative overflow-hidden">
