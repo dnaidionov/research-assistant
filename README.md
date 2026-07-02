@@ -8,7 +8,7 @@ The assistant repository contains the orchestration system: prompts, schemas, sc
 
 The product exists to make multi-stage research work more reliable than ordinary single-prompt LLM usage.
 
-Instead of asking one model for one final answer, the framework breaks research into explicit stages such as intake, independent research passes, adversarial critique, judgment, claim extraction, and final artifact generation. Each stage produces auditable files. Disagreement is preserved rather than erased, factual claims are expected to carry citations, and the system records which providers and models were actually used for a specific run.
+Instead of asking one model for one final answer, the framework breaks research into explicit stages such as intake, independent research passes, adversarial critique, judgment, claim extraction, and final artifact generation. The last of these stages produces two complementary deliverables: a deterministic final artifact and an LLM-synthesized final report, both claim-gated and both published into the job's `outputs/` directory. Each stage produces auditable files. Disagreement is preserved rather than erased, factual claims are expected to carry citations, and the system records which providers and models were actually used for a specific run.
 
 ## Why Use It
 
@@ -124,7 +124,7 @@ python3 scripts/run_workflow.py --job-path ~/Projects/research-hub/jobs/my-proje
 - Single-stage launcher: use `scripts/run_stage.py` for one stage at a time, with optional per-step provider/model override
 - Automated runner: use `scripts/execute_workflow.py` for the full configured workflow
 
-9. When judge output is ready, downstream scripts can extract claims and generate the final artifact automatically.
+9. When judge output is ready, downstream scripts can extract claims and generate the final artifact and final report automatically.
 
 ## Manual Stage Execution
 
@@ -207,20 +207,22 @@ The fallback default split is:
 3. `critique-a-on-b` in Codex and `critique-b-on-a` in Gemini in parallel
 4. `judge` in Gemini
 5. claim extraction
-6. final artifact generation
+6. deterministic final artifact generation
+7. LLM-driven final report synthesis — the last step of every run, reusing the judge stage's provider/model unless `workflow.execution.stage_providers.final-report` routes it elsewhere
 
 That split is only the fallback. Prefer job-level execution config in `config.yaml` for durable stage routing and model pinning.
 
 Automated runs persist:
 
-- workflow state in `runs/<run-id>/workflow-state.json`
+- workflow state in `runs/<run-id>/workflow-state.json`, including independently resumable status for claim extraction, the deterministic final artifact, and final report synthesis under `post_processing`
 - usage telemetry in `runs/<run-id>/audit/usage/`
 - configured and actual execution records in `runs/<run-id>/audit/execution-config.json`
 - the exact `brief.md` and `config.yaml` the run was scaffolded against in `runs/<run-id>/job-inputs/`
+- both final deliverables in the job's `outputs/` directory: `outputs/final-<run-id>.md` (deterministic) and `outputs/final-report-<run-id>.md` (LLM-synthesized, published after it passes claim/reference validation)
 
 Because the prompt packets embed the brief at scaffold time, execution refuses to continue a run whose `brief.md` has changed since scaffolding; start a new run for an updated brief. Config drift is journaled as a warning, and execution-relevant config changes are still rejected by the execution-config snapshot guard.
 
-## Claim Extraction and Final Artifact
+## Claim Extraction, Final Artifact, and Final Report
 
 Extract claims from a markdown report with:
 
@@ -243,6 +245,18 @@ python3 scripts/generate_final_artifact.py \
 ```
 
 The final artifact remains operator-reviewed output, not autonomous truth certification.
+
+`execute_workflow.py` runs a second, LLM-driven synthesis step after the deterministic artifact — the last step of the workflow. It can also be invoked directly:
+
+```bash
+python3 scripts/generate_final_report.py \
+  --run-dir ~/Projects/research-hub/jobs/my-project-1/runs/run-001 \
+  --job-dir ~/Projects/research-hub/jobs/my-project-1 \
+  --adapter-name claude --adapter-bin claude \
+  --output ~/Projects/research-hub/jobs/my-project-1/runs/run-001/stage-outputs/07-final-report.md
+```
+
+It synthesizes from the judge record and the claim register, following the judge's recommended report structure, and validates the result against the same claim/reference rules as the deterministic artifact: uncited facts or inferences, unresolved or blocked source IDs, and provenance-only citations all fail it closed, with the rejected draft kept at `07-final-report.md.rejected.md` for review. When run through `execute_workflow.py`, a validated report is also published to `outputs/final-report-<run-id>.md` in the job directory.
 
 After a run, you can audit that external-evidence locators actually resolve (catching fabricated citations that pass schema validation), and optionally verify that the quoted evidence excerpts recorded by the research stages actually appear in the cited documents (catching paraphrased or invented quotes):
 

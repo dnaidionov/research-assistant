@@ -51,9 +51,13 @@ export async function GET(req: Request, context: { params: Promise<{ jobId: stri
     const stageOutputs = await getFiles(stageOutputsPath);
     const promptPackets = await getFiles(promptPacketsPath);
     
-    let htmlReport = null;
+    // The LLM-synthesized final report (scripts/generate_final_report.py) is the
+    // last workflow step; it writes validated markdown to stage-outputs/07-final-report.md.
+    // A rejected draft is written to the .rejected.md sibling instead and is
+    // intentionally not surfaced here, since it failed claim/reference validation.
+    let finalReportMarkdown = null;
     try {
-      htmlReport = await fs.readFile(path.join(runPath, 'final_report.html'), 'utf8');
+      finalReportMarkdown = await fs.readFile(path.join(stageOutputsPath, '07-final-report.md'), 'utf8');
     } catch(e) {}
 
     let log = await fs.readFile(path.join(runPath, 'run.log'), 'utf8').catch(() => null);
@@ -74,7 +78,7 @@ export async function GET(req: Request, context: { params: Promise<{ jobId: stri
        runId,
        stageOutputs,
        promptPackets,
-       htmlReport,
+       finalReportMarkdown,
        log,
        workflowState,
        executionConfig

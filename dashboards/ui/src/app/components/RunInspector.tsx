@@ -30,6 +30,14 @@ const statusIcon = (status: string, className = "w-4 h-4") => {
   }
 };
 
+// Post-processing steps run after the six agent stages, in this order, ending
+// with final-report generation as the last step of the workflow.
+const POST_PROCESSING_STEPS = [
+  { key: 'claim_extraction', label: 'Claim Extraction', description: 'Extract atomic claims from the judge synthesis into a JSON claim register.' },
+  { key: 'final_artifact', label: 'Final Artifact', description: 'Render the structured, deterministic final artifact from the judge record and claim register.' },
+  { key: 'final_report', label: 'Final Report', description: 'Synthesize the LLM-driven final report and publish it to the job outputs directory — the last step of the workflow.' },
+];
+
 export default function RunInspector({ jobId, runId, onClose }: RunInspectorProps) {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -46,7 +54,7 @@ export default function RunInspector({ jobId, runId, onClose }: RunInspectorProp
         const res = await fetch(`/api/jobs/${jobId}/runs/${runId}`);
         const json = await res.json();
         setData(json);
-        if (!json.htmlReport) setActiveTab("status");
+        if (!json.finalReportMarkdown) setActiveTab("status");
       } catch (err) {
         console.error(err);
       } finally {
@@ -83,9 +91,9 @@ export default function RunInspector({ jobId, runId, onClose }: RunInspectorProp
         </div>
 
         <div className="flex bg-slate-900 rounded-xl p-1 border border-slate-800">
-          {data.htmlReport && (
-            <button 
-              onClick={() => setActiveTab('report')} 
+          {data.finalReportMarkdown && (
+            <button
+              onClick={() => setActiveTab('report')}
               className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'report' ? 'bg-brand-500 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
             >
               Report
@@ -120,12 +128,12 @@ export default function RunInspector({ jobId, runId, onClose }: RunInspectorProp
         </div>
         
         <div className="flex items-center gap-2">
-          {activeTab === 'report' && data.htmlReport && (
-            <button 
-              onClick={() => { navigator.clipboard.writeText(data.htmlReport); alert("Report HTML copied"); }}
+          {activeTab === 'report' && data.finalReportMarkdown && (
+            <button
+              onClick={() => { navigator.clipboard.writeText(data.finalReportMarkdown); alert("Report Markdown copied"); }}
               className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-lg transition-colors border border-slate-700/50"
             >
-              Copy HTML
+              Copy Markdown
             </button>
           )}
           <button onClick={onClose} className="p-2 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-full transition-colors ml-2">
@@ -135,13 +143,13 @@ export default function RunInspector({ jobId, runId, onClose }: RunInspectorProp
       </header>
 
       <main className="flex-1 overflow-hidden flex relative">
-        {activeTab === "report" && data.htmlReport ? (
-          <div className="flex-1 w-full h-full bg-white relative">
-             <iframe 
-               srcDoc={data.htmlReport} 
-               className="w-full h-full border-none"
-               title="Final HTML Report"
-             />
+        {activeTab === "report" && data.finalReportMarkdown ? (
+          <div className="flex-1 w-full h-full overflow-y-auto bg-slate-950 p-8">
+             <div className="prose prose-invert prose-emerald max-w-4xl mx-auto prose-pre:bg-slate-900 prose-pre:border prose-pre:border-slate-800 text-[15px] leading-relaxed">
+               <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                 {data.finalReportMarkdown}
+               </ReactMarkdown>
+             </div>
           </div>
         ) : activeTab === "status" ? (
           <div className="flex-1 p-8 overflow-y-auto w-full h-full bg-slate-900/50">
@@ -203,6 +211,53 @@ export default function RunInspector({ jobId, runId, onClose }: RunInspectorProp
                    )}
                  </div>
                )})}
+
+               {data.workflowState?.post_processing && (
+                 <>
+                   <h3 className="text-xl font-medium text-slate-200 mb-6 pt-4 flex items-center gap-2 border-t border-slate-800">
+                     <FileClock className="w-6 h-6 text-brand-400" /> Post-Processing
+                   </h3>
+                   {POST_PROCESSING_STEPS.map(({ key, label, description }, offset) => {
+                     const step = data.workflowState.post_processing[key];
+                     if (!step) return null;
+                     const stageCount = data.workflowState?.stages?.length || 0;
+                     return (
+                       <div key={key} className="bg-slate-900 border border-slate-700/60 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+                         <div className="absolute top-0 left-0 w-1 h-full bg-brand-500/30" />
+                         <div className="flex justify-between items-start mb-2">
+                           <div>
+                             <h4 className="text-lg font-medium text-slate-100">{stageCount + offset + 1}. {label}</h4>
+                             <p className="text-sm text-slate-400 mt-1">{description}</p>
+                           </div>
+                           <span className={`px-3 py-1 flex items-center gap-1.5 rounded-md text-xs font-semibold capitalize border ${statusColor(step.status)}`}>
+                             {statusIcon(step.status)} {step.status || 'pending'}
+                           </span>
+                         </div>
+                         {step.output_path && (
+                           <p className="text-xs font-mono text-slate-500 mt-2 truncate">{step.output_path}</p>
+                         )}
+                       </div>
+                     );
+                   })}
+
+                   {data.workflowState.post_processing.stage_claims && (
+                     <div className="bg-slate-900 border border-slate-700/60 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+                       <div className="absolute top-0 left-0 w-1 h-full bg-brand-500/30" />
+                       <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Per-Stage Claim Sidecars</p>
+                       <div className="flex flex-col gap-2">
+                         {Object.entries(data.workflowState.post_processing.stage_claims).map(([key, sub]: [string, any]) => (
+                           <div key={key} className="flex items-center justify-between bg-slate-800/50 px-4 py-2.5 rounded-lg border border-slate-700">
+                             <span className="text-sm font-mono text-slate-300">{key}</span>
+                             <span className={`flex items-center gap-1.5 text-xs capitalize font-medium ${sub.status === 'completed' ? 'text-emerald-400' : sub.status === 'running' ? 'text-amber-400' : sub.status === 'failed' ? 'text-red-400' : 'text-slate-400'}`}>
+                               {statusIcon(sub.status, "w-3.5 h-3.5")} {sub.status}
+                             </span>
+                           </div>
+                         ))}
+                       </div>
+                     </div>
+                   )}
+                 </>
+               )}
              </div>
           </div>
         ) : activeTab === "config" ? (
