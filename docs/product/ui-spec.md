@@ -48,8 +48,9 @@ The Research Assistant UI is a web-based dashboard designed to manage research j
   - `failed`: Red - Process terminated with error.
   - `running`: Amber (Yellow) - Active execution.
   - `scaffolded`: Slate (Gray) - Manual scaffold prepared, no execution yet.
-- **Embedded Reports**: Parses and injects the standalone `final_report.html` into a secure iFrame `srcDoc` for immediate consumption.
-- **Export Paths**: Buttons allow researchers to easily copy HTML content to their keyboards or open raw API data directly.
+- **Final Report Tab**: Reads the validated `stage-outputs/07-final-report.md` markdown (the LLM-synthesized final report, the last workflow step) and renders it with the same rich-text markdown viewer used for stage outputs. The tab only appears once that artifact exists; a rejected draft (`.rejected.md`) that failed claim/reference validation is intentionally not surfaced here.
+- **Post-Processing Status**: The Status tab lists claim extraction, deterministic final artifact generation, and final report synthesis as numbered steps continuing the six agent stages, each with its own status badge and output path, sourced from `workflow-state.json`'s `post_processing` section.
+- **Export Paths**: Buttons allow researchers to easily copy the final report markdown to their clipboard or open raw API data directly.
 
 ## Technology Stack
 

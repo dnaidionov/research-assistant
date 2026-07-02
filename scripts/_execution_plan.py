@@ -11,6 +11,13 @@ from run_workflow import RUN_STAGES
 
 STAGE_CLAIM_STAGE_IDS = {"research-a", "research-b", "critique-a-on-b", "critique-b-on-a", "judge"}
 
+# The LLM-synthesized final report (scripts/generate_final_report.py) is a
+# post-processing step, not a prompt-packet stage in EXECUTION_PLAN: it has no
+# scaffolded packet and runs once, after claim extraction and the deterministic
+# final artifact. It is still individually routable via workflow.execution.stage_providers
+# and individually trackable in workflow state, so its stage id is a shared constant.
+FINAL_REPORT_STAGE_ID = "final-report"
+
 
 @dataclass(frozen=True)
 class StageExecution:

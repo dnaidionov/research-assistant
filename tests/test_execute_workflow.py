@@ -35,6 +35,8 @@ from execute_workflow import (
     build_adapter_executor,
     build_claude_command,
     build_gemini_command,
+    ensure_post_processing_state,
+    load_provider_catalog_from_job_config,
     next_incremental_run_id,
     run_structured_stage,
     run_stage_group,
@@ -1504,6 +1506,14 @@ class ExecuteWorkflowTests(unittest.TestCase):
         self.assertIn("gemini: judge completed", result.stdout.lower())
         self.assertIn("system: claim-extraction started", result.stdout.lower())
         self.assertIn("system: final-artifact completed", result.stdout.lower())
+        self.assertIn("system: final-report started", result.stdout.lower())
+        self.assertIn("system: final-report completed", result.stdout.lower())
+        # final-report is the last step: its "started" event must not appear
+        # before final-artifact has completed.
+        self.assertLess(
+            result.stdout.lower().index("system: final-artifact completed"),
+            result.stdout.lower().index("system: final-report started"),
+        )
 
         run_dir = self.job_dir / "runs" / "run-001"
         self.assertTrue((run_dir / "stage-outputs" / "01-intake.json").is_file())
@@ -1519,8 +1529,14 @@ class ExecuteWorkflowTests(unittest.TestCase):
 
         claim_register = self.job_dir / "evidence" / "claims-run-001.json"
         final_artifact = self.job_dir / "outputs" / "final-run-001.md"
+        final_report_output = self.job_dir / "outputs" / "final-report-run-001.md"
         self.assertTrue(claim_register.is_file())
         self.assertTrue(final_artifact.is_file())
+        self.assertTrue(final_report_output.is_file())
+        self.assertEqual(
+            final_report_output.read_text(encoding="utf-8"),
+            (run_dir / "stage-outputs" / "07-final-report.md").read_text(encoding="utf-8"),
+        )
         self.assertTrue((run_dir / "stage-claims" / "02-research-a.claims.json").is_file())
         self.assertTrue((run_dir / "stage-claims" / "03-research-b.claims.json").is_file())
         self.assertTrue((run_dir / "stage-claims" / "04-critique-a-on-b.claims.json").is_file())
@@ -1554,6 +1570,7 @@ class ExecuteWorkflowTests(unittest.TestCase):
         self.assertTrue(any(record["stage_id"] == "judge" and record["substep"] == "render" for record in usage_records))
         self.assertTrue(any(record["stage_id"] == "claim-extraction" and record["scope"] == "post_processing" for record in usage_records))
         self.assertTrue(any(record["stage_id"] == "final-artifact" and record["scope"] == "post_processing" for record in usage_records))
+        self.assertTrue(any(record["stage_id"] == "final-report" and record["scope"] == "post_processing" for record in usage_records))
         self.assertTrue(all(record["usage_status"] in {"reported", "estimated", "unavailable"} for record in usage_records))
 
         usage_summary = json.loads(usage_summary_path.read_text(encoding="utf-8"))
@@ -1580,6 +1597,14 @@ class ExecuteWorkflowTests(unittest.TestCase):
         self.assertEqual(state["post_processing"]["stage_claims"]["judge"]["status"], "completed")
         self.assertEqual(state["post_processing"]["claim_extraction"]["status"], "completed")
         self.assertEqual(state["post_processing"]["final_artifact"]["status"], "completed")
+        self.assertEqual(state["post_processing"]["final_report"]["status"], "completed")
+        self.assertEqual(state["post_processing"]["final_report"]["output_path"], str(final_report_output))
+
+        execution_snapshot = json.loads(
+            (run_dir / "audit" / "execution-config.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(execution_snapshot["actual_stage_assignments"]["final-report"]["status"], "completed")
+        self.assertEqual(execution_snapshot["actual_stage_assignments"]["final-report"]["adapter"], "gemini")
 
     def test_persists_append_only_workflow_events(self) -> None:
         result = subprocess.run(
@@ -2655,6 +2680,14 @@ class ExecuteWorkflowTests(unittest.TestCase):
         self.assertIn("CLAIM_PASS_COMMAND:\n" + str(self.claude_bin), research_b_log)
         self.assertIn("--model gemini-3.1-pro-preview", judge_log)
 
+        # final-report has no dedicated stage_providers entry, so it falls
+        # back to reusing the judge stage's resolved provider and model.
+        final_report_log = (
+            self.job_dir / "runs" / "run-config-stage-routing" / "logs" / "final-report-generation.driver.log"
+        ).read_text(encoding="utf-8")
+        self.assertIn(str(self.gemini_bin), final_report_log)
+        self.assertIn("--model gemini-3.1-pro-preview", final_report_log)
+
         execution_snapshot = json.loads(
             (self.job_dir / "runs" / "run-config-stage-routing" / "audit" / "execution-config.json").read_text(
                 encoding="utf-8"
@@ -2683,6 +2716,146 @@ class ExecuteWorkflowTests(unittest.TestCase):
         self.assertEqual(
             execution_events[0]["resolved_stage_assignments"]["judge"],
             {"provider_key": "gemini_judge", "adapter": "gemini", "model": "gemini-3.1-pro-preview"},
+        )
+
+    def test_final_report_step_routes_to_its_own_configured_provider(self) -> None:
+        self._write_fake_executor(self.claude_bin, "claude")
+        (self.job_dir / "config.yaml").write_text(
+            textwrap.dedent(
+                """\
+                topic: my-project-1
+                requirements:
+                  require_citations: true
+                workflow:
+                  execution:
+                    providers:
+                      codex_primary:
+                        adapter: codex
+                      gemini_secondary:
+                        adapter: gemini
+                      claude_report:
+                        adapter: claude
+                    stage_providers:
+                      intake: codex_primary
+                      research-a: codex_primary
+                      research-b: gemini_secondary
+                      critique-a-on-b: codex_primary
+                      critique-b-on-a: gemini_secondary
+                      judge: gemini_secondary
+                      final-report: claude_report
+                """
+            ),
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            self._workflow_command("run-final-report-routing"),
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        run_dir = self.job_dir / "runs" / "run-final-report-routing"
+        final_report_log = (run_dir / "logs" / "final-report-generation.driver.log").read_text(encoding="utf-8")
+        self.assertIn(str(self.claude_bin), final_report_log)
+        self.assertNotIn(str(self.gemini_bin), final_report_log)
+
+        execution_snapshot = json.loads((run_dir / "audit" / "execution-config.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            execution_snapshot["actual_stage_assignments"]["final-report"],
+            {"provider_key": "claude_report", "adapter": "claude", "model": None, "status": "completed"},
+        )
+        # judge itself must still use its own configured provider, unaffected
+        # by the final-report override.
+        self.assertEqual(execution_snapshot["actual_stage_assignments"]["judge"]["adapter"], "gemini")
+
+    def test_stage_providers_omitting_final_report_is_valid_but_unknown_stage_id_is_rejected(self) -> None:
+        base_config = textwrap.dedent(
+            """\
+            topic: my-project-1
+            workflow:
+              execution:
+                providers:
+                  codex_primary:
+                    adapter: codex
+                stage_providers:
+                  intake: codex_primary
+                  research-a: codex_primary
+                  research-b: codex_primary
+                  critique-a-on-b: codex_primary
+                  critique-b-on-a: codex_primary
+                  judge: codex_primary
+            """
+        )
+        (self.job_dir / "config.yaml").write_text(base_config, encoding="utf-8")
+        catalog = load_provider_catalog_from_job_config(self.job_dir)
+        self.assertIn("codex_primary", catalog)
+
+        (self.job_dir / "config.yaml").write_text(
+            base_config + "      final-report: codex_primary\n",
+            encoding="utf-8",
+        )
+        catalog = load_provider_catalog_from_job_config(self.job_dir)
+        self.assertIn("codex_primary", catalog)
+
+        (self.job_dir / "config.yaml").write_text(
+            base_config + "      bogus-stage: codex_primary\n",
+            encoding="utf-8",
+        )
+        with self.assertRaises(ValueError) as context:
+            load_provider_catalog_from_job_config(self.job_dir)
+        self.assertIn("unknown stage IDs", str(context.exception))
+        self.assertIn("bogus-stage", str(context.exception))
+
+    def test_ensure_post_processing_state_tracks_final_report_independently(self) -> None:
+        state = {"run_dir": str(self.job_dir / "runs" / "run-state-x")}
+        claim_output = self.job_dir / "evidence" / "claims-run-state-x.json"
+        final_output = self.job_dir / "outputs" / "final-run-state-x.md"
+        ensure_post_processing_state(state, claim_output, final_output)
+
+        self.assertIn("final_report", state["post_processing"])
+        self.assertEqual(state["post_processing"]["final_report"]["status"], "pending")
+        self.assertEqual(
+            state["post_processing"]["final_report"]["output_path"],
+            str(self.job_dir / "outputs" / "final-report-run-state-x.md"),
+        )
+        # final_artifact and final_report must be independently tracked, not
+        # the same conflated entry.
+        self.assertIsNot(state["post_processing"]["final_artifact"], state["post_processing"]["final_report"])
+
+    def test_final_report_resume_backfills_job_outputs_copy_without_reinvoking_adapter(self) -> None:
+        first = subprocess.run(
+            self._workflow_command("run-report-backfill"),
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(first.returncode, 0, first.stderr)
+
+        run_dir = self.job_dir / "runs" / "run-report-backfill"
+        report_output = self.job_dir / "outputs" / "final-report-run-report-backfill.md"
+        self.assertTrue(report_output.is_file())
+        report_output.unlink()
+
+        # Make every adapter fail immediately: if the resumed run re-invokes
+        # the adapter instead of backfilling from the existing validated
+        # stage-outputs copy, this proves it by making the whole run fail.
+        self._write_failing_executor(self.codex_bin, "codex should not run on resume")
+        self._write_failing_executor(self.gemini_bin, "gemini should not run on resume")
+
+        second = subprocess.run(
+            self._workflow_command("run-report-backfill"),
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            input="yes\n",
+        )
+
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertTrue(report_output.is_file())
+        self.assertEqual(
+            report_output.read_text(encoding="utf-8"),
+            (run_dir / "stage-outputs" / "07-final-report.md").read_text(encoding="utf-8"),
         )
 
     def test_rejects_model_override_for_adapter_without_model_support(self) -> None:

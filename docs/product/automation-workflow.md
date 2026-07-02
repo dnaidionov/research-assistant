@@ -22,9 +22,10 @@ Those are defaults, not hard requirements. `jobs_root` is configured through `co
 5. Critique of B by A
 6. Judge
 7. Claim extraction
-8. Artifact writing
+8. Deterministic final artifact writing
+9. Final report synthesis (LLM-driven, the last step of every run)
 
-These stages must remain distinct. The workflow must not collapse research, critique, judge, and claim extraction into a single pass.
+These stages must remain distinct. The workflow must not collapse research, critique, judge, and claim extraction into a single pass. Steps 8 and 9 are also distinct from each other: step 8 mechanically renders the judge record into a fixed structure with no model call, while step 9 is a full LLM synthesis gated by the same publication-validation rules. Both write into the run, and both are published as sibling files in the job's `outputs/` directory.
 
 ## `run_workflow.py` Scaffold Scope
 
@@ -51,7 +52,10 @@ The current fallback default adapter assignment is:
 4. judge in Gemini
 5. structured-output validation and stage claim sidecar generation for research A, research B, both critique stages, and judge
 6. claim extraction
-7. final artifact generation
+7. deterministic final artifact generation (`scripts/generate_final_artifact.py`, no model call)
+8. LLM-driven final report synthesis (`scripts/generate_final_report.py`) — the last step of every run, reusing the judge stage's provider/model unless the job routes it separately (see below)
+
+Steps 7 and 8 are tracked as separate `post_processing` entries in `workflow-state.json` (`final_artifact` and `final_report`), each independently resumable: a run interrupted between them resumes at step 8 without redoing step 7. Both write their output into the job's `outputs/` directory: the deterministic artifact at `outputs/final-<run-id>.md`, and a published copy of the validated report at `outputs/final-report-<run-id>.md` (the canonical copy also stays at `runs/<run-id>/stage-outputs/07-final-report.md`, alongside the other stage outputs).
 
 The runner is file-driven. It waits on required stage output artifacts, updates `workflow-state.json`, and writes per-step logs into the run directory.
 For structured research, critique, and judge stages, it no longer relies on one monolithic model call. It now decomposes those stages into a source pass, a claim pass, and deterministic markdown rendering from the validated structured payload.
@@ -69,6 +73,8 @@ Job-level execution config may now override the fallback primary-secondary split
 
 Each named provider declares an `adapter` and may declare a `model` when that adapter supports explicit model selection. `stage_providers` then maps each execution stage to one of those named providers. This is now the preferred way to pin stage-provider and stage-model selection for a job.
 The trust fields let a job demand stronger qualification depth globally or per stage instead of always accepting the default smoke-level trust.
+
+`stage_providers` must define every one of the six agent stages (`intake`, `research-a`, `research-b`, `critique-a-on-b`, `critique-b-on-a`, `judge`); an optional `final-report` key may also be included to route the LLM final-report synthesis step to a different provider than the judge. When `final-report` is omitted, the runner reuses the judge stage's resolved provider and model. `final-report` is not required and not one of the six intake-through-judge stages, so it is exempt from the "missing stage assignments" check but still validated against the declared `providers` catalog when present.
 
 `execute_workflow.py` still accepts `--run-id`, but it is no longer required. When omitted, the runner now chooses the next incremental run id under the job's `runs/` directory, ignoring non-incremental names such as `run-manual`. When an explicit `--run-id` already exists, the runner now asks for confirmation before continuing that run.
 
@@ -361,6 +367,17 @@ Promoted deliverables belong in those job-level directories, not in the assistan
 - rejects unresolved referenced source IDs instead of emitting bare IDs into the final report
 - writes a structured final artifact with external references only
 - keeps workflow provenance out of the user-facing references section
+
+### `scripts/generate_final_report.py`
+- the LLM-driven final report step, run once by `execute_workflow.py` after the deterministic final artifact — the last step of the workflow
+- builds a synthesis prompt from the judge markdown and the validated claim register, with earlier stage artifacts referenced as path-only optional background and an explicit instruction not to reintroduce any claim the critiques or judge rejected
+- uses the judge stage's resolved provider and model unless the job's `workflow.execution.stage_providers.final-report` routes it elsewhere
+- persists the exact synthesis prompt to `logs/final-report-generation.prompt.md` so usage telemetry reflects the real prompt cost rather than the wrapper command
+- only trusts an output file written during the current invocation: a stale `07-final-report.md` from an earlier run is never re-validated as fresh, and a file the adapter wrote directly takes precedence over stdout chatter
+- validates the generated markdown with the same claim/reference substrate as the deterministic artifact: uncited facts or inferences, unresolved or blocked source IDs, and provenance-only citations all fail the report closed
+- on validation failure, writes the rejected draft to `07-final-report.md.rejected.md` for operator review and removes any draft that was written straight to the canonical output path, so a resumed run cannot treat unvalidated content as complete
+- on success, `execute_workflow.py` publishes a copy to `outputs/final-report-<run-id>.md` in the job directory, alongside the deterministic artifact
+- `--no-validate` is available as an operator escape hatch; a report generated this way is operator-reviewed output only
 
 ## Intake State
 

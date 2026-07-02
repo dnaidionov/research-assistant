@@ -51,6 +51,7 @@ from _execution_guards import (
 from _execution_plan import (
     EXECUTION_BY_STAGE_ID,
     EXECUTION_PLAN,
+    FINAL_REPORT_STAGE_ID,
     STAGE_CLAIM_STAGE_IDS,
     StageExecution,
     expected_first_heading,
@@ -351,6 +352,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--final-output",
         help="Optional path for the generated final artifact. Defaults to job outputs/final-<run-id>.md.",
+    )
+    parser.add_argument(
+        "--final-report-output",
+        help="Optional path for the published copy of the LLM-synthesized final report. Defaults to job outputs/final-report-<run-id>.md.",
     )
     return parser.parse_args()
 
@@ -1791,8 +1796,14 @@ def load_provider_catalog_from_job_config(job_dir: Path) -> dict[str, StageAdapt
         )
 
     expected_stage_ids = [stage["id"] for stage in RUN_STAGES]
+    # final-report is a post-processing step, not a prompt-packet stage, so it
+    # is routable but never required: omitting it falls back to the judge's
+    # provider/model.
+    optional_stage_ids = {FINAL_REPORT_STAGE_ID}
     missing_stage_ids = [stage_id for stage_id in expected_stage_ids if stage_id not in stage_providers]
-    unknown_stage_ids = [stage_id for stage_id in stage_providers if stage_id not in expected_stage_ids]
+    unknown_stage_ids = [
+        stage_id for stage_id in stage_providers if stage_id not in expected_stage_ids and stage_id not in optional_stage_ids
+    ]
     if missing_stage_ids:
         raise ValueError(
             "workflow.execution.stage_providers is missing stage assignments for: " + ", ".join(sorted(missing_stage_ids))
@@ -2767,7 +2778,7 @@ def run_extract_claims(
     reporter.complete("system", "claim-extraction")
 
 
-def run_final_artifact(
+def run_deterministic_final_artifact(
     run_dir: Path,
     job_dir: Path,
     claim_output: Path,
@@ -2775,17 +2786,15 @@ def run_final_artifact(
     state: dict[str, object],
     state_path: Path,
     reporter: ProgressReporter,
-    stage_assignments: dict[str, StageAdapterSelection],
-    adapter_bins: dict[str, str],
 ) -> None:
-    _started_monotonic, started_at = timed_operation_bounds()
-    custom_output = run_dir / "stage-outputs" / "07-final-report.md"
-    if final_output.is_file() and custom_output.is_file():
+    """Render the structured, non-LLM final artifact from the judge record and claim register."""
+    if final_output.is_file():
         transition_post_processing_status(run_dir, state, "final_artifact", "completed")
         save_state(state_path, state)
         reporter.complete("system", "final-artifact")
         return
 
+    _started_monotonic, started_at = timed_operation_bounds()
     reporter.start("system", "final-artifact")
     transition_post_processing_status(run_dir, state, "final_artifact", "started")
     save_state(state_path, state)
@@ -2899,10 +2908,51 @@ def run_final_artifact(
         prompt_text=" ".join(cmd),
     )
 
-    # Generate the custom 14-section final report based on the judge's recommended structure
-    judge_selection = stage_assignments["judge"]
-    judge_adapter = resolve_adapter(judge_selection.adapter_name)
-    judge_bin = adapter_bins[judge_adapter.name]
+    transition_post_processing_status(run_dir, state, "final_artifact", "completed")
+    save_state(state_path, state)
+    reporter.complete("system", "final-artifact")
+
+
+def run_final_report(
+    run_dir: Path,
+    job_dir: Path,
+    claim_output: Path,
+    final_output: Path,
+    report_output: Path,
+    state: dict[str, object],
+    state_path: Path,
+    reporter: ProgressReporter,
+    stage_assignments: dict[str, StageAdapterSelection],
+    adapter_bins: dict[str, str],
+) -> None:
+    """Synthesize the LLM-driven final report and publish a copy into the job's outputs/ directory.
+
+    Runs after run_deterministic_final_artifact, as the last step of the workflow.
+    """
+    custom_output = run_dir / "stage-outputs" / "07-final-report.md"
+    if custom_output.is_file():
+        if not report_output.is_file():
+            # Backfill the job-outputs copy for a run whose report was already
+            # validated and written before this copy step existed, or when
+            # resuming without re-invoking the adapter.
+            report_output.parent.mkdir(parents=True, exist_ok=True)
+            report_output.write_text(custom_output.read_text(encoding="utf-8"), encoding="utf-8")
+        transition_post_processing_status(run_dir, state, "final_report", "completed")
+        save_state(state_path, state)
+        reporter.complete("system", "final-report")
+        return
+
+    _started_monotonic, started_at = timed_operation_bounds()
+    reporter.start("system", "final-report")
+    transition_post_processing_status(run_dir, state, "final_report", "started")
+    save_state(state_path, state)
+
+    # Reuse the judge's provider/model unless the job explicitly routes the
+    # final-report step to a different one via workflow.execution.stage_providers.
+    report_selection = stage_assignments.get(FINAL_REPORT_STAGE_ID, stage_assignments["judge"])
+    report_adapter = resolve_adapter(report_selection.adapter_name)
+    report_bin = adapter_bins[report_adapter.name]
+    update_execution_snapshot_actual_assignment(run_dir, FINAL_REPORT_STAGE_ID, report_selection, "started")
 
     custom_report_cmd = [
         sys.executable,
@@ -2912,11 +2962,11 @@ def run_final_artifact(
         "--job-dir",
         str(job_dir),
         "--adapter-name",
-        judge_adapter.name,
+        report_adapter.name,
         "--adapter-bin",
-        str(judge_bin),
+        str(report_bin),
         "--model",
-        judge_selection.model or "",
+        report_selection.model or "",
         "--output",
         str(custom_output),
     ]
@@ -2947,16 +2997,16 @@ def run_final_artifact(
     except OSError:
         synthesis_prompt_text = " ".join(custom_report_cmd)
     if completed_custom.returncode != 0:
-        transition_post_processing_status(run_dir, state, "final_artifact", "failed")
+        transition_post_processing_status(run_dir, state, "final_report", "failed")
         save_state(state_path, state)
         finished_at_custom = utc_now_iso()
         append_command_usage_record(
             run_dir=run_dir,
             scope="post_processing",
-            stage_id="final-artifact",
-            provider_key="system",
-            adapter="system",
-            model=None,
+            stage_id="final-report",
+            provider_key=report_selection.provider_name or "system",
+            adapter=report_adapter.name,
+            model=report_selection.model,
             result=CommandResult(
                 completed_custom.returncode,
                 completed_custom.stdout,
@@ -2969,7 +3019,8 @@ def run_final_artifact(
             prompt_text=synthesis_prompt_text,
             failure_reason=completed_custom.stderr.strip() or "custom final report generation failed",
         )
-        reporter.fail("system", "final-artifact")
+        update_execution_snapshot_actual_assignment(run_dir, FINAL_REPORT_STAGE_ID, report_selection, "failed")
+        reporter.fail("system", "final-report")
         raise RuntimeError(f"Custom final report generation failed: {completed_custom.stderr.strip()}")
 
     finished_at_custom = utc_now_iso()
@@ -2977,9 +3028,9 @@ def run_final_artifact(
         run_dir=run_dir,
         scope="post_processing",
         stage_id="final-report",
-        provider_key=judge_selection.provider_name or "system",
-        adapter=judge_adapter.name,
-        model=judge_selection.model,
+        provider_key=report_selection.provider_name or "system",
+        adapter=report_adapter.name,
+        model=report_selection.model,
         result=CommandResult(
             completed_custom.returncode,
             completed_custom.stdout,
@@ -2992,9 +3043,16 @@ def run_final_artifact(
         prompt_text=synthesis_prompt_text,
     )
 
-    transition_post_processing_status(run_dir, state, "final_artifact", "completed")
+    # Publish a copy alongside the deterministic artifact so both final
+    # deliverables are discoverable in the job's outputs/ directory without
+    # having to know the run's internal stage-outputs layout.
+    report_output.parent.mkdir(parents=True, exist_ok=True)
+    report_output.write_text(custom_output.read_text(encoding="utf-8"), encoding="utf-8")
+
+    update_execution_snapshot_actual_assignment(run_dir, FINAL_REPORT_STAGE_ID, report_selection, "completed")
+    transition_post_processing_status(run_dir, state, "final_report", "completed")
     save_state(state_path, state)
-    reporter.complete("system", "final-artifact")
+    reporter.complete("system", "final-report")
 
 
 def main() -> int:
@@ -3054,12 +3112,16 @@ def main() -> int:
 
     claim_output = Path(args.claim_output).expanduser() if args.claim_output else job_dir / "evidence" / f"claims-{run_id}.json"
     final_output = Path(args.final_output).expanduser() if args.final_output else job_dir / "outputs" / f"final-{run_id}.md"
+    final_report_output = (
+        Path(args.final_report_output).expanduser() if args.final_report_output else job_dir / "outputs" / f"final-report-{run_id}.md"
+    )
     claim_output.parent.mkdir(parents=True, exist_ok=True)
     final_output.parent.mkdir(parents=True, exist_ok=True)
+    final_report_output.parent.mkdir(parents=True, exist_ok=True)
 
     state_path = run_dir / "workflow-state.json"
     state = load_state(state_path)
-    ensure_post_processing_state(state, claim_output, final_output)
+    ensure_post_processing_state(state, claim_output, final_output, final_report_output)
     save_state(state_path, state)
     try:
         persist_execution_snapshot(
@@ -3082,7 +3144,7 @@ def main() -> int:
     already_complete = all(
         is_stage_output_complete(stage_output_path(run_dir, stage["expected_output_target"].split("/")[-1]))
         for stage in state["stages"]
-    ) and claim_output.is_file() and final_output.is_file()
+    ) and claim_output.is_file() and final_output.is_file() and final_report_output.is_file()
 
     try:
         qualify_stage_adapters(
@@ -3096,11 +3158,21 @@ def main() -> int:
             run_stage_group(group, run_dir, job_dir, state_path, state, stage_assignments, adapter_bins, reporter)
 
         run_extract_claims(run_dir, job_dir, run_id, claim_output, state, state_path, reporter)
-        run_final_artifact(
+        run_deterministic_final_artifact(
             run_dir,
             job_dir,
             claim_output,
             final_output,
+            state,
+            state_path,
+            reporter,
+        )
+        run_final_report(
+            run_dir,
+            job_dir,
+            claim_output,
+            final_output,
+            final_report_output,
             state,
             state_path,
             reporter,

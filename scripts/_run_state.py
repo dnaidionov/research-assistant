@@ -87,7 +87,12 @@ def set_stage_substep_status(state: dict[str, object], stage_id: str, substep: s
     raise KeyError(f"Unknown stage id: {stage_id}")
 
 
-def ensure_post_processing_state(state: dict[str, object], claim_output: Path, final_output: Path) -> None:
+def ensure_post_processing_state(
+    state: dict[str, object],
+    claim_output: Path,
+    final_output: Path,
+    report_output: Path | None = None,
+) -> None:
     post_processing = state.setdefault("post_processing", {})
     stage_claims = post_processing.setdefault("stage_claims", {})
     run_dir = Path(str(state["run_dir"]))
@@ -98,6 +103,12 @@ def ensure_post_processing_state(state: dict[str, object], claim_output: Path, f
         )
     post_processing.setdefault("claim_extraction", {"output_path": str(claim_output), "status": "pending"})
     post_processing.setdefault("final_artifact", {"output_path": str(final_output), "status": "pending"})
+    # The LLM-synthesized report is tracked separately from the deterministic
+    # final artifact so a resumed run's state distinguishes "artifact written,
+    # report still pending" from "both done" instead of conflating the two.
+    if report_output is None:
+        report_output = run_dir.parent.parent / "outputs" / f"final-report-{run_dir.name}.md"
+    post_processing.setdefault("final_report", {"output_path": str(report_output), "status": "pending"})
 
 
 def set_post_processing_status(state: dict[str, object], key: str, status: str) -> None:
