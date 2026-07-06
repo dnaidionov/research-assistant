@@ -17,8 +17,12 @@ mkdir -p "$JOBS_ROOT"
 cp -R "$TEMPLATE_DIR" "$JOBS_ROOT/$NAME"
 cd "$JOBS_ROOT/$NAME"
 
-# Update topic in config.yaml to match job name
-sed -i '' "s/^topic: .*/topic: $NAME/" config.yaml
+# Update topic in config.yaml to match job name (escape special characters for sed)
+ESCAPED_NAME=$(printf '%s\n' "$NAME" | sed -e 's/[\/&]/\\&/g')
+sed -i '' "s|^topic: .*|topic: $ESCAPED_NAME|" config.yaml || {
+  echo "Error: Failed to update topic in config.yaml" >&2
+  exit 1
+}
 
 git init
 
