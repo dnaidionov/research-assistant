@@ -1,0 +1,9 @@
+job_id: cyris-forecast
+display_name: "CYRIS Forecast"
+local_path: ../../../jobs/cyris-forecast
+visibility: private
+status: active
+tags:
+  - cyris
+  - forecast
+family: research
