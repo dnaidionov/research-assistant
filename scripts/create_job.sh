@@ -16,6 +16,10 @@ TEMPLATE_DIR=$(cd "$SCRIPT_DIR/../templates/job-template" && pwd)
 mkdir -p "$JOBS_ROOT"
 cp -R "$TEMPLATE_DIR" "$JOBS_ROOT/$NAME"
 cd "$JOBS_ROOT/$NAME"
+
+# Update topic in config.yaml to match job name
+sed -i '' "s/^topic: .*/topic: $NAME/" config.yaml
+
 git init
 
 echo "Created job: $NAME"
