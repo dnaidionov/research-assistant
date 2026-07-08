@@ -208,9 +208,13 @@ def infer_claim_type(text: str, heading: str | None) -> str:
     return "fact"
 
 
+TABLE_SEPARATOR_PATTERN = re.compile(r"^\|(?:\s*:?-{3,}:?\s*\|)+\s*$")
+
+
 def iter_candidate_claims(markdown: str) -> Iterable[tuple[int, str | None, str]]:
     active_heading: str | None = None
-    for line_number, raw_line in enumerate(markdown.splitlines(), start=1):
+    lines = markdown.splitlines()
+    for line_number, raw_line in enumerate(lines, start=1):
         stripped = raw_line.strip()
         if not stripped:
             continue
@@ -218,6 +222,17 @@ def iter_candidate_claims(markdown: str) -> Iterable[tuple[int, str | None, str]
         heading = canonical_heading(stripped)
         if heading is not None:
             active_heading = heading
+            continue
+
+        # Markdown table header rows (a pipe row immediately followed by the
+        # |---|---| separator) label columns; they carry no claims of their own.
+        if (
+            stripped.startswith("|")
+            and line_number < len(lines)
+            and TABLE_SEPARATOR_PATTERN.match(lines[line_number].strip())
+        ):
+            continue
+        if TABLE_SEPARATOR_PATTERN.match(stripped):
             continue
 
         if not is_probable_claim_line(raw_line):
