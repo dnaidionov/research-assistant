@@ -144,6 +144,7 @@ Rules:
 - Use `context` for background inputs that inform scope or constraints but are not the main proof.
 - Use `challenge` only when a cited source materially pushes against the claim.
 - Use `provenance` for workflow artifacts or traceability records. Provenance is not evidence.
+- Every fact and inference item is validated on having at least one `support_links` entry with role `evidence` on that item; `context` and `challenge` links do not satisfy this and the item fails validation without one. This applies even when the claim itself is hedged or uncertain — hedge in the claim text and `confidence`, not by downgrading the supporting link's role.
 - `confidence` must be `low`, `medium`, or `high`.
 - Every cited source id must be declared in `sources`.
 - Every `sources` item must include `id`, `title`, `type`, `authority`, and `locator`, and should include `source_class` when known.

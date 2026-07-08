@@ -448,6 +448,93 @@ class StageContractTests(unittest.TestCase):
         self.assertIn("Battery life will improve automatically.", markdown)
         self.assertIn("Confidence: medium", markdown)
 
+    def test_accepts_omission_singular_key_synonym_and_builds_claim_map(self) -> None:
+        payload = {
+            "stage": "critique-a-on-b",
+            "supported_claims": [],
+            "unsupported_claims": [],
+            "weak_source_issues": [],
+            "omissions": [
+                {"omission": "No comparison against lower-power accelerators.", "evidence_sources": ["SRC-001"]}
+            ],
+            "overreach": [],
+            "unresolved_disagreements": [],
+            "summary": {"text": "Mixed reliability.", "confidence": "medium"},
+            "sources": [
+                {"id": "SRC-001", "title": "Source 1", "type": "document", "authority": "vendor", "locator": "https://example.com/src-001"},
+            ],
+        }
+        registry = source_registry_placeholder("run-xyz")
+
+        errors = validate_stage_json("critique-a-on-b", payload, registry)
+        claim_map = build_claim_map_from_stage_json("critique-a-on-b", payload)
+
+        self.assertEqual(errors, [], errors)
+        self.assertTrue(
+            any("lower-power accelerators" in claim["text"] for claim in claim_map["claims"]),
+            claim_map["claims"],
+        )
+
+    def test_accepts_unsupported_claims_challenged_claim_synonym_keys(self) -> None:
+        payload = {
+            "stage": "critique-a-on-b",
+            "supported_claims": [],
+            "unsupported_claims": [
+                {
+                    "challenged_claim": "Battery life will improve automatically.",
+                    "why_support_is_inadequate": "No system power budget is provided.",
+                    "needed_evidence": "Measured subsystem power draw.",
+                    "evidence_sources": ["SRC-001"],
+                }
+            ],
+            "weak_source_issues": [],
+            "omissions": [],
+            "overreach": [],
+            "unresolved_disagreements": [],
+            "summary": {"text": "Mixed reliability.", "confidence": "medium"},
+            "sources": [
+                {"id": "SRC-001", "title": "Source 1", "type": "document", "authority": "vendor", "locator": "https://example.com/src-001"},
+            ],
+        }
+        registry = source_registry_placeholder("run-xyz")
+
+        errors = validate_stage_json("critique-a-on-b", payload, registry)
+        claim_map = build_claim_map_from_stage_json("critique-a-on-b", payload)
+
+        self.assertEqual(errors, [], errors)
+        self.assertTrue(
+            any("Battery life will improve automatically" in claim["text"] for claim in claim_map["claims"]),
+            claim_map["claims"],
+        )
+
+    def test_critique_semantic_links_accept_context_role_as_sufficient_evidence(self) -> None:
+        payload = {
+            "stage": "critique-a-on-b",
+            "supported_claims": [
+                {
+                    "text": "The latency claim survives review, though the support is only contextual.",
+                    "evidence_sources": ["SRC-001"],
+                    "support_links": [
+                        {"source_id": "SRC-001", "role": "context"},
+                    ],
+                }
+            ],
+            "unsupported_claims": [],
+            "weak_source_issues": [],
+            "omissions": [],
+            "overreach": [],
+            "unresolved_disagreements": [],
+            "summary": {"text": "Mostly sound.", "confidence": "medium"},
+            "sources": [
+                {"id": "SRC-001", "title": "Benchmarks", "type": "report", "authority": "vendor", "locator": "https://example.com/src-001", "source_class": "external_evidence"},
+            ],
+        }
+        registry = source_registry_placeholder("run-xyz")
+
+        errors = validate_stage_json("critique-a-on-b", payload, registry)
+
+        self.assertEqual(errors, [], errors)
+
     def test_accepts_flexible_non_critical_research_sections(self) -> None:
         payload = {
             "stage": "research-b",
