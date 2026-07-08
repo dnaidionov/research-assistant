@@ -26,6 +26,7 @@ from _adapter_qualification import (
     trust_satisfies,
 )
 from execute_workflow import (
+    CLIAdapter,
     CommandResult,
     ProgressReporter,
     StageAdapterSelection,
@@ -2911,6 +2912,14 @@ class ExecuteWorkflowTests(unittest.TestCase):
         self.assertEqual(final_report_results[0]["status"], "failed")
 
     def test_rejects_model_override_for_adapter_without_model_support(self) -> None:
+        # All shipped adapters currently support explicit model selection, so this
+        # exercises the guard directly against a synthetic adapter that doesn't,
+        # rather than depending on some real adapter continuing to lack support.
+        fake_adapter = CLIAdapter(
+            name="no-model-support",
+            command_builder=build_claude_command,
+            supports_model_selection=False,
+        )
         (self.job_dir / "config.yaml").write_text(
             textwrap.dedent(
                 """\
@@ -2920,29 +2929,25 @@ class ExecuteWorkflowTests(unittest.TestCase):
                 workflow:
                   execution:
                     providers:
-                      codex_primary:
-                        adapter: codex
+                      no_model_primary:
+                        adapter: no-model-support
                         model: gpt-5
                     stage_providers:
-                      intake: codex_primary
-                      research-a: codex_primary
-                      research-b: codex_primary
-                      critique-a-on-b: codex_primary
-                      critique-b-on-a: codex_primary
-                      judge: codex_primary
+                      intake: no_model_primary
+                      research-a: no_model_primary
+                      research-b: no_model_primary
+                      critique-a-on-b: no_model_primary
+                      critique-b-on-a: no_model_primary
+                      judge: no_model_primary
                 """
             ),
             encoding="utf-8",
         )
-        result = subprocess.run(
-            self._workflow_command("run-invalid-model-config"),
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-        )
+        with patch.dict("execute_workflow.CLI_ADAPTERS", {"no-model-support": fake_adapter}):
+            with self.assertRaises(ValueError) as ctx:
+                load_provider_catalog_from_job_config(self.job_dir)
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("does not support explicit model selection", result.stderr.lower())
+        self.assertIn("does not support explicit model selection", str(ctx.exception).lower())
 
     def test_resume_allows_irrelevant_cli_flags_for_job_config_driven_run(self) -> None:
         self._write_fake_executor(self.claude_bin, "claude")
