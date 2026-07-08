@@ -426,6 +426,20 @@ def is_json_artifact_complete(path: Path) -> bool:
     return not is_placeholder_content(path.read_text(encoding="utf-8"))
 
 
+def invalidate_stale_json_artifact(path: Path) -> None:
+    """Clear a substep JSON artifact before a genuine regeneration attempt.
+
+    build_adapter_executor() only writes fresh stdout to disk when the target
+    path is not already "complete", and treats an untouched leftover file the
+    same as one a self-materializing adapter just wrote. Without clearing the
+    stale file first, a substep whose output failed validation keeps getting
+    re-read from disk unchanged on every retry instead of ever receiving a
+    fresh model attempt.
+    """
+    if path.is_file():
+        path.unlink()
+
+
 def build_adapter_executor(adapter_name: str, adapter_bin: Path | str, artifact_kind: str) -> Callable[..., CommandResult]:
     adapter = resolve_adapter(adapter_name)
     if artifact_kind not in {"markdown", "structured_json"}:
@@ -860,6 +874,7 @@ def execute_json_substep(
     if result.returncode == 0 and validation_errors and repairable:
         repair_attempted = True
         repair_prompt = repair_prompt_builder(validation_errors)
+        invalidate_stale_json_artifact(output_json_path)
         repair_result = executor(
             adapter.command_builder(adapter_bin, job_dir, repair_prompt, model),
             job_dir=job_dir,
@@ -1343,6 +1358,7 @@ def run_structured_stage(
                 lambda: transition_substep_status(run_dir, state, stage.stage_id, "source-pass", "completed"),
             )
         else:
+            invalidate_stale_json_artifact(source_output_path)
             apply_state_update(
                 state_lock,
                 state_path,
@@ -1407,6 +1423,7 @@ def run_structured_stage(
                 lambda: transition_substep_status(run_dir, state, stage.stage_id, "claim-pass", "completed"),
             )
         else:
+            invalidate_stale_json_artifact(claim_output_path)
             apply_state_update(
                 state_lock,
                 state_path,
@@ -1478,6 +1495,7 @@ def run_structured_stage(
                     scratch_markdown_path=claim_scratch_path,
                     source_output_path=source_output_path,
                 )
+            invalidate_stale_json_artifact(claim_output_path)
             claim_repair_result = execute_adapter_command(
                 adapter.command_builder(adapter_bin, job_dir, repair_prompt, stage_selection.model),
                 job_dir=job_dir,
