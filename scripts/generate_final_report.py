@@ -226,6 +226,8 @@ Earlier stage artifacts are available at the paths below as optional background 
 INSTRUCTIONS:
 1. Write a comprehensive, professional markdown report covering each required section in order.
 2. Every factual statement must carry an inline citation in square brackets using the canonical source IDs from the run record, for example [SRC-001] or [DOC-BRIEF]. Do not invent new source IDs.
+2a. Citations are validated per sentence, per bullet, and per table row — a citation at the end of a paragraph does not cover the paragraph's other sentences. Every sentence, list item, and table row that states a fact must itself contain at least one bracketed source ID. This includes closing or appendix sections (claim register, confidence tables, source lists): give each row an inline citation or fold that content into cited prose.
+2b. Never place a bracketed citation on a source whose class is recovered_provisional or that is blocked by source policy — not even to say it was unused or unverified. Describe such corroboration in words (e.g. "a provisional, access-blocked review suggests...") without the bracketed ID, and support the sentence with a citation to a validated source instead.
 3. Preserve unresolved disagreements and uncertainty exactly as adjudicated; do not resolve them editorially.
 4. Keep inference and recommendation statements labeled with their confidence where the judge record provides one, and keep availability risk visible for any candidate that is announced but not yet released.
 5. Do NOT use placeholders, TODOs, or template labels. Every section must be fully written.
