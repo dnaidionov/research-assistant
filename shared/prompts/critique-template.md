@@ -101,7 +101,8 @@ Rules:
 - `stage` must equal `{stage_id}`.
 - `supported_claims`, `unsupported_claims`, `weak_source_issues`, `omissions`, `overreach`, and `unresolved_disagreements` must be structured lists.
 - Every `unresolved_disagreements` item must be an object with `id` and `text`, where `id` matches the section's `DIS-` id for that disagreement. Missing or malformed ids are assigned positionally by the runner.
-- `unsupported_claims` should preserve the challenged claim, why support is inadequate, and what evidence would be needed where possible.
+- Each `unsupported_claims` item must be an object using exactly these key names: `target_claim` (the exact quoted or referenced claim being challenged), `reason` (why support is missing or inadequate), and `needed_evidence` (what evidence would be needed). Do not substitute synonyms such as `challenged_claim` or `why_support_is_inadequate` for these keys.
+- Each `supported_claims`, `weak_source_issues`, `omissions`, and `overreach` item must be an object with a `text` key holding the finding. Do not substitute a synonym key (e.g. `omission`, `finding`, `issue`) in place of `text`.
 - When a critique item cites support, add `support_links` as a typed list of `{{ "source_id", "role" }}` objects where possible.
 - If a critique item depends on earlier local claim IDs, record those under `claim_dependencies` instead of placing them in `support_links.source_id`.
 - Do not use local claim IDs such as `F-001`, `I-001`, or `C-001` inside `support_links.source_id`.

@@ -1557,8 +1557,10 @@ def _validate_unsupported_claims(items: object, errors: list[str]) -> None:
         if not isinstance(item, dict):
             errors.append(f"unsupported_claims[{position}] must be a string or object.")
             continue
-        target_claim = item.get("target_claim", item.get("claim_text"))
-        reason = item.get("reason", item.get("why_inadequate", item.get("why_defect")))
+        target_claim = item.get("target_claim", item.get("claim_text", item.get("challenged_claim")))
+        reason = item.get(
+            "reason", item.get("why_inadequate", item.get("why_defect", item.get("why_support_is_inadequate")))
+        )
         needed_evidence = item.get("needed_evidence", item.get("evidence_needed"))
         if target_claim is not None or reason is not None or needed_evidence is not None:
             _require_string(target_claim, f"unsupported_claims[{position}].target_claim", errors)
@@ -1636,7 +1638,7 @@ def _validate_flexible_object_list(
             errors.append(f"{field_name}[{position}] must be a string or object.")
             continue
         extended_keys = set(accepted_text_keys) | {
-            "text", "claim_text", "target_claim", "description", "gap", "disagreement", "summary",
+            "text", "claim_text", "target_claim", "description", "gap", "omission", "disagreement", "summary",
             "point", "topic", "issue", "reason", "impact", "reduction_strategy", "what_would_reduce_it",
             "notes", "assessment", "limitation", "quality", "title"
         }
@@ -1669,7 +1671,7 @@ def _validate_flexible_object_list(
                 position=position,
                 source_index=source_index,
                 errors=errors,
-                allowed_support_roles={"evidence", "challenge"},
+                allowed_support_roles={"evidence", "context", "challenge"},
             )
 
 
@@ -1952,14 +1954,17 @@ def _entry_text(item: object) -> str:
             "text",
             "claim_text",
             "target_claim",
+            "challenged_claim",
             "needed_evidence",
             "evidence_needed",
             "why_inadequate",
             "why_defect",
+            "why_support_is_inadequate",
             "defect_type",
             "defect_description",
             "description",
             "gap",
+            "omission",
             "disagreement",
             "summary",
             "point",
@@ -1980,7 +1985,12 @@ def _entry_text(item: object) -> str:
             value = item.get(key)
             if isinstance(value, str) and value.strip():
                 return value
-    raise TypeError("Unsupported entry type for claim-map conversion.")
+        keys_found = sorted(item.keys())
+        raise TypeError(
+            "Unsupported entry type for claim-map conversion: object has none of the accepted text keys "
+            f"(e.g. text, description, target_claim, reason); found keys: {keys_found}."
+        )
+    raise TypeError(f"Unsupported entry type for claim-map conversion: expected a string or object, got {type(item).__name__}.")
 
 
 def _entry_sources(item: object) -> list[str]:

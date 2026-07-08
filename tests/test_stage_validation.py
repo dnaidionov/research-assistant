@@ -1,5 +1,6 @@
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import sys
 
@@ -193,6 +194,61 @@ class StageValidationTests(unittest.TestCase):
 
         self.assertEqual(result.structured_errors, [])
         self.assertTrue(any("bare domain" in warning.lower() for warning in result.structured_warnings))
+
+    def test_validate_structured_stage_artifact_converts_claim_map_crash_into_structured_error(self) -> None:
+        payload = {
+            "stage": "critique-a-on-b",
+            "supported_claims": [],
+            "unsupported_claims": [],
+            "weak_source_issues": [],
+            "omissions": [],
+            "overreach": [],
+            "unresolved_disagreements": [],
+            "summary": {"text": "Fine.", "confidence": "medium"},
+            "sources": [],
+        }
+        registry = source_registry_placeholder("run-xyz")
+        markdown = "\n".join(
+            [
+                "# Claims That Survive Review",
+                "",
+                "- none",
+                "",
+                "# Unsupported Claims",
+                "",
+                "- none",
+                "",
+                "# Weak Sources Or Citation Problems",
+                "",
+                "- none",
+                "",
+                "# Omissions And Missing Alternatives",
+                "",
+                "- none",
+                "",
+                "# Overreach And Overconfident Inference",
+                "",
+                "- none",
+                "",
+                "# Unresolved Disagreements For Judge",
+                "",
+                "- none",
+                "",
+                "# Overall Critique Summary",
+                "",
+                "- Fine. Confidence: medium",
+            ]
+        )
+
+        with patch(
+            "_stage_validation.build_claim_map_from_stage_json",
+            side_effect=TypeError("Unsupported entry type for claim-map conversion: forced test failure."),
+        ):
+            result = validate_structured_stage_artifact("critique-a-on-b", payload, registry, markdown)
+
+        self.assertIsNone(result.claim_map)
+        self.assertTrue(result.structured_errors)
+        self.assertIn("forced test failure", result.structured_errors[0])
 
     def test_markdown_contract_validator_handles_critique_summary_confidence(self) -> None:
         markdown = "\n".join(

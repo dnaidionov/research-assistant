@@ -129,6 +129,7 @@ Rules:
 - Use `context` for background inputs that materially shape interpretation but are not the main proof.
 - Use `challenge` when a source keeps the judgment narrower or less certain than the strongest narrative suggests.
 - Use `provenance` for workflow-stage traceability only. Provenance is not evidence.
+- Every supported conclusion and synthesis judgment is validated on having at least one `support_links` entry with role `evidence` on that item; `context` and `challenge` links do not satisfy this and the item fails validation without one. This applies even when the judgment itself is hedged or uncertain — hedge in the claim text and `confidence`, not by downgrading the supporting link's role.
 - `confidence` must be `low`, `medium`, or `high`.
 - `unresolved_disagreements` may be either:
   - a list of strings or `{{ "text": ... }}` entries, or

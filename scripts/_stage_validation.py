@@ -220,7 +220,20 @@ def validate_structured_stage_artifact(
         markdown_errors = validate_stage_markdown_contract(stage_id, canonical_markdown)
         should_rewrite_markdown = not markdown_errors and canonical_markdown != markdown
 
-    claim_map = build_claim_map_from_stage_json(stage_id, normalized_payload)
+    try:
+        claim_map = build_claim_map_from_stage_json(stage_id, normalized_payload)
+    except (TypeError, KeyError) as exc:
+        return StageValidationResult(
+            stage_id=stage_id,
+            normalized_payload=normalized_payload,
+            structured_errors=[f"Unable to build claim map for stage {stage_id}: {exc}"],
+            structured_warnings=structured_warnings,
+            markdown_errors=original_markdown_errors,
+            original_markdown_errors=original_markdown_errors,
+            canonical_markdown=markdown,
+            should_rewrite_markdown=False,
+            claim_map=None,
+        )
     return StageValidationResult(
         stage_id=stage_id,
         normalized_payload=normalized_payload,
