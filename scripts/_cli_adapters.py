@@ -22,7 +22,11 @@ class CLIAdapter:
 
 
 def build_codex_command(binary: str, job_dir: Path, prompt: str, model: str | None = None) -> list[str]:
-    return [binary, "exec", "--full-auto", "-C", str(job_dir), prompt]
+    command = [binary, "exec", "--full-auto", "-C", str(job_dir)]
+    if model:
+        command.extend(["-m", model])
+    command.append(prompt)
+    return command
 
 
 def build_gemini_command(binary: str, job_dir: Path, prompt: str, model: str | None = None) -> list[str]:
@@ -46,7 +50,7 @@ def build_claude_command(binary: str, job_dir: Path, prompt: str, model: str | N
 
 
 CLI_ADAPTERS: dict[str, CLIAdapter] = {
-    "codex": CLIAdapter(name="codex", command_builder=build_codex_command),
+    "codex": CLIAdapter(name="codex", command_builder=build_codex_command, supports_model_selection=True),
     "gemini": CLIAdapter(
         name="gemini",
         command_builder=build_gemini_command,

@@ -1,5 +1,6 @@
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,8 +9,43 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXTRACT_CLAIMS = REPO_ROOT / "scripts" / "extract_claims.py"
 
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
+from extract_claims import iter_candidate_claims  # noqa: E402
+
 
 class ExtractClaimsTests(unittest.TestCase):
+    def test_iter_candidate_claims_skips_markdown_table_header_and_separator_rows(self) -> None:
+        markdown = "\n".join(
+            [
+                "# Confidence Assessment",
+                "| Claim | Confidence. |",
+                "|---|---|",
+                "Option A works. [SRC-001]",
+            ]
+        )
+
+        claim_line_numbers = [line_number for line_number, _, _ in iter_candidate_claims(markdown)]
+
+        self.assertNotIn(2, claim_line_numbers)
+        self.assertNotIn(3, claim_line_numbers)
+        self.assertIn(4, claim_line_numbers)
+
+    def test_iter_candidate_claims_recognizes_single_dash_table_separator(self) -> None:
+        markdown = "\n".join(
+            [
+                "# Confidence Assessment",
+                "| Claim | Confidence. |",
+                "| :-: | :-: |",
+                "Option A works. [SRC-001]",
+            ]
+        )
+
+        claim_line_numbers = [line_number for line_number, _, _ in iter_candidate_claims(markdown)]
+
+        self.assertNotIn(2, claim_line_numbers)
+        self.assertNotIn(3, claim_line_numbers)
+
     def test_markdown_and_structured_ingestion_produce_matching_summary_flags(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
