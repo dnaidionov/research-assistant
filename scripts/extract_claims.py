@@ -208,7 +208,7 @@ def infer_claim_type(text: str, heading: str | None) -> str:
     return "fact"
 
 
-TABLE_SEPARATOR_PATTERN = re.compile(r"^\|(?:\s*:?-{3,}:?\s*\|)+\s*$")
+TABLE_SEPARATOR_PATTERN = re.compile(r"^\|(?:\s*:?-+:?\s*\|)+\s*$")
 
 
 def iter_candidate_claims(markdown: str) -> Iterable[tuple[int, str | None, str]]:
