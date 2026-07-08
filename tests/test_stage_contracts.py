@@ -1056,6 +1056,96 @@ class StageContractTests(unittest.TestCase):
             "https://example.com/products/radar-board",
         )
 
+    def test_source_registry_keeps_first_registered_type_and_authority_for_same_document(self) -> None:
+        existing = {
+            "run_id": "run-xyz",
+            "notes": "",
+            "sources": [
+                {
+                    "id": "SRC-001",
+                    "title": "Vendor source",
+                    "type": "official documentation",
+                    "authority": "vendor",
+                    "locator": "https://example.com/products/radar-board",
+                    "source_class": "external_evidence",
+                }
+            ],
+        }
+        stage_sources = [
+            {
+                "id": "SRC-001",
+                "title": "Vendor source",
+                "type": "technical report",
+                "authority": "analyst",
+                "locator": "https://example.com/products/radar-board",
+                "source_class": "external_evidence",
+            }
+        ]
+
+        merged = merge_source_registry(existing, stage_sources)
+
+        self.assertEqual(merged["sources"][0]["type"], "official documentation")
+        self.assertEqual(merged["sources"][0]["authority"], "vendor")
+
+    def test_source_registry_keeps_external_evidence_class_over_recovered_provisional_downgrade(self) -> None:
+        existing = {
+            "run_id": "run-xyz",
+            "notes": "",
+            "sources": [
+                {
+                    "id": "SRC-001",
+                    "title": "Vendor source",
+                    "type": "official documentation",
+                    "authority": "vendor",
+                    "locator": "https://example.com/products/radar-board",
+                    "source_class": "external_evidence",
+                }
+            ],
+        }
+        stage_sources = [
+            {
+                "id": "SRC-001",
+                "title": "Vendor source",
+                "type": "official documentation",
+                "authority": "vendor",
+                "locator": "https://example.com/products/radar-board",
+                "source_class": "recovered_provisional",
+            }
+        ]
+
+        merged = merge_source_registry(existing, stage_sources)
+
+        self.assertEqual(merged["sources"][0]["source_class"], "external_evidence")
+
+    def test_source_registry_still_rejects_conflicting_fields_for_different_documents(self) -> None:
+        existing = {
+            "run_id": "run-xyz",
+            "notes": "",
+            "sources": [
+                {
+                    "id": "SRC-001",
+                    "title": "Vendor source",
+                    "type": "official documentation",
+                    "authority": "vendor",
+                    "locator": "https://example.com/products/radar-board",
+                    "source_class": "external_evidence",
+                }
+            ],
+        }
+        stage_sources = [
+            {
+                "id": "SRC-001",
+                "title": "Different vendor source",
+                "type": "technical report",
+                "authority": "analyst",
+                "locator": "https://example.com/products/other-board",
+                "source_class": "external_evidence",
+            }
+        ]
+
+        with self.assertRaises(ValueError):
+            merge_source_registry(existing, stage_sources)
+
     def test_accepts_flexible_non_critical_judge_sections(self) -> None:
         payload = {
             "stage": "judge",
