@@ -1885,6 +1885,12 @@ def merge_source_registry(existing: dict[str, object], stage_sources: list[dict[
             continue
         if current.get("authority") == RECOVERED_SOURCE_AUTHORITY and candidate.get("authority") == RECOVERED_SOURCE_AUTHORITY:
             continue
+        same_document = bool(
+            current.get("title")
+            and current.get("title") == candidate.get("title")
+            and current.get("locator")
+            and current.get("locator") == candidate.get("locator")
+        )
         for field in ("title", "type", "authority", "locator", "source_class"):
             left = current.get(field)
             right = candidate.get(field)
@@ -1896,6 +1902,15 @@ def merge_source_registry(existing: dict[str, object], stage_sources: list[dict[
                         continue
                     if preferred == left:
                         continue
+                if same_document and field in {"type", "authority"}:
+                    # Stage re-runs re-describe the same document with drifting
+                    # wording; keep the first-registered description.
+                    continue
+                if same_document and field == "source_class" and {left, right} == {"external_evidence", "recovered_provisional"}:
+                    # A stage that failed to re-fetch a document downgrades it to
+                    # recovered_provisional; keep the successful acquisition's class.
+                    current[field] = "external_evidence"
+                    continue
                 raise ValueError(f"Conflicting source registry definition for {source_id} field {field}.")
             if not left and right:
                 current[field] = right
